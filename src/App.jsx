@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo } from 'react'
 import JSZip from 'jszip'
+import * as XLSX from 'xlsx'
 
 /* Single source of truth for table columns.
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
@@ -798,6 +799,74 @@ export default function App() {
     setAlerta(`¡Éxito Total! 📦\n\nSe ha generado el archivo ZIP con tu CSV y ${r} facturas (PDF y XML) correctamente renombradas.\n\nNota: Tus archivos originales siguen intactos.`)
   }
 
+  // ── Exportar a Excel usando el TEMPLATE.xls oficial ──
+  // The template lives in /public/TEMPLATE.xls. Rows 0–3 are title/labels,
+  // row 4 is the header (16 cols, A–P). Data goes from row 5 down.
+  const exportarExcel = async () => {
+    try {
+      const response = await fetch('/TEMPLATE.xls')
+      const arrayBuffer = await response.arrayBuffer()
+      const wb = XLSX.read(arrayBuffer, { type: 'array', cellStyles: true })
+      const ws = wb.Sheets['Gastos']
+      if (!ws) {
+        setAlerta('Error: no se encontró la hoja "Gastos" en TEMPLATE.xls.')
+        return
+      }
+
+      const setCell = (r, c, value) => {
+        const ref = XLSX.utils.encode_cell({ r, c })
+        const t = typeof value === 'number' ? 'n' : 's'
+        ws[ref] = { v: value, t }
+      }
+
+      let rowIndex = 5
+      for (const g of lista) {
+        const f = g.fechaFac.split('-')
+        const fechaMX = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
+        const cobro = g.fechaCobro || 'Pendiente'
+
+        setCell(rowIndex, 0,  g.rfc)
+        setCell(rowIndex, 1,  g.proveedor)
+        setCell(rowIndex, 2,  g.noFactura)
+        setCell(rowIndex, 3,  fechaMX)
+        setCell(rowIndex, 4,  g.concepto)
+        setCell(rowIndex, 5,  g.importe || 0)
+        setCell(rowIndex, 6,  g.iva || 0)
+        setCell(rowIndex, 7,  g.retenciones || 0)
+        setCell(rowIndex, 8,  g.totalCFDI || 0)
+        setCell(rowIndex, 9,  g.formaPago || '')
+        setCell(rowIndex, 10, cobro)
+        setCell(rowIndex, 11, '')
+        setCell(rowIndex, 12, '')
+        setCell(rowIndex, 13, '')
+        setCell(rowIndex, 14, '')
+        setCell(rowIndex, 15, '')
+        rowIndex++
+
+        if (g.montoPropina > 0) {
+          setCell(rowIndex, 0,  '')
+          setCell(rowIndex, 1,  `${g.proveedor} - PROPINA`)
+          setCell(rowIndex, 2,  '')
+          setCell(rowIndex, 3,  fechaMX)
+          setCell(rowIndex, 4,  'PROPINA')
+          setCell(rowIndex, 5,  g.montoPropina)
+          setCell(rowIndex, 6,  0)
+          setCell(rowIndex, 7,  0)
+          setCell(rowIndex, 8,  g.montoPropina)
+          setCell(rowIndex, 9,  g.formaPago || '')
+          setCell(rowIndex, 10, cobro)
+          rowIndex++
+        }
+      }
+
+      ws['!ref'] = `A1:P${rowIndex}`
+      XLSX.writeFile(wb, 'Reporte_Gastos_SMTO.xls')
+      setAlerta('¡Excel generado! 📊\n\nReporte_Gastos_SMTO.xls descargado con todos los datos en el template oficial.')
+    } catch (err) {
+      setAlerta(`Error al generar Excel:\n\n${err && err.message ? err.message : String(err)}`)
+    }
+  }
+
   // ── Abrir PDF en nueva pestaña ──
   const openPDF = pdfFile => {
     if (!pdfFile) return
@@ -820,7 +889,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.5</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.6</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -845,8 +914,9 @@ export default function App() {
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
         </div>
         <div className="action-group">
-          <PremiumButton title="Copiar a Excel" icon="📋" variant="copy"   isDisabled={!lista.length} onClick={copiar} />
-          <PremiumButton title="Exportar a ZIP" icon="📦" variant="export" isDisabled={!lista.length} onClick={exportar} />
+          <PremiumButton title="Copiar a Excel"  icon="📋" variant="copy"    isDisabled={!lista.length} onClick={copiar} />
+          <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
+          <PremiumButton title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
         </div>
       </div>
 
