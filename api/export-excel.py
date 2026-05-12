@@ -11,6 +11,20 @@ except Exception:
     IMPORT_ERROR = traceback.format_exc()
 
 
+# CFDI FormaPago codes → human label written to the Excel "FORMA DE PAGO" column.
+# Unknown codes fall through to the raw code so SAT values like "28" don't get lost.
+FORMA_PAGO_MAP = {
+    '01': '01 - Efectivo',
+    '02': '02 - Efectivo',
+    '03': '03 - Transferencia',
+    '04': '04 - Tarjeta de Crédito',
+}
+
+
+def forma_pago_label(code):
+    return FORMA_PAGO_MAP.get(code, code or '')
+
+
 def find_template():
     candidates = [
         os.path.join(os.path.dirname(__file__), 'TEMPLATE.xls'),
@@ -73,7 +87,7 @@ class handler(BaseHTTPRequestHandler):
                 ws.write(row_idx, 6, round(g.get('iva', 0), 2))
                 ws.write(row_idx, 7, round(g.get('retenciones', 0), 2))
                 ws.write(row_idx, 8, total_final)
-                ws.write(row_idx, 9, g.get('formaPago', ''))
+                ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')))
                 ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'))
                 row_idx += 1
                 propina = round(g.get('montoPropina', 0), 2)
@@ -87,7 +101,7 @@ class handler(BaseHTTPRequestHandler):
                     ws.write(row_idx, 6, 0)
                     ws.write(row_idx, 7, 0)
                     ws.write(row_idx, 8, propina)
-                    ws.write(row_idx, 9, g.get('formaPago', ''))
+                    ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')))
                     ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'))
                     row_idx += 1
 
@@ -111,6 +125,7 @@ class handler(BaseHTTPRequestHandler):
             ws.write(totals_row, 6, total_iva)
             ws.write(totals_row, 7, total_ret)
             ws.write(totals_row, 8, total_cfdi)
+            ws.write(totals_row, 9, '')   # FORMA DE PAGO column intentionally blank on totals row
 
             for clear_row in range(totals_row + 1, 24):
                 for col in range(16):
