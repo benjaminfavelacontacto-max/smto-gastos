@@ -812,9 +812,12 @@ export default function App() {
       const response = await fetch('/TEMPLATE.xls')
       const arrayBuffer = await response.arrayBuffer()
       const wb = XLSX.read(arrayBuffer, { type: 'array', cellStyles: true })
-      const ws = wb.Sheets['Gastos']
+      const sheetName = wb.SheetNames[0]
+      const ws = wb.Sheets[sheetName]
+      console.log('[exportarExcel] Sheet names found:', wb.SheetNames)
+      console.log('[exportarExcel] Using sheet:', sheetName)
       if (!ws) {
-        setAlerta('Error: no se encontró la hoja "Gastos" en TEMPLATE.xls.')
+        setAlerta('Error: No se pudo leer el template Excel.')
         return
       }
 
