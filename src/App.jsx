@@ -815,7 +815,24 @@ export default function App() {
   const exportarExcel = async () => {
     try {
       const response = await fetch('/TEMPLATE.xls')
+      if (!response.ok) {
+        setAlerta('Error: No se pudo cargar el template Excel.\n\nVerifica que el archivo TEMPLATE.xls esté en la carpeta public/ del proyecto.')
+        return
+      }
       const arrayBuffer = await response.arrayBuffer()
+
+      // Guard against the 404-HTML-as-XLS trap: Vercel returns an HTML 404
+      // page (which begins with "<!DOCTYPE..." → 0x3C 0x21) if the asset
+      // didn't deploy. A real BIFF8 .xls starts with the OLE2 magic
+      // D0 CF 11 E0. Without this check SheetJS chokes on the HTML and
+      // produces a confusing parse error.
+      const header = new Uint8Array(arrayBuffer.slice(0, 4))
+      const isValidXLS = header[0] === 0xD0 && header[1] === 0xCF && header[2] === 0x11 && header[3] === 0xE0
+      if (!isValidXLS) {
+        setAlerta('Error: El archivo TEMPLATE.xls no es válido o no se encontró en el servidor.\n\nAsegúrate de que el template esté en la carpeta public/ y haya sido desplegado.')
+        return
+      }
+
       const wb = XLSX.read(arrayBuffer, {
         type: 'array',
         cellStyles: true,
