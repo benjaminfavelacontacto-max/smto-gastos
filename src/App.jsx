@@ -1,5 +1,24 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import JSZip from 'jszip'
+
+/* Single source of truth for table columns.
+   `getValue` overrides simple `g[key]` lookup (used by Total Final). */
+const COLUMNS = [
+  { key: 'check',             label: '',            width: 30,  sortable: false },
+  { key: 'status',            label: 'Estado',      width: 68,  sortable: false },
+  { key: 'fechaFac',          label: 'Fecha',       width: 92,  sortable: true,  type: 'date'   },
+  { key: 'noFactura',         label: 'Factura',     width: 104, sortable: true,  type: 'string' },
+  { key: 'proveedor',         label: 'Proveedor',   width: 155, sortable: true,  type: 'string' },
+  { key: 'concepto',          label: 'Concepto',    width: 118, sortable: true,  type: 'string' },
+  { key: 'importe',           label: 'Subtotal',    width: 88,  sortable: true,  type: 'number' },
+  { key: 'iva',               label: 'IVA',         width: 76,  sortable: true,  type: 'number' },
+  { key: 'retenciones',       label: 'Reten.',      width: 84,  sortable: true,  type: 'number' },
+  { key: 'totalCFDI',         label: 'Total Fac.',  width: 96,  sortable: true,  type: 'number' },
+  { key: 'propinaPorcentaje', label: 'Prop. %',     width: 78,  sortable: true,  type: 'number' },
+  { key: 'montoPropina',      label: 'Prop. $',     width: 88,  sortable: true,  type: 'number' },
+  { key: 'totalFinal',        label: 'Total Final', width: 102, sortable: true,  type: 'number',
+    getValue: g => g.totalCFDI + g.montoPropina },
+]
 
 /* ═══════════════════════════════════════════════════
    UTILIDADES
@@ -251,6 +270,9 @@ function GastoRow({ g, upd, openPDF }) {
       {/* IVA */}
       <td><NumCell field="iva"         prefix="$" /></td>
 
+      {/* Retenciones */}
+      <td><NumCell field="retenciones" prefix="$" /></td>
+
       {/* Total Factura */}
       <td><NumCell field="totalCFDI"   prefix="$" /></td>
 
@@ -279,9 +301,46 @@ export default function App() {
   const [carpetaNombre, setCarpetaNombre] = useState('Ninguna carpeta seleccionada')
   const [alerta,        setAlerta]        = useState(null)
   const [loading,       setLoading]       = useState(false)
+  const [colWidths,     setColWidths]     = useState(() =>
+    Object.fromEntries(COLUMNS.map(c => [c.key, c.width]))
+  )
+  const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
+
+  // ── Sort ──
+  const sortedLista = useMemo(() => {
+    if (!sort.field) return lista
+    const col = COLUMNS.find(c => c.key === sort.field)
+    if (!col) return lista
+    const get = col.getValue || (g => g[sort.field])
+    return [...lista].sort((a, b) => {
+      const va = get(a), vb = get(b)
+      let cmp
+      if (col.type === 'number') cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0)
+      else                       cmp = String(va ?? '').toLowerCase().localeCompare(String(vb ?? '').toLowerCase())
+      return sort.dir === 'asc' ? cmp : -cmp
+    })
+  }, [lista, sort])
+
+  const toggleSort = field => setSort(s =>
+    s.field === field ? { field, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' }
+  )
+
+  // ── Column resize (drag right edge of th) ──
+  const startResize = (key, e) => {
+    e.preventDefault(); e.stopPropagation()
+    const startX = e.clientX
+    const startW = colWidths[key]
+    const onMove = ev => setColWidths(w => ({ ...w, [key]: Math.max(30, startW + ev.clientX - startX) }))
+    const onUp   = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
+  }
 
   // ── Actualizar campo de un gasto (con recálculo de propina) ──
   const update = (id, field, value) =>
@@ -538,22 +597,27 @@ export default function App() {
           <table>
             <thead>
               <tr>
-                <th style={{width:30}}></th>
-                <th style={{width:68}}>Estado</th>
-                <th style={{width:92}}>Fecha</th>
-                <th style={{width:104}}>Factura</th>
-                <th style={{minWidth:155}}>Proveedor</th>
-                <th style={{minWidth:118}}>Concepto</th>
-                <th style={{width:88}}>Subtotal</th>
-                <th style={{width:76}}>IVA</th>
-                <th style={{width:96}}>Total Fac.</th>
-                <th style={{width:78}}>Prop. %</th>
-                <th style={{width:88}}>Prop. $</th>
-                <th style={{width:102}}>Total Final</th>
+                {COLUMNS.map(col => (
+                  <th
+                    key={col.key}
+                    style={{ width: colWidths[col.key], position: 'relative', cursor: col.sortable ? 'pointer' : undefined }}
+                    onClick={col.sortable ? () => toggleSort(col.key) : undefined}
+                  >
+                    {col.label}
+                    {sort.field === col.key && (
+                      <span style={{ marginLeft: 4, fontSize: '0.85em' }}>{sort.dir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                    <div
+                      className="col-resizer"
+                      onMouseDown={e => startResize(col.key, e)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {lista.map(g => (
+              {sortedLista.map(g => (
                 <GastoRow
                   key={g.id}
                   g={g}

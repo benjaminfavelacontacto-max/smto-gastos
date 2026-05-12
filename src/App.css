@@ -205,6 +205,18 @@ thead th {
   user-select: none;
 }
 
+.col-resizer {
+  position: absolute;
+  top: 0; right: 0;
+  width: 6px; height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  border-right: 1px solid transparent;
+  transition: border-color 0.12s, background 0.12s;
+}
+.col-resizer:hover  { border-right-color: var(--blue); background: rgba(0, 122, 255, 0.12); }
+.col-resizer:active { border-right-color: var(--blue); background: rgba(0, 122, 255, 0.25); }
+
 tbody tr {
   border-bottom: 1px solid rgba(0, 0, 0, 0.042);
   transition: background 0.1s;
@@ -255,8 +267,7 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* ═══════════════════════════════════════════
    STATUS COLUMN
 ═══════════════════════════════════════════ */
-.td-chk   { width: 30px; }
-.td-status { width: 68px; }
+/* widths now controlled by the <th> state in App.jsx (COLUMNS) */
 
 .status-row {
   display: flex; align-items: center; gap: 5px;
