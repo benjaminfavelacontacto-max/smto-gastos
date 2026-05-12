@@ -125,9 +125,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     }
     return null
   }
-  // CFDI 4.0 names the tax-code attr "Impuesto" on Traslado/Retencion; some
-  // spec writeups say "TipoImpuesto". Accept all four spellings.
-  const readTipo    = el => (ga(el, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
+  // CFDI 4.0 names the tax-code attr "Impuesto" on Traslado/Retencion; older
+  // formats sometimes use "TipoImpuesto". Try Impuesto first.
+  const readTipo    = el => (ga(el, 'Impuesto', 'TipoImpuesto', 'tipoImpuesto') || '').trim()
   const readImporte = el => parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
   // `match` can be a TipoImpuesto string (exact match) or a predicate
   // function (e.g. t => t !== '002' to capture every non-IVA traslado).
