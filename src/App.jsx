@@ -191,7 +191,11 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   }
 
   // Fields the EDC override may rewrite — pull them out before the override block.
-  let importe        = parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0
+  // importe is the NET subtotal (after Descuento). Some CFDIs (e.g. Volaris) declare
+  // a Descuento on <Comprobante>; subtracting it makes the invariant
+  // importe + iva ≈ totalCFDI hold on the row.
+  const descuento    = parseFloat(ga(comp, 'Descuento', 'descuento') || '0') || 0
+  let importe        = (parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0) - descuento
   let totalCFDI      = parseFloat(ga(comp, 'Total',    'total')    || '0') || 0
   let conceptoClasif = clasificarGasto(proveedor, concepto)
 
