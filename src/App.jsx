@@ -665,17 +665,22 @@ export default function App() {
       }
     )
 
-    // Pass 2 — propina: bank charge = invoice base + tip (10–25% of base).
-    // For tiny invoices (<$100) the percentage band is too narrow to be
-    // useful, so allow any tip up to $25 absolute.
+    // Pass 2 — propina: bank charge = invoice base + tip.
+    //   Standard invoices (≥$100): tip is 5–25% of base, with a $5 absolute
+    //     floor so a sub-$5 nick doesn't masquerade as a 5% "propina" on a
+    //     small invoice (Pass 1's ±$5 already absorbs those).
+    //   Small invoices (<$100): the percentage window collapses, so allow
+    //     any positive tip up to $30 absolute.
     tryPass(
       (inv, m) => {
         const base = inv.totalCFDI
         if (base <= 0) return false
         const diff = m - base
         if (diff <= 0) return false
-        if (base < 100) return diff <= 25
-        return diff >= base * 0.10 && diff <= base * 0.25
+        if (base < 100) return diff <= 30
+        const minPropina = Math.max(base * 0.05, 5.0)
+        const maxPropina = base * 0.25
+        return diff >= minPropina && diff <= maxPropina
       },
       (idx, m, dCSV) => {
         const base = nl[idx].totalCFDI
@@ -889,7 +894,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.6</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.7</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
