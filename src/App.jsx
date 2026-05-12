@@ -129,12 +129,15 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   // spec writeups say "TipoImpuesto". Accept all four spellings.
   const readTipo    = el => (ga(el, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
   const readImporte = el => parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
-  const sumByTipo = (container, childTag, tipoCode) => {
+  // `match` can be a TipoImpuesto string (exact match) or a predicate
+  // function (e.g. t => t !== '002' to capture every non-IVA traslado).
+  const sumByTipo = (container, childTag, match) => {
     if (!container) return 0
+    const test = typeof match === 'function' ? match : t => t === match
     let total = 0
     for (const el of container.childNodes) {
       if (el.nodeType !== 1 || !el.localName || el.localName.toLowerCase() !== childTag) continue
-      if (readTipo(el) === tipoCode) total += readImporte(el)
+      if (test(readTipo(el))) total += readImporte(el)
     }
     return total
   }
@@ -157,7 +160,8 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   // The parent container determines the bucket — Traslado nodes can only feed
   // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
   const iva           = sumByTipo(trasladosBox,   'traslado',  '002')
-  const isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')
+  // ISR/ISH bucket — every non-IVA traslado (001 ISR, 003 ISH, anything else)
+  const isrTrasladado = sumByTipo(trasladosBox,   'traslado',  t => t !== '002')
   const retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
   const retenciones   = retencionISR + retencionIVA
