@@ -91,6 +91,32 @@ class handler(BaseHTTPRequestHandler):
                     ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'))
                     row_idx += 1
 
+            # ── Totales (siempre justo después de la última fila de datos) ──
+            totals_row = row_idx
+
+            total_importe = round(sum(g.get('importe', 0) for g in gastos), 2)
+            total_iva = round(sum(g.get('iva', 0) for g in gastos), 2)
+            total_ret = round(sum(g.get('retenciones', 0) for g in gastos), 2)
+            total_cfdi = round(sum(g.get('totalCFDI', 0) + g.get('montoPropina', 0) for g in gastos), 2)
+            total_propinas_importe = round(sum(g.get('montoPropina', 0) for g in gastos), 2)
+
+            # Re-open the template (read-only) so we can copy back its content
+            # for the rows beyond `totals_row` (preserves any original layout
+            # past where our data landed).
+            rb_orig = xlrd.open_workbook(template_path, formatting_info=True)
+            ws_orig = rb_orig.sheet_by_index(0)
+
+            ws.write(totals_row, 4, 'Total Cuenta:')
+            ws.write(totals_row, 5, total_importe)
+            ws.write(totals_row, 6, total_iva)
+            ws.write(totals_row, 7, total_ret)
+            ws.write(totals_row, 8, total_cfdi)
+
+            for clear_row in range(totals_row + 1, 24):
+                for col in range(16):
+                    orig_cell = ws_orig.cell(clear_row, col)
+                    ws.write(clear_row, col, '' if orig_cell.ctype == 0 else orig_cell.value)
+
             with tempfile.NamedTemporaryFile(suffix='.xls', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)
