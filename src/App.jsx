@@ -553,6 +553,14 @@ export default function App() {
     let sep = ','
     if (!sample.includes(',')) sep = sample.includes(';') ? ';' : '\t'
 
+    // Clara-platform CSVs have a fixed column layout (date col 0, MXN amount
+    // col 5, merchant col 2). Detecting by header so we can use fixed indices
+    // instead of the generic scanner that mistakes card numbers and billing
+    // periods for amounts. "Transacci" intentionally drops the accented ó so
+    // we survive encoding mishaps.
+    const isClara = (lines[0] || '').includes('Fecha de Transacci')
+    const dateTolerance = isClara ? 15 : 30  // exact tx date for Clara, payment-cycle lag elsewhere
+
     let bancoRows = 0, matches = 0, propinas = 0
     const sinFactura = []
     const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: '' }))
@@ -562,26 +570,44 @@ export default function App() {
       const yyyy = d.getFullYear()
       return `${dd}/${mm}/${yyyy}`
     }
+    const cleanNum = s => parseFloat(String(s || '').replace(/[$,\s]/g, ''))
 
-    for (const line of lines) {
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li]
       if (!line.trim()) continue
-      const cols = parseCSVLine(line, sep)
-      let dCSV = null; const amounts = []
+      if (isClara && li === 0) continue   // skip header row
 
-      for (const cell of cols) {
-        const c = cell.trim(); if (!c) continue
-        if (!dCSV) { const d = parseDateRobusto(c); if (d) { dCSV = d; continue } }
-        if (c.includes('/') && !c.includes('$')) continue
-        const s = c.replace(/[$,]/g, '').trim()
-        const v = parseFloat(s)
-        if (!isNaN(v) && Math.abs(v) > 0) amounts.push(Math.abs(v))
-        else {
-          const n = s.replace(/[^0-9.\-]/g, '')
-          const v2 = parseFloat(n)
-          if (!isNaN(v2) && Math.abs(v2) > 0) amounts.push(Math.abs(v2))
+      const cols = parseCSVLine(line, sep)
+      let dCSV = null
+      let amounts = []
+      let descripcion = null
+
+      if (isClara) {
+        dCSV = parseDateRobusto(cols[0] || '')
+        const mxn = cleanNum(cols[5])
+        const orig = cleanNum(cols[3])
+        const amount = (!isNaN(mxn) && mxn) || (!isNaN(orig) && orig) || 0
+        if (!dCSV || !amount) continue
+        amounts = [Math.abs(amount)]
+        descripcion = (cols[2] || '').trim().slice(0, 60)
+      } else {
+        // Generic parser — scan every cell for a date and any numeric amounts
+        for (const cell of cols) {
+          const c = cell.trim(); if (!c) continue
+          if (!dCSV) { const d = parseDateRobusto(c); if (d) { dCSV = d; continue } }
+          if (c.includes('/') && !c.includes('$')) continue
+          const s = c.replace(/[$,]/g, '').trim()
+          const v = parseFloat(s)
+          if (!isNaN(v) && Math.abs(v) > 0) amounts.push(Math.abs(v))
+          else {
+            const n = s.replace(/[^0-9.\-]/g, '')
+            const v2 = parseFloat(n)
+            if (!isNaN(v2) && Math.abs(v2) > 0) amounts.push(Math.abs(v2))
+          }
         }
+        if (!dCSV || !amounts.length) continue
       }
-      if (!dCSV || !amounts.length) continue
+
       bancoRows++; let found = false
 
       for (const csv of amounts) {
@@ -591,7 +617,7 @@ export default function App() {
           if (nl[i].hizoMatch) continue
           const tot = nl[i].totalCFDI + nl[i].montoPropina
           const dG  = parseDateRobusto(nl[i].fechaFac)
-          if (Math.abs(tot - csv) <= 5 && dG && Math.abs(dCSV - dG) / 86400000 <= 30) {
+          if (Math.abs(tot - csv) <= 5 && dG && Math.abs(dCSV - dG) / 86400000 <= dateTolerance) {
             nl[i].hizoMatch = true
             nl[i].fechaCobro = formatCobro(dCSV)
             matches++; found = true; break
@@ -603,7 +629,7 @@ export default function App() {
           if (nl[i].hizoMatch) continue
           const inv = nl[i].totalCFDI
           const dG  = parseDateRobusto(nl[i].fechaFac)
-          if (csv > inv + 2 && csv <= inv * 1.25 && dG && Math.abs(dCSV - dG) / 86400000 <= 30) {
+          if (csv > inv + 2 && csv <= inv * 1.25 && dG && Math.abs(dCSV - dG) / 86400000 <= dateTolerance) {
             nl[i].hizoMatch = true
             nl[i].fechaCobro = formatCobro(dCSV)
             const prop = csv - inv
@@ -617,7 +643,7 @@ export default function App() {
         sinFactura.push({
           fecha: formatCobro(dCSV),
           monto: Math.max(...amounts),
-          descripcion: line.trim().slice(0, 60),
+          descripcion: descripcion || line.trim().slice(0, 60),
         })
       }
     }
@@ -625,7 +651,7 @@ export default function App() {
     setLista(nl)
     const divider = '──────────────────────'
     const sinFacturaList = sinFactura.slice(0, 20)
-      .map(s => `  • ${s.fecha} — ${fmtMoney(s.monto)}`)
+      .map(s => `  • ${s.fecha} — ${fmtMoney(s.monto)}${s.descripcion ? ' — ' + s.descripcion : ''}`)
       .join('\n')
     const extra = sinFactura.length > 20
       ? `\n  ...y ${sinFactura.length - 20} más`
@@ -732,7 +758,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.0</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.1</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
