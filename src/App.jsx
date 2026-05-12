@@ -104,14 +104,17 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
 
-  // Retenciones: prefer TotalImpuestosRetenidos; fall back to summing
-  // individual <Retencion Importe="..."/> children (ISR + IVA retenido).
-  let retenciones = parseFloat(ga(imp, 'TotalImpuestosRetenidos') || '0') || 0
-  if (!retenciones) {
+  // Taxes: prefer totals on <Impuestos>; fall back to summing the individual
+  // <Traslado>/<Retencion> children. Traslados stay in iva, Retenciones stay
+  // in retenciones — the two CFDI node families are never mixed.
+  let iva         = parseFloat(ga(imp, 'TotalImpuestosTrasladados') || '0') || 0
+  let retenciones = parseFloat(ga(imp, 'TotalImpuestosRetenidos')   || '0') || 0
+  const needIva = !iva, needRet = !retenciones
+  if (needIva || needRet) {
     for (const el of doc.querySelectorAll('*')) {
-      if (el.localName.toLowerCase() === 'retencion') {
-        retenciones += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
-      }
+      const ln = el.localName.toLowerCase()
+      if (needIva && ln === 'traslado')  iva         += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+      if (needRet && ln === 'retencion') retenciones += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
     }
   }
 
@@ -130,7 +133,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     fechaFac:  (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10),
     concepto:   clasificarGasto(proveedor, concepto),
     importe:    parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0,
-    iva:        parseFloat(ga(imp,  'TotalImpuestosTrasladados') || '0') || 0,
+    iva,
     retenciones,
     totalCFDI:  parseFloat(ga(comp, 'Total', 'total')            || '0') || 0,
     propinaPorcentaje: 0,
