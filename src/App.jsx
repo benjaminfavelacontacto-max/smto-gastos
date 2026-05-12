@@ -117,12 +117,11 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     }
   }
 
-  let iva         = parseFloat(ga(rootImp, 'TotalImpuestosTrasladados', 'totalImpuestosTrasladados') || '0') || 0
-  let retenciones = parseFloat(ga(rootImp, 'TotalImpuestosRetenidos',   'totalImpuestosRetenidos')   || '0') || 0
+  let iva = parseFloat(ga(rootImp, 'TotalImpuestosTrasladados', 'totalImpuestosTrasladados') || '0') || 0
   let isrTrasladado = 0
   let retencionISR  = 0
   let retencionIVA  = 0
-  const needIva = !iva, needRet = !retenciones
+  const needIva = !iva
 
   if (rootImp) {
     for (const c of rootImp.childNodes) {
@@ -131,23 +130,30 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
       if (ln === 'traslados') {
         for (const t of c.childNodes) {
           if (t.nodeType !== 1 || (t.localName || '').toLowerCase() !== 'traslado') continue
-          const tipo    = ga(t, 'TipoImpuesto', 'tipoImpuesto') || ''
+          // CFDI 4.0 actually names this attribute "Impuesto" on Traslado/Retencion.
+          // Some tooling/spec write-ups call it "TipoImpuesto" — accept both.
+          const tipo    = (ga(t, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
           const importe = parseFloat(ga(t, 'Importe', 'importe') || '0') || 0
           if      (tipo === '001')             isrTrasladado += importe
           else if (tipo === '002' && needIva)  iva           += importe
         }
       } else if (ln === 'retenciones') {
+        const retEls = []
         for (const r of c.childNodes) {
-          if (r.nodeType !== 1 || (r.localName || '').toLowerCase() !== 'retencion') continue
-          const tipo    = ga(r, 'TipoImpuesto', 'tipoImpuesto') || ''
+          if (r.nodeType === 1 && (r.localName || '').toLowerCase() === 'retencion') retEls.push(r)
+        }
+        console.log('[parseCFDI]', xmlFile.name, '— Retencion elements found:', retEls.length)
+        for (const r of retEls) {
+          const tipo    = (ga(r, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
           const importe = parseFloat(ga(r, 'Importe', 'importe') || '0') || 0
+          console.log('[parseCFDI]   Retencion tipo=', tipo, 'importe=', importe)
           if      (tipo === '001') retencionISR += importe
           else if (tipo === '002') retencionIVA += importe
         }
       }
     }
   }
-  if (needRet) retenciones = retencionISR + retencionIVA
+  const retenciones = retencionISR + retencionIVA
 
   // Buscar PDF asociado (por nombre base o UUID)
   const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
