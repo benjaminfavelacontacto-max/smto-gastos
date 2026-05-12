@@ -675,6 +675,7 @@ export default function App() {
       (idx, _m, dCSV) => {
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
+        nl[idx].formaPago = '04'  // bank-matched → card transaction
         matches++
       }
     )
@@ -702,6 +703,7 @@ export default function App() {
         const pct  = base > 0 ? Math.round((prop / base) * 10000) / 100 : 0
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
+        nl[idx].formaPago = '04'  // bank-matched → card transaction
         nl[idx].montoPropina = prop
         nl[idx].propinaPorcentaje = pct
         matches++; propinas++
@@ -716,6 +718,7 @@ export default function App() {
       (idx, _m, dCSV) => {
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
+        nl[idx].formaPago = '04'  // bank-matched → card transaction
         matches++
       }
     )
