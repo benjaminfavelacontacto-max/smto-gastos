@@ -36,6 +36,7 @@ function clasificarGasto(proveedor, concepto) {
   if (has('HOTEL','HOSPEDAJE','HILTON','MARRIOTT','HOLIDAY','CITY EXPRESS','HABITACION','INN')) return 'Hotel'
   if (has('UBER','DIDI','TAXI','PEAJE','CASETA','AUTOPISTA','FONADIN','CAPUFE','ESTACIONAMIENTO')) return 'Transporte'
   if (has('HOME DEPOT','FERRETERIA','MATERIAL','TRUPER','GRAINGER','HERRAMIENTA')) return 'Herramienta'
+  if (has('GASNGO','COMBUSTIBLE','GASOLINA','MAGNA','PREMIUM','DIESEL')) return 'Combustible'
   return 'Consumo'
 }
 
@@ -163,7 +164,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
 
   // The parent container determines the bucket — Traslado nodes can only feed
   // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
-  const iva           = sumByTipo(trasladosBox,   'traslado',  '002')
+  let   iva           = sumByTipo(trasladosBox,   'traslado',  '002')
   let   isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR from regular Traslados
   let   retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
@@ -189,6 +190,30 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     else if (ln === 'retencioneslocales') retenciones  += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
   }
 
+  // Fields the EDC override may rewrite — pull them out before the override block.
+  let importe        = parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0
+  let totalCFDI      = parseFloat(ga(comp, 'Total',    'total')    || '0') || 0
+  let conceptoClasif = clasificarGasto(proveedor, concepto)
+
+  // EDC (Estado de Cuenta de Combustible — GasNGo & similar). The regular
+  // <cfdi:Comprobante> has placeholder amounts (SubTotal=1.00, Total=0.00);
+  // real figures live on <Dispersion> inside <cfdi:Addenda>. IEPS feeds the
+  // ISR/ISH/IEPS bucket per spec.
+  let isEDC = false, dispersion = null
+  for (const el of doc.querySelectorAll('*')) {
+    if (!el.localName) continue
+    const ln = el.localName.toLowerCase()
+    if      (ln === 'estadodecuentacombustible')   isEDC = true
+    else if (ln === 'dispersion' && !dispersion)   dispersion = el
+  }
+  if (isEDC && dispersion) {
+    importe         = parseFloat(ga(dispersion, 'GralImporte',  'gralImporte')  || '0') || 0
+    iva             = parseFloat(ga(dispersion, 'GralImpuesto', 'gralImpuesto') || '0') || 0
+    isrTrasladado  += parseFloat(ga(dispersion, 'GralIEPS',     'gralIEPS')     || '0') || 0
+    totalCFDI       = parseFloat(ga(dispersion, 'GralTotal',    'gralTotal')    || '0') || 0
+    conceptoClasif  = 'Combustible'
+  }
+
   // Buscar PDF asociado (por nombre base o UUID)
   const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
   const pdfFile = pdfFiles.find(f =>
@@ -202,14 +227,14 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     proveedor,
     noFactura:  ga(comp, 'Folio', 'folio') || 'SN',
     fechaFac:  (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10),
-    concepto:   clasificarGasto(proveedor, concepto),
-    importe:    parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0,
+    concepto:   conceptoClasif,
+    importe,
     iva,
     isrTrasladado,
     retencionISR,
     retencionIVA,
     retenciones,
-    totalCFDI:  parseFloat(ga(comp, 'Total', 'total')            || '0') || 0,
+    totalCFDI,
     propinaPorcentaje: 0,
     montoPropina: 0,
     formaPago:  ga(comp, 'FormaPago') || '04',
@@ -632,7 +657,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.2</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.3</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
