@@ -304,10 +304,17 @@ function GastoRow({ g, upd, openPDF }) {
       : v)
   }
 
-  const NumCell = ({ field, prefix, suffix, format = true }) => {
+  const NumCell = ({ field, prefix, suffix, format = true, compact = false }) => {
     const v = g[field]
-    // Money fields always render as toFixed(2); 0 renders as '' to keep cells clean.
-    const display = v ? (format ? Number(v).toFixed(2) : v) : ''
+    // Money fields render as toFixed(2) (e.g. 13.07). `compact` rounds to 2
+    // decimals but drops trailing zeros (e.g. 13 instead of 13.00) — used for
+    // propinaPorcentaje and montoPropina so editing feels natural. 0 → '' for
+    // cleanliness.
+    const display = v
+      ? compact ? +Number(v).toFixed(2)
+      : format  ? Number(v).toFixed(2)
+      :           v
+      : ''
     return (
       <div className="num-cell">
         {prefix && <span className="sym">{prefix}</span>}
@@ -402,11 +409,11 @@ function GastoRow({ g, upd, openPDF }) {
       {/* Total Factura */}
       <td><NumCell field="totalCFDI"   prefix="$" /></td>
 
-      {/* Propina % — kept unformatted so the user can type fractional percentages */}
-      <td><NumCell field="propinaPorcentaje" suffix="%" format={false} /></td>
+      {/* Propina % — compact: rounds to 2 decimals, drops trailing zeros for typing comfort */}
+      <td><NumCell field="propinaPorcentaje" suffix="%" compact /></td>
 
       {/* Propina $ */}
-      <td><NumCell field="montoPropina" prefix="$" /></td>
+      <td><NumCell field="montoPropina" prefix="$" compact /></td>
 
       {/* Total Final */}
       <td>
@@ -498,11 +505,11 @@ export default function App() {
       if (g.id !== id) return g
       const u = { ...g, [field]: value }
       if (field === 'totalCFDI' && u.propinaPorcentaje > 0)
-        u.montoPropina = value * u.propinaPorcentaje / 100
+        u.montoPropina = Math.round(value * u.propinaPorcentaje / 100 * 100) / 100
       if (field === 'propinaPorcentaje')
-        u.montoPropina = g.totalCFDI * value / 100
+        u.montoPropina = Math.round(g.totalCFDI * value / 100 * 100) / 100
       if (field === 'montoPropina' && g.totalCFDI > 0)
-        u.propinaPorcentaje = (value / g.totalCFDI) * 100
+        u.propinaPorcentaje = Math.round((value / g.totalCFDI) * 10000) / 100
       if (field === 'retencionISR') u.retenciones = value + (u.retencionIVA || 0)
       if (field === 'retencionIVA') u.retenciones = value + (u.retencionISR || 0)
       return u
@@ -657,19 +664,26 @@ export default function App() {
       }
     )
 
-    // Pass 2 — propina detection (csv exceeds invoice by 2..20% AND <$200 over).
+    // Pass 2 — propina: bank charge = invoice base + tip (10–25% of base).
+    // For tiny invoices (<$100) the percentage band is too narrow to be
+    // useful, so allow any tip up to $25 absolute.
     tryPass(
       (inv, m) => {
         const base = inv.totalCFDI
-        const extra = m - base
-        return m > base + 2 && m <= base * 1.20 && extra < 200
+        if (base <= 0) return false
+        const diff = m - base
+        if (diff <= 0) return false
+        if (base < 100) return diff <= 25
+        return diff >= base * 0.10 && diff <= base * 0.25
       },
       (idx, m, dCSV) => {
-        const prop = m - nl[idx].totalCFDI
+        const base = nl[idx].totalCFDI
+        const prop = Math.round((m - base) * 100) / 100
+        const pct  = base > 0 ? Math.round((prop / base) * 10000) / 100 : 0
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
         nl[idx].montoPropina = prop
-        if (nl[idx].totalCFDI > 0) nl[idx].propinaPorcentaje = (prop / nl[idx].totalCFDI) * 100
+        nl[idx].propinaPorcentaje = pct
         matches++; propinas++
       }
     )
@@ -806,7 +820,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.4</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.5</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
