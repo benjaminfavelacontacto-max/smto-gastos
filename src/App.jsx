@@ -559,9 +559,8 @@ export default function App() {
     // periods for amounts. "Transacci" intentionally drops the accented ó so
     // we survive encoding mishaps.
     const isClara = (lines[0] || '').includes('Fecha de Transacci')
-    const dateTolerance = isClara ? 15 : 30  // exact tx date for Clara, payment-cycle lag elsewhere
 
-    let bancoRows = 0, matches = 0, propinas = 0
+    let matches = 0, propinas = 0
     const sinFactura = []
     const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: '' }))
     const formatCobro = d => {
@@ -572,10 +571,12 @@ export default function App() {
     }
     const cleanNum = s => parseFloat(String(s || '').replace(/[$,\s]/g, ''))
 
+    // Step 1 — parse every CSV row into a flat list { dCSV, amounts[], descripcion }.
+    const csvRows = []
     for (let li = 0; li < lines.length; li++) {
       const line = lines[li]
       if (!line.trim()) continue
-      if (isClara && li === 0) continue   // skip header row
+      if (isClara && li === 0) continue   // skip Clara header row
 
       const cols = parseCSVLine(line, sep)
       let dCSV = null
@@ -584,14 +585,13 @@ export default function App() {
 
       if (isClara) {
         dCSV = parseDateRobusto(cols[0] || '')
-        const mxn = cleanNum(cols[5])
+        const mxn  = cleanNum(cols[5])
         const orig = cleanNum(cols[3])
         const amount = (!isNaN(mxn) && mxn) || (!isNaN(orig) && orig) || 0
         if (!dCSV || !amount) continue
         amounts = [Math.abs(amount)]
         descripcion = (cols[2] || '').trim().slice(0, 60)
       } else {
-        // Generic parser — scan every cell for a date and any numeric amounts
         for (const cell of cols) {
           const c = cell.trim(); if (!c) continue
           if (!dCSV) { const d = parseDateRobusto(c); if (d) { dCSV = d; continue } }
@@ -606,46 +606,94 @@ export default function App() {
           }
         }
         if (!dCSV || !amounts.length) continue
+        descripcion = line.trim().slice(0, 60)
       }
+      csvRows.push({ dCSV, amounts, descripcion, matched: false })
+    }
+    const bancoRows = csvRows.length
 
-      bancoRows++; let found = false
+    // Date is a TIEBREAKER, not a filter. Pick the invoice whose fechaFac is
+    // closest in time to the bank row's date. Invoices with no parseable date
+    // get pushed to the back via Infinity.
+    const closestByDate = (candIdx, dCSV) => {
+      if (candIdx.length === 1) return candIdx[0]
+      return candIdx.reduce((bestIdx, ci) => {
+        const dG_c = parseDateRobusto(nl[ci].fechaFac)
+        const dG_b = parseDateRobusto(nl[bestIdx].fechaFac)
+        const diff_c = dG_c ? Math.abs(dCSV - dG_c) : Infinity
+        const diff_b = dG_b ? Math.abs(dCSV - dG_b) : Infinity
+        return diff_c < diff_b ? ci : bestIdx
+      })
+    }
 
-      for (const csv of amounts) {
-        if (found) break
-        // Paso 1: match exacto (±$5)
-        for (let i = 0; i < nl.length; i++) {
-          if (nl[i].hizoMatch) continue
-          const tot = nl[i].totalCFDI + nl[i].montoPropina
-          const dG  = parseDateRobusto(nl[i].fechaFac)
-          if (Math.abs(tot - csv) <= 5 && dG && Math.abs(dCSV - dG) / 86400000 <= dateTolerance) {
-            nl[i].hizoMatch = true
-            nl[i].fechaCobro = formatCobro(dCSV)
-            matches++; found = true; break
+    // Helper: try to match one row's amounts under a given predicate. On a
+    // match, hand off to `apply` which mutates nl[idx] and returns the
+    // pass-specific bookkeeping increments.
+    const tryPass = (predicate, apply) => {
+      for (const row of csvRows) {
+        if (row.matched) continue
+        for (const monto of row.amounts) {
+          const candidates = []
+          for (let i = 0; i < nl.length; i++) {
+            if (nl[i].hizoMatch) continue
+            if (predicate(nl[i], monto)) candidates.push(i)
           }
-        }
-        if (found) break
-        // Paso 2: detección automática de propina (csv > total hasta 25% extra)
-        for (let i = 0; i < nl.length; i++) {
-          if (nl[i].hizoMatch) continue
-          const inv = nl[i].totalCFDI
-          const dG  = parseDateRobusto(nl[i].fechaFac)
-          if (csv > inv + 2 && csv <= inv * 1.25 && dG && Math.abs(dCSV - dG) / 86400000 <= dateTolerance) {
-            nl[i].hizoMatch = true
-            nl[i].fechaCobro = formatCobro(dCSV)
-            const prop = csv - inv
-            nl[i].montoPropina = prop
-            if (inv > 0) nl[i].propinaPorcentaje = (prop / inv) * 100
-            matches++; propinas++; found = true; break
-          }
+          if (!candidates.length) continue
+          const idx = closestByDate(candidates, row.dCSV)
+          apply(idx, monto, row.dCSV)
+          row.matched = true
+          break
         }
       }
-      if (!found) {
-        sinFactura.push({
-          fecha: formatCobro(dCSV),
-          monto: Math.max(...amounts),
-          descripcion: descripcion || line.trim().slice(0, 60),
-        })
+    }
+
+    // Pass 1 — exact match (±$5) against totalCFDI + montoPropina.
+    tryPass(
+      (inv, m) => Math.abs(inv.totalCFDI + inv.montoPropina - m) <= 5,
+      (idx, _m, dCSV) => {
+        nl[idx].hizoMatch = true
+        nl[idx].fechaCobro = formatCobro(dCSV)
+        matches++
       }
+    )
+
+    // Pass 2 — propina detection (csv exceeds invoice by 2..20% AND <$200 over).
+    tryPass(
+      (inv, m) => {
+        const base = inv.totalCFDI
+        const extra = m - base
+        return m > base + 2 && m <= base * 1.20 && extra < 200
+      },
+      (idx, m, dCSV) => {
+        const prop = m - nl[idx].totalCFDI
+        nl[idx].hizoMatch = true
+        nl[idx].fechaCobro = formatCobro(dCSV)
+        nl[idx].montoPropina = prop
+        if (nl[idx].totalCFDI > 0) nl[idx].propinaPorcentaje = (prop / nl[idx].totalCFDI) * 100
+        matches++; propinas++
+      }
+    )
+
+    // Pass 3 — relaxed amount (±$1) against totalCFDI only (no propina).
+    // Catches rounding nicks (e.g. 5851.38 vs 5851.25) on invoices without
+    // a propina already recorded.
+    tryPass(
+      (inv, m) => Math.abs(inv.totalCFDI - m) <= 1.0,
+      (idx, _m, dCSV) => {
+        nl[idx].hizoMatch = true
+        nl[idx].fechaCobro = formatCobro(dCSV)
+        matches++
+      }
+    )
+
+    // Collect unmatched rows for the result modal.
+    for (const row of csvRows) {
+      if (row.matched) continue
+      sinFactura.push({
+        fecha: formatCobro(row.dCSV),
+        monto: Math.max(...row.amounts),
+        descripcion: row.descripcion,
+      })
     }
 
     setLista(nl)
@@ -758,7 +806,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.1</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.4</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
