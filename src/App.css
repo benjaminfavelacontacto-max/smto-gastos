@@ -398,6 +398,31 @@ td {
   font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: 12px;
 }
+
+/* Forma de Pago dropdown — styled to blend with text inputs */
+.cell-select {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 5px;
+  transition: background 0.12s;
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.cell-select:hover,
+.cell-select:focus {
+  background: rgba(255, 255, 255, 0.05);
+}
+.cell-select option {
+  background: #1c1f26;
+  color: rgba(255, 255, 255, 0.85);
+}
 .cell-in.is-bold  { font-weight: 600; color: #F1F1F3; }
 .cell-in.is-dim   { color: rgba(255, 255, 255, 0.55); }
 

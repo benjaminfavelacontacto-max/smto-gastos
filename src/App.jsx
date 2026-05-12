@@ -17,6 +17,7 @@ const COLUMNS = [
   { key: 'retencionIVA',      label: 'Ret. IVA',     width: 110, sortable: true,  type: 'number' },
   { key: 'retenciones',       label: 'Reten.',       width: 110, sortable: true,  type: 'number' },
   { key: 'totalCFDI',         label: 'Total Fac.',   width: 125, sortable: true,  type: 'number' },
+  { key: 'formaPago',         label: 'Forma de Pago', width: 160, sortable: true,  type: 'string' },
   { key: 'propinaPorcentaje', label: 'Prop. %',      width: 95,  sortable: true,  type: 'number' },
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
@@ -408,6 +409,20 @@ function GastoRow({ g, upd, openPDF }) {
 
       {/* Total Factura */}
       <td><NumCell field="totalCFDI"   prefix="$" /></td>
+
+      {/* Forma de Pago */}
+      <td>
+        <select
+          className="cell-select"
+          value={g.formaPago}
+          onChange={e => upd('formaPago', e.target.value)}
+        >
+          <option value="04">04 - Tarjeta de Crédito</option>
+          <option value="02">02 - Efectivo</option>
+          <option value="03">03 - Transferencia</option>
+          <option value="01">01 - Efectivo (otro)</option>
+        </select>
+      </td>
 
       {/* Propina % — compact: rounds to 2 decimals, drops trailing zeros for typing comfort */}
       <td><NumCell field="propinaPorcentaje" suffix="%" compact /></td>
