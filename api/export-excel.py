@@ -1,7 +1,14 @@
 from http.server import BaseHTTPRequestHandler
 import json, os, sys, tempfile, traceback
-import xlrd
-from xlutils.copy import copy as xl_copy
+
+# Guarded imports: if these fail, FUNCTION_INVOCATION_FAILED used to swallow the
+# error. Now we capture it and surface it via the response body on first call.
+IMPORT_ERROR = None
+try:
+    import xlrd
+    from xlutils.copy import copy as xl_copy
+except Exception:
+    IMPORT_ERROR = traceback.format_exc()
 
 
 def find_template():
@@ -18,8 +25,31 @@ def find_template():
 
 
 class handler(BaseHTTPRequestHandler):
+    # Connectivity probe: GET returns 200 + diagnostic JSON so we can verify the
+    # function is reachable even when POST is failing.
+    def do_GET(self):
+        diag = {
+            'ok': IMPORT_ERROR is None,
+            'python_version': sys.version,
+            'cwd': os.getcwd(),
+            'file_dir': os.path.dirname(__file__),
+            'import_error': IMPORT_ERROR,
+        }
+        try:
+            diag['template_path'] = find_template()
+        except Exception as e:
+            diag['template_error'] = str(e)
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(diag, indent=2).encode())
+
     def do_POST(self):
         try:
+            if IMPORT_ERROR:
+                raise RuntimeError(f'Module import failed at function load:\n{IMPORT_ERROR}')
+
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length)
             gastos = json.loads(body)
@@ -87,6 +117,6 @@ class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()

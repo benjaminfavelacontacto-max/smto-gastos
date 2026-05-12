@@ -1,7 +1,6 @@
 {
   "functions": {
     "api/export-excel.py": {
-      "runtime": "python3.11",
       "includeFiles": "public/TEMPLATE.xls"
     }
   }
