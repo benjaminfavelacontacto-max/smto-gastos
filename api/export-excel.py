@@ -1,18 +1,19 @@
 from http.server import BaseHTTPRequestHandler
 import json, os, sys, tempfile, traceback
 
-# Guarded imports: a module-load failure used to surface as
-# FUNCTION_INVOCATION_FAILED with no useful body. Now any import error
-# is captured so do_POST/do_GET can surface it.
+# Guarded imports: if these fail, FUNCTION_INVOCATION_FAILED used to swallow the
+# error. Now we capture it and surface it via the response body on first call.
 IMPORT_ERROR = None
 try:
-    from openpyxl import load_workbook
-    from openpyxl.drawing.image import Image as XLImage
+    import xlrd
+    import xlwt
+    from xlutils.copy import copy as xl_copy
 except Exception:
     IMPORT_ERROR = traceback.format_exc()
 
 
-# CFDI FormaPago codes → human label.
+# CFDI FormaPago codes → human label written to the Excel "FORMA DE PAGO" column.
+# Unknown codes fall through to the raw code so SAT values like "28" don't get lost.
 FORMA_PAGO_MAP = {
     '01': '01 - Efectivo',
     '02': '02 - Efectivo',
@@ -25,33 +26,47 @@ def forma_pago_label(code):
     return FORMA_PAGO_MAP.get(code, code or '')
 
 
+# ── Cell styles ─────────────────────────────────────────────────────────────
+# xlutils.copy preserves styles for cells that already had content in the
+# template, but doesn't auto-apply formatting to cells we write into for the
+# first time. easyxf registers a real XF record in the workbook so styles
+# survive on writes. Trade-off: the template's per-cell background/border
+# styling is replaced wherever we apply these.
+
+CURRENCY_FMT = '_-"$"* #,##0.00_-;-"$"* #,##0.00_-;_-"$"* "-"??_-;_-@_-'
+
+if IMPORT_ERROR is None:
+    STYLE_CURRENCY = xlwt.easyxf(
+        'alignment: horizontal right, vertical centre;',
+        num_format_str=CURRENCY_FMT,
+    )
+    STYLE_CENTER = xlwt.easyxf('alignment: horizontal centre, vertical centre;')
+    STYLE_LEFT   = xlwt.easyxf('alignment: horizontal left, vertical centre;')
+    STYLE_BOLD_CENTER = xlwt.easyxf(
+        'font: bold true; alignment: horizontal centre, vertical centre;'
+    )
+    STYLE_TOTALS_CURRENCY = xlwt.easyxf(
+        'font: bold true; alignment: horizontal right, vertical centre;',
+        num_format_str=CURRENCY_FMT,
+    )
+
+
 def find_template():
     candidates = [
-        os.path.join(os.path.dirname(__file__), 'TEMPLATE.xlsx'),
-        os.path.join(os.path.dirname(__file__), '..', 'public', 'TEMPLATE.xlsx'),
-        '/var/task/public/TEMPLATE.xlsx',
-        '/var/task/api/TEMPLATE.xlsx',
+        os.path.join(os.path.dirname(__file__), 'TEMPLATE.xls'),
+        os.path.join(os.path.dirname(__file__), '..', 'public', 'TEMPLATE.xls'),
+        '/var/task/public/TEMPLATE.xls',
+        '/var/task/api/TEMPLATE.xls',
     ]
     for path in candidates:
         if os.path.exists(path):
             return path
-    raise FileNotFoundError(f'TEMPLATE.xlsx not found. Tried: {candidates}')
-
-
-def find_logo():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), 'logo.png'),
-        os.path.join(os.path.dirname(__file__), '..', 'public', 'logo.png'),
-        '/var/task/public/logo.png',
-        '/var/task/api/logo.png',
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return None
+    raise FileNotFoundError(f'TEMPLATE.xls not found. Tried: {candidates}')
 
 
 class handler(BaseHTTPRequestHandler):
+    # Connectivity probe: GET returns 200 + diagnostic JSON so we can verify the
+    # function is reachable even when POST is failing.
     def do_GET(self):
         diag = {
             'ok': IMPORT_ERROR is None,
@@ -64,7 +79,6 @@ class handler(BaseHTTPRequestHandler):
             diag['template_path'] = find_template()
         except Exception as e:
             diag['template_error'] = str(e)
-        diag['logo_path'] = find_logo()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -80,66 +94,61 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length)
             gastos = json.loads(body)
 
-            wb = load_workbook(find_template())
-            ws = wb.active   # first sheet — template has only "Gastos"
+            template_path = find_template()
+            rb = xlrd.open_workbook(template_path, formatting_info=True)
+            wb = xl_copy(rb)
+            ws = wb.get_sheet(0)
 
-            # openpyxl uses 1-indexed rows + columns. Header is at row 5, data
-            # starts at row 6.
-            row = 6
+            row_idx = 5
             for g in gastos:
                 f = g.get('fechaFac', '').split('-')
                 fecha_mx = f'{f[2]}/{f[1]}/{f[0]}' if len(f) == 3 else g.get('fechaFac', '')
-
-                ws.cell(row=row, column=1,  value=g.get('rfc', ''))
-                ws.cell(row=row, column=2,  value=g.get('proveedor', ''))
-                ws.cell(row=row, column=3,  value=g.get('noFactura', ''))
-                ws.cell(row=row, column=4,  value=fecha_mx)
-                ws.cell(row=row, column=5,  value=g.get('concepto', ''))
-                ws.cell(row=row, column=6,  value=round(g.get('importe', 0), 2))
-                ws.cell(row=row, column=7,  value=round(g.get('iva', 0), 2))
-                ws.cell(row=row, column=8,  value=round(g.get('retenciones', 0), 2))
-                ws.cell(row=row, column=9,  value=f'=F{row}+G{row}-H{row}')
-                ws.cell(row=row, column=10, value=forma_pago_label(g.get('formaPago', '')))
-                ws.cell(row=row, column=11, value=g.get('fechaCobro', 'Pendiente'))
-                row += 1
-
+                ws.write(row_idx, 0, g.get('rfc', ''),         STYLE_CENTER)
+                ws.write(row_idx, 1, g.get('proveedor', ''),   STYLE_LEFT)
+                ws.write(row_idx, 2, g.get('noFactura', ''),   STYLE_CENTER)
+                ws.write(row_idx, 3, fecha_mx,                 STYLE_CENTER)
+                ws.write(row_idx, 4, g.get('concepto', ''),    STYLE_CENTER)
+                ws.write(row_idx, 5, round(g.get('importe', 0), 2),     STYLE_CURRENCY)
+                ws.write(row_idx, 6, round(g.get('iva', 0), 2),         STYLE_CURRENCY)
+                ws.write(row_idx, 7, round(g.get('retenciones', 0), 2), STYLE_CURRENCY)
+                # Mirror the template's I<n> = F<n> + G<n> - H<n> formula so
+                # Excel recomputes Total if the user later edits importe/IVA/ret.
+                ws.write(row_idx, 8, xlwt.Formula(f'F{row_idx+1}+G{row_idx+1}-H{row_idx+1}'), STYLE_CURRENCY)
+                ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')),               STYLE_CENTER)
+                ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'),                      STYLE_CENTER)
+                row_idx += 1
                 propina = round(g.get('montoPropina', 0), 2)
                 if propina > 0:
-                    ws.cell(row=row, column=2,  value=g.get('proveedor', '') + ' - PROPINA')
-                    ws.cell(row=row, column=4,  value=fecha_mx)
-                    ws.cell(row=row, column=5,  value='PROPINA')
-                    ws.cell(row=row, column=6,  value=propina)
-                    ws.cell(row=row, column=7,  value=0)
-                    ws.cell(row=row, column=8,  value=0)
-                    ws.cell(row=row, column=9,  value=f'=F{row}+G{row}-H{row}')
-                    ws.cell(row=row, column=10, value=forma_pago_label(g.get('formaPago', '')))
-                    ws.cell(row=row, column=11, value=g.get('fechaCobro', 'Pendiente'))
-                    row += 1
+                    ws.write(row_idx, 0, '',                                           STYLE_CENTER)
+                    ws.write(row_idx, 1, g.get('proveedor', '') + ' - PROPINA',        STYLE_LEFT)
+                    ws.write(row_idx, 2, '',                                           STYLE_CENTER)
+                    ws.write(row_idx, 3, fecha_mx,                                     STYLE_CENTER)
+                    ws.write(row_idx, 4, 'PROPINA',                                    STYLE_CENTER)
+                    ws.write(row_idx, 5, propina,                                      STYLE_CURRENCY)
+                    ws.write(row_idx, 6, 0,                                            STYLE_CURRENCY)
+                    ws.write(row_idx, 7, 0,                                            STYLE_CURRENCY)
+                    ws.write(row_idx, 8, xlwt.Formula(f'F{row_idx+1}+G{row_idx+1}-H{row_idx+1}'), STYLE_CURRENCY)
+                    ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')),     STYLE_CENTER)
+                    ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'),            STYLE_CENTER)
+                    row_idx += 1
 
-            # Clear leftover template pre-fills in any data rows we didn't reach.
-            # Stops at row 24 so the totals row stays in place.
-            for clear_r in range(row, 24):
-                for c in [6, 7, 8, 9, 12, 13]:
-                    ws.cell(row=clear_r, column=c).value = None
+            # ── Clear leftover template pre-fills (zeros in cols 5,6,7,8,11,12)
+            # in any data rows we didn't reach. Stops at row 23 so the templated
+            # totals row (Excel row 24) stays in place.
+            for clear_r in range(row_idx, 23):
+                for c in [5, 6, 7, 8, 11, 12]:
+                    ws.write(clear_r, c, '', STYLE_CURRENCY)
 
-            # Totals row (Excel row 24). openpyxl preserves the template's cell
-            # styling when we set .value; we only need to write the formulas.
-            ws.cell(row=24, column=5, value='Total Cuenta:')
-            ws.cell(row=24, column=6, value='=SUM(F6:F23)')
-            ws.cell(row=24, column=7, value='=SUM(G6:G23)')
-            ws.cell(row=24, column=8, value='=SUM(H6:H23)')
-            ws.cell(row=24, column=9, value='=SUM(I6:I23)')
+            # ── Totals row (Excel row 24, 0-indexed 23). Overwrite the template's
+            # cells with explicit SUM formulas + label. Fixes the template's
+            # I24 = SUM(N6:N22) bug (should sum column I, not N).
+            ws.write(23, 4, 'Total Cuenta:',               STYLE_BOLD_CENTER)
+            ws.write(23, 5, xlwt.Formula('SUM(F6:F23)'),   STYLE_TOTALS_CURRENCY)
+            ws.write(23, 6, xlwt.Formula('SUM(G6:G23)'),   STYLE_TOTALS_CURRENCY)
+            ws.write(23, 7, xlwt.Formula('SUM(H6:H23)'),   STYLE_TOTALS_CURRENCY)
+            ws.write(23, 8, xlwt.Formula('SUM(I6:I23)'), STYLE_TOTALS_CURRENCY)
 
-            # Embed the logo (PNG, native — openpyxl uses Pillow under the hood
-            # so transparency etc. is preserved). Anchored top-left.
-            logo_path = find_logo()
-            if logo_path:
-                img = XLImage(logo_path)
-                img.width = 180
-                img.height = 80
-                ws.add_image(img, 'A1')
-
-            with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix='.xls', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)
             with open(tmp_path, 'rb') as f:
@@ -147,8 +156,8 @@ class handler(BaseHTTPRequestHandler):
             os.unlink(tmp_path)
 
             self.send_response(200)
-            self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            self.send_header('Content-Disposition', 'attachment; filename="Reporte_Gastos_SMTO.xlsx"')
+            self.send_header('Content-Type', 'application/vnd.ms-excel')
+            self.send_header('Content-Disposition', 'attachment; filename="Reporte_Gastos_SMTO.xls"')
             self.send_header('Content-Length', str(len(file_data)))
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()

@@ -847,11 +847,11 @@ export default function App() {
       const url = URL.createObjectURL(blob)
       const a = Object.assign(document.createElement('a'), {
         href: url,
-        download: 'Reporte_Gastos_SMTO.xlsx',
+        download: 'Reporte_Gastos_SMTO.xls',
       })
       a.click()
       URL.revokeObjectURL(url)
-      setAlerta('¡Excel generado correctamente! 📊\n\nReporte_Gastos_SMTO.xlsx descargado con todos los datos en el formato oficial SMTO.')
+      setAlerta('¡Excel generado correctamente! 📊\n\nReporte_Gastos_SMTO.xls descargado con todos los datos en el formato oficial SMTO.')
     } catch (err) {
       setAlerta('Error al generar Excel: ' + err.message)
     }
