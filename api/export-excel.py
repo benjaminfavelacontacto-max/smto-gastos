@@ -6,6 +6,7 @@ import json, os, sys, tempfile, traceback
 IMPORT_ERROR = None
 try:
     import xlrd
+    import xlwt
     from xlutils.copy import copy as xl_copy
 except Exception:
     IMPORT_ERROR = traceback.format_exc()
@@ -86,7 +87,9 @@ class handler(BaseHTTPRequestHandler):
                 ws.write(row_idx, 5, round(g.get('importe', 0), 2))
                 ws.write(row_idx, 6, round(g.get('iva', 0), 2))
                 ws.write(row_idx, 7, round(g.get('retenciones', 0), 2))
-                ws.write(row_idx, 8, total_final)
+                # Mirror the template's I<n> = F<n> + G<n> - H<n> formula so
+                # Excel recomputes Total if the user later edits importe/IVA/ret.
+                ws.write(row_idx, 8, xlwt.Formula(f'F{row_idx+1}+G{row_idx+1}-H{row_idx+1}'))
                 ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')))
                 ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'))
                 row_idx += 1
@@ -100,37 +103,26 @@ class handler(BaseHTTPRequestHandler):
                     ws.write(row_idx, 5, propina)
                     ws.write(row_idx, 6, 0)
                     ws.write(row_idx, 7, 0)
-                    ws.write(row_idx, 8, propina)
+                    ws.write(row_idx, 8, xlwt.Formula(f'F{row_idx+1}+G{row_idx+1}-H{row_idx+1}'))
                     ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')))
                     ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'))
                     row_idx += 1
 
-            # ── Totales (siempre justo después de la última fila de datos) ──
-            totals_row = row_idx
+            # ── Clear leftover template pre-fills (zeros in cols 5,6,7,8,11,12)
+            # in any data rows we didn't reach. Stops at row 23 so the templated
+            # totals row (Excel row 24) stays in place.
+            for clear_r in range(row_idx, 23):
+                for c in [5, 6, 7, 8, 11, 12]:
+                    ws.write(clear_r, c, '')
 
-            total_importe = round(sum(g.get('importe', 0) for g in gastos), 2)
-            total_iva = round(sum(g.get('iva', 0) for g in gastos), 2)
-            total_ret = round(sum(g.get('retenciones', 0) for g in gastos), 2)
-            total_cfdi = round(sum(g.get('totalCFDI', 0) + g.get('montoPropina', 0) for g in gastos), 2)
-            total_propinas_importe = round(sum(g.get('montoPropina', 0) for g in gastos), 2)
-
-            # Re-open the template (read-only) so we can copy back its content
-            # for the rows beyond `totals_row` (preserves any original layout
-            # past where our data landed).
-            rb_orig = xlrd.open_workbook(template_path, formatting_info=True)
-            ws_orig = rb_orig.sheet_by_index(0)
-
-            ws.write(totals_row, 4, 'Total Cuenta:')
-            ws.write(totals_row, 5, total_importe)
-            ws.write(totals_row, 6, total_iva)
-            ws.write(totals_row, 7, total_ret)
-            ws.write(totals_row, 8, total_cfdi)
-            ws.write(totals_row, 9, '')   # FORMA DE PAGO column intentionally blank on totals row
-
-            for clear_row in range(totals_row + 1, 24):
-                for col in range(16):
-                    orig_cell = ws_orig.cell(clear_row, col)
-                    ws.write(clear_row, col, '' if orig_cell.ctype == 0 else orig_cell.value)
+            # ── Totals row (Excel row 24, 0-indexed 23). Overwrite the template's
+            # cells with explicit SUM formulas + label. Fixes the template's
+            # I24 = SUM(N6:N22) bug (should sum column I, not N).
+            ws.write(23, 4, 'Total Cuenta:')
+            ws.write(23, 5, xlwt.Formula('SUM(F6:F23)'))
+            ws.write(23, 6, xlwt.Formula('SUM(G6:G23)'))
+            ws.write(23, 7, xlwt.Formula('SUM(H6:H23)'))
+            ws.write(23, 8, xlwt.Formula('SUM(I6:I23)'))
 
             with tempfile.NamedTemporaryFile(suffix='.xls', delete=False) as tmp:
                 tmp_path = tmp.name
