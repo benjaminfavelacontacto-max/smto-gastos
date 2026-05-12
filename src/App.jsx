@@ -117,42 +117,55 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     }
   }
 
-  let iva = parseFloat(ga(rootImp, 'TotalImpuestosTrasladados', 'totalImpuestosTrasladados') || '0') || 0
+  // Find a direct child element of `parent` by case-insensitive localName.
+  const findChild = (parent, name) => {
+    if (!parent) return null
+    for (const c of parent.childNodes) {
+      if (c.nodeType === 1 && c.localName && c.localName.toLowerCase() === name) return c
+    }
+    return null
+  }
+  // Read tax-code attr — CFDI 4.0 names it "Impuesto" on Traslado/Retencion,
+  // some writeups say "TipoImpuesto". Accept both, in both casings.
+  const readTipo = el => (ga(el, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
+  const readImporte = el => parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+
+  let iva = 0
   let isrTrasladado = 0
   let retencionISR  = 0
   let retencionIVA  = 0
-  const needIva = !iva
 
-  if (rootImp) {
-    for (const c of rootImp.childNodes) {
-      if (c.nodeType !== 1 || !c.localName) continue
-      const ln = c.localName.toLowerCase()
-      if (ln === 'traslados') {
-        for (const t of c.childNodes) {
-          if (t.nodeType !== 1 || (t.localName || '').toLowerCase() !== 'traslado') continue
-          // CFDI 4.0 actually names this attribute "Impuesto" on Traslado/Retencion.
-          // Some tooling/spec write-ups call it "TipoImpuesto" — accept both.
-          const tipo    = (ga(t, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
-          const importe = parseFloat(ga(t, 'Importe', 'importe') || '0') || 0
-          if      (tipo === '001')             isrTrasladado += importe
-          else if (tipo === '002' && needIva)  iva           += importe
-        }
-      } else if (ln === 'retenciones') {
-        const retEls = []
-        for (const r of c.childNodes) {
-          if (r.nodeType === 1 && (r.localName || '').toLowerCase() === 'retencion') retEls.push(r)
-        }
-        console.log('[parseCFDI]', xmlFile.name, '— Retencion elements found:', retEls.length)
-        for (const r of retEls) {
-          const tipo    = (ga(r, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
-          const importe = parseFloat(ga(r, 'Importe', 'importe') || '0') || 0
-          console.log('[parseCFDI]   Retencion tipo=', tipo, 'importe=', importe)
-          if      (tipo === '001') retencionISR += importe
-          else if (tipo === '002') retencionIVA += importe
-        }
-      }
+  // TRASLADOS — only <Traslado> children of root <Impuestos>/<Traslados>.
+  // A Traslado(001) is ISR trasladado — it goes to isrTrasladado, NEVER retencionISR.
+  // A Traslado(002) is IVA trasladado — it goes to iva,           NEVER retencionIVA.
+  const trasladosBox = findChild(rootImp, 'traslados')
+  if (trasladosBox) {
+    for (const t of trasladosBox.childNodes) {
+      if (t.nodeType !== 1 || !t.localName || t.localName.toLowerCase() !== 'traslado') continue
+      const tipo = readTipo(t), importe = readImporte(t)
+      if      (tipo === '002') iva           += importe
+      else if (tipo === '001') isrTrasladado += importe
     }
   }
+
+  // RETENCIONES — only <Retencion> children of root <Impuestos>/<Retenciones>.
+  // A Retencion(001) is ISR retenido — it goes to retencionISR, NEVER isrTrasladado.
+  // A Retencion(002) is IVA retenido — it goes to retencionIVA, NEVER iva.
+  const retencionesBox = findChild(rootImp, 'retenciones')
+  const retEls = []
+  if (retencionesBox) {
+    for (const r of retencionesBox.childNodes) {
+      if (r.nodeType === 1 && r.localName && r.localName.toLowerCase() === 'retencion') retEls.push(r)
+    }
+  }
+  console.log('[parseCFDI]', xmlFile.name, '— Retencion elements found:', retEls.length)
+  for (const r of retEls) {
+    const tipo = readTipo(r), importe = readImporte(r)
+    console.log('[parseCFDI]   Retencion tipo=', tipo, 'importe=', importe)
+    if      (tipo === '001') retencionISR += importe
+    else if (tipo === '002') retencionIVA += importe
+  }
+
   const retenciones = retencionISR + retencionIVA
 
   // Buscar PDF asociado (por nombre base o UUID)
