@@ -356,6 +356,10 @@ td {
 .cell-in.is-bold  { font-weight: 600; color: #F1F1F3; }
 .cell-in.is-dim   { color: rgba(255, 255, 255, 0.55); }
 
+/* Fecha Cobro — green when filled (post bank match), muted placeholder otherwise */
+.cell-in.is-cobro::placeholder        { color: rgba(255, 255, 255, 0.2); }
+.cell-in.is-cobro.is-filled           { color: #30D158; font-weight: 600; }
+
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }

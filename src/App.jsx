@@ -21,6 +21,7 @@ const COLUMNS = [
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
+  { key: 'fechaCobro',        label: 'Fecha Cobro',  width: 120, sortable: true,  type: 'string' },
 ]
 
 /* ═══════════════════════════════════════════════════
@@ -255,6 +256,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     totalCFDI,
     propinaPorcentaje: 0,
     montoPropina: 0,
+    fechaCobro: '',
     formaPago:  ga(comp, 'FormaPago') || '04',
     uuid,
     tienePDF: !!pdfFile,
@@ -412,6 +414,16 @@ function GastoRow({ g, upd, openPDF }) {
           ${(g.totalCFDI + g.montoPropina).toFixed(2)}
         </span>
       </td>
+
+      {/* Fecha Cobro — populated by validarBanco, but editable */}
+      <td>
+        <input
+          className={`cell-in is-cobro${g.fechaCobro ? ' is-filled' : ''}`}
+          value={g.fechaCobro || ''}
+          placeholder="Pendiente"
+          onChange={e => upd('fechaCobro', e.target.value)}
+        />
+      </td>
     </tr>
   )
 }
@@ -541,7 +553,13 @@ export default function App() {
     if (!sample.includes(',')) sep = sample.includes(';') ? ';' : '\t'
 
     let bancoRows = 0, matches = 0, propinas = 0
-    const nl = lista.map(g => ({ ...g, hizoMatch: false }))
+    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: '' }))
+    const formatCobro = d => {
+      const dd   = String(d.getDate()).padStart(2, '0')
+      const mm   = String(d.getMonth() + 1).padStart(2, '0')
+      const yyyy = d.getFullYear()
+      return `${dd}/${mm}/${yyyy}`
+    }
 
     for (const line of lines) {
       if (!line.trim()) continue
@@ -572,7 +590,9 @@ export default function App() {
           const tot = nl[i].totalCFDI + nl[i].montoPropina
           const dG  = parseDateRobusto(nl[i].fechaFac)
           if (Math.abs(tot - csv) <= 5 && dG && Math.abs(dCSV - dG) / 86400000 <= 30) {
-            nl[i].hizoMatch = true; matches++; found = true; break
+            nl[i].hizoMatch = true
+            nl[i].fechaCobro = formatCobro(dCSV)
+            matches++; found = true; break
           }
         }
         if (found) break
@@ -583,6 +603,7 @@ export default function App() {
           const dG  = parseDateRobusto(nl[i].fechaFac)
           if (csv > inv + 2 && csv <= inv * 1.25 && dG && Math.abs(dCSV - dG) / 86400000 <= 30) {
             nl[i].hizoMatch = true
+            nl[i].fechaCobro = formatCobro(dCSV)
             const prop = csv - inv
             nl[i].montoPropina = prop
             if (inv > 0) nl[i].propinaPorcentaje = (prop / inv) * 100
@@ -612,7 +633,7 @@ export default function App() {
       rfc: 'PUBLICO GENERAL', proveedor: 'Escribe aquí...', noFactura: 'Ticket',
       fechaFac: hoy, concepto: 'Consumo', importe: 0, iva: 0, isrTrasladado: 0,
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
-      propinaPorcentaje: 0, montoPropina: 0, formaPago: '01', uuid: 'MANUAL',
+      propinaPorcentaje: 0, montoPropina: 0, fechaCobro: '', formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, checkManual: false,
     }])
   }
@@ -623,9 +644,10 @@ export default function App() {
     const rows = lista.flatMap(g => {
       const f  = g.fechaFac.split('-')
       const mx = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
-      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${mx}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\tPendiente\n`
+      const cobro = g.fechaCobro || 'Pendiente'
+      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${mx}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
       const p  = g.montoPropina > 0
-        ? `\t${g.proveedor} - PROPINA\t\t${mx}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\tPendiente\n`
+        ? `\t${g.proveedor} - PROPINA\t\t${mx}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
         : ''
       return [r, p]
     })
@@ -645,9 +667,10 @@ export default function App() {
       const f   = g.fechaFac.split('-')
       const mx  = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
       const fa  = f.length === 3 ? `${f[1]}-${f[2]}-${f[0].slice(-2)}` : g.fechaFac.replace(/\//g, '-')
-      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${mx},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},Pendiente\n`
+      const cobro = g.fechaCobro || 'Pendiente'
+      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${mx},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},${cobro}\n`
       if (g.montoPropina > 0)
-        csv += `,${g.proveedor} - PROPINA,,${mx},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},Pendiente\n`
+        csv += `,${g.proveedor} - PROPINA,,${mx},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},${cobro}\n`
 
       if (g.xmlFile) {
         const titleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase())
@@ -690,7 +713,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.7</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.8</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
