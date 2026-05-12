@@ -214,12 +214,26 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     conceptoClasif  = 'Combustible'
   }
 
-  // Buscar PDF asociado (por nombre base o UUID)
-  const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
-  const pdfFile = pdfFiles.find(f =>
-    f.name.replace(/\.pdf$/i, '').toLowerCase() === base ||
-    (uuid && f.name.toUpperCase().includes(uuid.toUpperCase()))
-  ) || null
+  // Buscar PDF asociado — 3 estrategias en orden:
+  //   1. Coincidencia exacta de nombre base
+  //   2. UUID dentro del nombre del PDF
+  //   3. Coincidencia "fuzzy": tras normalizar (lowercase + solo alfanuméricos),
+  //      uno contiene al otro, o comparten los primeros 15 caracteres.
+  const base    = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
+  const norm    = s => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const xmlNorm = norm(base)
+  const pdfFile = pdfFiles.find(f => {
+    const pdfBase = f.name.replace(/\.pdf$/i, '').toLowerCase()
+    if (pdfBase === base) return true
+    if (uuid && f.name.toUpperCase().includes(uuid.toUpperCase())) return true
+    const pdfNorm = norm(pdfBase)
+    if (xmlNorm.length >= 6 && pdfNorm.length >= 6) {
+      if (xmlNorm.includes(pdfNorm) || pdfNorm.includes(xmlNorm)) return true
+    }
+    if (xmlNorm.length >= 15 && pdfNorm.length >= 15 && xmlNorm.slice(0, 15) === pdfNorm.slice(0, 15)) return true
+    return false
+  }) || null
+  console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
   return {
     id: genId(),
@@ -643,8 +657,13 @@ export default function App() {
   // ── Abrir PDF en nueva pestaña ──
   const openPDF = pdfFile => {
     if (!pdfFile) return
-    const url = URL.createObjectURL(pdfFile)
-    window.open(url, '_blank')
+    try {
+      const url = URL.createObjectURL(pdfFile)
+      const win = window.open(url, '_blank')
+      if (!win) setAlerta('No se pudo abrir el PDF.\n\nVerifica que el navegador permita ventanas emergentes para este sitio.')
+    } catch (err) {
+      setAlerta(`Error al abrir el PDF:\n\n${err && err.message ? err.message : String(err)}`)
+    }
   }
 
   /* ── RENDER ── */
