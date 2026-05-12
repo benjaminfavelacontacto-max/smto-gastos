@@ -12,7 +12,7 @@ const COLUMNS = [
   { key: 'concepto',          label: 'Concepto',    width: 118, sortable: true,  type: 'string' },
   { key: 'importe',           label: 'Subtotal',    width: 88,  sortable: true,  type: 'number' },
   { key: 'iva',               label: 'IVA',         width: 76,  sortable: true,  type: 'number' },
-  { key: 'isrTrasladado',     label: 'ISR/ISH/EPS', width: 110, sortable: true,  type: 'number' },
+  { key: 'isrTrasladado',     label: 'ISR/ISH/IEPS', width: 120, sortable: true,  type: 'number' },
   { key: 'retencionISR',      label: 'Ret. ISR',    width: 84,  sortable: true,  type: 'number' },
   { key: 'retencionIVA',      label: 'Ret. IVA',    width: 84,  sortable: true,  type: 'number' },
   { key: 'retenciones',       label: 'Reten.',      width: 84,  sortable: true,  type: 'number' },
@@ -163,29 +163,18 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   let   isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR from regular Traslados
   const retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
-  const retenciones   = retencionISR + retencionIVA  // local retentions are NOT added — retenciones is strictly from regular <Retencion> elements
+  let   retenciones   = retencionISR + retencionIVA
 
-  // Local-tax complement: ISH (Hospedaje), EPS, and any other local tax live
-  // under <cfdi:Complemento>/<implocal:ImpuestosLocales>, NOT the regular
-  // Impuestos block. ALL local TRASLADOS feed isrTrasladado regardless of
-  // ImpLocTrasladado code. Local RETENCIONES are intentionally ignored.
-  let complemento = null
-  for (const el of doc.getElementsByTagName('*')) {
-    if (el.localName && el.localName.toLowerCase() === 'complemento') { complemento = el; break }
-  }
-  let impLocales = null
-  if (complemento) {
-    for (const el of complemento.getElementsByTagName('*')) {
-      if (el.localName && el.localName.toLowerCase() === 'impuestoslocales') { impLocales = el; break }
-    }
-  }
-  if (impLocales) {
-    for (const el of impLocales.getElementsByTagName('*')) {
-      if (!el.localName) continue
-      if (el.localName.toLowerCase() === 'trasladoslocales') {
-        isrTrasladado += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
-      }
-    }
+  // Local-tax complement (ISH/IEPS/etc) — flat scan, since nested scoped
+  // getElementsByTagName misses implocal:-namespaced descendants in some DOM
+  // implementations. Element name is the only thing we trust. ALL TrasladosLocales
+  // feed isrTrasladado regardless of ImpLocTrasladado code; ALL RetencionesLocales
+  // add to the retenciones total.
+  for (const el of doc.querySelectorAll('*')) {
+    if (!el.localName) continue
+    const ln = el.localName.toLowerCase()
+    if      (ln === 'trasladoslocales')  isrTrasladado += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+    else if (ln === 'retencioneslocales') retenciones  += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
   }
 
   // Buscar PDF asociado (por nombre base o UUID)
