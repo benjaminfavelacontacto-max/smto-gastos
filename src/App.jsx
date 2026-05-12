@@ -12,6 +12,7 @@ const COLUMNS = [
   { key: 'concepto',          label: 'Concepto',    width: 118, sortable: true,  type: 'string' },
   { key: 'importe',           label: 'Subtotal',    width: 88,  sortable: true,  type: 'number' },
   { key: 'iva',               label: 'IVA',         width: 76,  sortable: true,  type: 'number' },
+  { key: 'isrTrasladado',     label: 'ISR',         width: 84,  sortable: true,  type: 'number' },
   { key: 'retencionISR',      label: 'Ret. ISR',    width: 84,  sortable: true,  type: 'number' },
   { key: 'retencionIVA',      label: 'Ret. IVA',    width: 84,  sortable: true,  type: 'number' },
   { key: 'retenciones',       label: 'Reten.',      width: 84,  sortable: true,  type: 'number' },
@@ -106,18 +107,24 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
 
-  // Taxes — three independent buckets:
-  //   iva          = IVA trasladado (TotalImpuestosTrasladados; falls back to summing <Traslado> children)
-  //   retencionISR = sum of <Retencion> with TipoImpuesto="001" (ISR retenido)
-  //   retencionIVA = sum of <Retencion> with TipoImpuesto="002" (IVA retenido)
-  //   retenciones  = retencionISR + retencionIVA
+  // Taxes — independent buckets, never cross-pollinated:
+  //   iva           = IVA trasladado: TotalImpuestosTrasladados attr;
+  //                   fallback sums only <Traslado TipoImpuesto="002">
+  //   isrTrasladado = sum of <Traslado TipoImpuesto="001">  (ISR cobrado)
+  //   retencionISR  = sum of <Retencion TipoImpuesto="001"> (ISR retenido)
+  //   retencionIVA  = sum of <Retencion TipoImpuesto="002"> (IVA retenido)
+  //   retenciones   = retencionISR + retencionIVA
   let iva = parseFloat(ga(imp, 'TotalImpuestosTrasladados') || '0') || 0
+  let isrTrasladado = 0
   let retencionISR = 0, retencionIVA = 0
   const needIva = !iva
   for (const el of doc.querySelectorAll('*')) {
     const ln = el.localName.toLowerCase()
-    if (needIva && ln === 'traslado') {
-      iva += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+    if (ln === 'traslado') {
+      const tipo = ga(el, 'TipoImpuesto', 'tipoImpuesto') || ''
+      const importe = parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+      if      (tipo === '001')             isrTrasladado += importe
+      else if (tipo === '002' && needIva)  iva           += importe
     } else if (ln === 'retencion') {
       const tipo = ga(el, 'TipoImpuesto', 'tipoImpuesto') || ''
       const importe = parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
@@ -143,6 +150,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     concepto:   clasificarGasto(proveedor, concepto),
     importe:    parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0,
     iva,
+    isrTrasladado,
     retencionISR,
     retencionIVA,
     retenciones,
@@ -294,6 +302,9 @@ function GastoRow({ g, upd, openPDF }) {
 
       {/* IVA */}
       <td><NumCell field="iva"         prefix="$" /></td>
+
+      {/* ISR trasladado */}
+      <td><NumCell field="isrTrasladado" prefix="$" /></td>
 
       {/* Ret. ISR */}
       <td><NumCell field="retencionISR" prefix="$" /></td>
@@ -491,7 +502,7 @@ export default function App() {
     setLista(prev => [...prev, {
       id: genId(),
       rfc: 'PUBLICO GENERAL', proveedor: 'Escribe aquí...', noFactura: 'Ticket',
-      fechaFac: hoy, concepto: 'Consumo', importe: 0, iva: 0,
+      fechaFac: hoy, concepto: 'Consumo', importe: 0, iva: 0, isrTrasladado: 0,
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, checkManual: false,
@@ -500,13 +511,13 @@ export default function App() {
 
   // ── Copiar a portapapeles (TSV para Excel) ──
   const copiar = () => {
-    const hdr = 'RFC PROVEEDOR\tPROVEEDOR\tNO. DE FACTURA\tFECHA FAC.\tCONCEPTO\tIMPORTE (MXP)\tIVA\tRET. ISR\tRET. IVA\tRET/ ISR IVA\tTOTAL CFDI\tGastos en USD\tTipo de Cambio\tTotal Checking\tFORMA DE PAGO\tFECHA DE COBRO\n'
+    const hdr = 'RFC PROVEEDOR\tPROVEEDOR\tNO. DE FACTURA\tFECHA FAC.\tCONCEPTO\tIMPORTE (MXP)\tIVA\tISR\tRET. ISR\tRET. IVA\tRET/ ISR IVA\tTOTAL CFDI\tGastos en USD\tTipo de Cambio\tTotal Checking\tFORMA DE PAGO\tFECHA DE COBRO\n'
     const rows = lista.flatMap(g => {
       const f  = g.fechaFac.split('-')
       const mx = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
-      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${mx}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\tPendiente\n`
+      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${mx}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\tPendiente\n`
       const p  = g.montoPropina > 0
-        ? `\t${g.proveedor} - PROPINA\t\t${mx}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\tPendiente\n`
+        ? `\t${g.proveedor} - PROPINA\t\t${mx}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\tPendiente\n`
         : ''
       return [r, p]
     })
@@ -519,16 +530,16 @@ export default function App() {
   const exportar = async () => {
     const zip    = new JSZip()
     const folder = zip.folder('Reporte_Gastos')
-    let csv = '\uFEFFRFC PROVEEDOR,PROVEEDOR,NO. DE FACTURA,FECHA FAC.,CONCEPTO,IMPORTE (MXP),IVA,RET. ISR,RET. IVA,RET/ ISR IVA,TOTAL CFDI,Gastos en USD,Tipo de Cambio,Total Checking,FORMA DE PAGO,FECHA DE COBRO\n'
+    let csv = '\uFEFFRFC PROVEEDOR,PROVEEDOR,NO. DE FACTURA,FECHA FAC.,CONCEPTO,IMPORTE (MXP),IVA,ISR,RET. ISR,RET. IVA,RET/ ISR IVA,TOTAL CFDI,Gastos en USD,Tipo de Cambio,Total Checking,FORMA DE PAGO,FECHA DE COBRO\n'
     let r = 0
 
     for (const g of lista) {
       const f   = g.fechaFac.split('-')
       const mx  = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
       const fa  = f.length === 3 ? `${f[1]}-${f[2]}-${f[0].slice(-2)}` : g.fechaFac.replace(/\//g, '-')
-      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${mx},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},Pendiente\n`
+      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${mx},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},Pendiente\n`
       if (g.montoPropina > 0)
-        csv += `,${g.proveedor} - PROPINA,,${mx},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},Pendiente\n`
+        csv += `,${g.proveedor} - PROPINA,,${mx},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},Pendiente\n`
 
       if (g.xmlFile) {
         const titleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase())
