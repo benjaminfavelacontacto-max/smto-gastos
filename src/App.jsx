@@ -438,9 +438,9 @@ export default function App() {
         csv += `,${g.proveedor} - PROPINA,,${mx},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},Pendiente\n`
 
       if (g.xmlFile) {
-        const pf  = g.proveedor.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]/g, '').slice(0, 15)
-        const cf  = g.concepto.split(/\s+/).slice(0, 2).map(p => p.replace(/[^a-zA-Z0-9]/g, '')).filter(Boolean).join('-') || 'Gasto'
-        const nom = `${pf} ${g.noFactura} ${cf} ${fa}`.replace(/\//g, ' ')
+        const titleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase())
+        const pf  = titleCase(g.proveedor.replace(/,/g, ''))
+        const nom = `${pf} ${g.noFactura} ${g.concepto} ${fa}`.replace(/[\/\\:*?"<>|]/g, '')
         folder.file(`${nom}.xml`, await g.xmlFile.arrayBuffer()); r++
         if (g.pdfFile) folder.file(`${nom}.pdf`, await g.pdfFile.arrayBuffer())
       }
