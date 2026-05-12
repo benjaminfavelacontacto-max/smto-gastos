@@ -77,12 +77,11 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     return null
   }
 
-  let comp = null, emisor = null, imp = null, timbre = null, conceptoEl = null
+  let comp = null, emisor = null, timbre = null, conceptoEl = null
   for (const el of doc.querySelectorAll('*')) {
     const ln = el.localName.toLowerCase()
     if (ln === 'comprobante'        && !comp)       comp = el
     if (ln === 'emisor'             && !emisor)     emisor = el
-    if (ln === 'impuestos'          && !imp)        imp = el
     if (ln === 'timbrefiscaldigital'&& !timbre)     timbre = el
     if (ln === 'concepto'           && !conceptoEl) conceptoEl = el
   }
@@ -107,32 +106,48 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
 
-  // Taxes — independent buckets, never cross-pollinated:
-  //   iva           = IVA trasladado: TotalImpuestosTrasladados attr;
-  //                   fallback sums only <Traslado TipoImpuesto="002">
-  //   isrTrasladado = sum of <Traslado TipoImpuesto="001">  (ISR cobrado)
-  //   retencionISR  = sum of <Retencion TipoImpuesto="001"> (ISR retenido)
-  //   retencionIVA  = sum of <Retencion TipoImpuesto="002"> (IVA retenido)
-  //   retenciones   = retencionISR + retencionIVA
-  let iva = parseFloat(ga(imp, 'TotalImpuestosTrasladados') || '0') || 0
-  let isrTrasladado = 0
-  let retencionISR = 0, retencionIVA = 0
-  const needIva = !iva
-  for (const el of doc.querySelectorAll('*')) {
-    const ln = el.localName.toLowerCase()
-    if (ln === 'traslado') {
-      const tipo = ga(el, 'TipoImpuesto', 'tipoImpuesto') || ''
-      const importe = parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
-      if      (tipo === '001')             isrTrasladado += importe
-      else if (tipo === '002' && needIva)  iva           += importe
-    } else if (ln === 'retencion') {
-      const tipo = ga(el, 'TipoImpuesto', 'tipoImpuesto') || ''
-      const importe = parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
-      if      (tipo === '001') retencionISR += importe
-      else if (tipo === '002') retencionIVA += importe
+  // Taxes — CFDI 4.0 has TWO <Impuestos> elements: one per <Concepto> (line-item
+  // totals) and one at the root (overall totals). We MUST read the root one only.
+  // querySelectorAll('*') would match the first per-Concepto node and inflate sums.
+  let rootImp = null
+  for (const node of comp.childNodes) {
+    if (node.nodeType === 1 && node.localName && node.localName.toLowerCase() === 'impuestos') {
+      rootImp = node
+      break
     }
   }
-  const retenciones = retencionISR + retencionIVA
+
+  let iva         = parseFloat(ga(rootImp, 'TotalImpuestosTrasladados', 'totalImpuestosTrasladados') || '0') || 0
+  let retenciones = parseFloat(ga(rootImp, 'TotalImpuestosRetenidos',   'totalImpuestosRetenidos')   || '0') || 0
+  let isrTrasladado = 0
+  let retencionISR  = 0
+  let retencionIVA  = 0
+  const needIva = !iva, needRet = !retenciones
+
+  if (rootImp) {
+    for (const c of rootImp.childNodes) {
+      if (c.nodeType !== 1 || !c.localName) continue
+      const ln = c.localName.toLowerCase()
+      if (ln === 'traslados') {
+        for (const t of c.childNodes) {
+          if (t.nodeType !== 1 || (t.localName || '').toLowerCase() !== 'traslado') continue
+          const tipo    = ga(t, 'TipoImpuesto', 'tipoImpuesto') || ''
+          const importe = parseFloat(ga(t, 'Importe', 'importe') || '0') || 0
+          if      (tipo === '001')             isrTrasladado += importe
+          else if (tipo === '002' && needIva)  iva           += importe
+        }
+      } else if (ln === 'retenciones') {
+        for (const r of c.childNodes) {
+          if (r.nodeType !== 1 || (r.localName || '').toLowerCase() !== 'retencion') continue
+          const tipo    = ga(r, 'TipoImpuesto', 'tipoImpuesto') || ''
+          const importe = parseFloat(ga(r, 'Importe', 'importe') || '0') || 0
+          if      (tipo === '001') retencionISR += importe
+          else if (tipo === '002') retencionIVA += importe
+        }
+      }
+    }
+  }
+  if (needRet) retenciones = retencionISR + retencionIVA
 
   // Buscar PDF asociado (por nombre base o UUID)
   const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
