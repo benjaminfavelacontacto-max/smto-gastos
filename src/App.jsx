@@ -469,7 +469,9 @@ export default function App() {
 
       {/* ─── CABECERA ─── */}
       <div className="header">
-        <div className="header-logo">SM</div>
+        <div className="header-logo">
+          <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
+        </div>
         <div className="header-info">
           <h1 className="header-title">Reporte de Gastos SMTO</h1>
           <div className="header-sub">

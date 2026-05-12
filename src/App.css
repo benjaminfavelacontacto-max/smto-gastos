@@ -52,14 +52,9 @@ body {
 }
 
 .header-logo {
-  width: 54px; height: 54px;
-  border-radius: 15px;
-  background: linear-gradient(150deg, #1a8fff 0%, #005fd4 100%);
-  color: #fff;
-  font-size: 17px; font-weight: 900;
-  letter-spacing: -0.5px;
+  height: 54px;
+  background: transparent;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 16px rgba(0, 95, 212, 0.38);
   flex-shrink: 0;
   user-select: none;
 }
