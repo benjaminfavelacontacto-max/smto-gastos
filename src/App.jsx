@@ -12,7 +12,7 @@ const COLUMNS = [
   { key: 'concepto',          label: 'Concepto',    width: 118, sortable: true,  type: 'string' },
   { key: 'importe',           label: 'Subtotal',    width: 88,  sortable: true,  type: 'number' },
   { key: 'iva',               label: 'IVA',         width: 76,  sortable: true,  type: 'number' },
-  { key: 'isrTrasladado',     label: 'ISR',         width: 84,  sortable: true,  type: 'number' },
+  { key: 'isrTrasladado',     label: 'ISR/ISH/EPS', width: 110, sortable: true,  type: 'number' },
   { key: 'retencionISR',      label: 'Ret. ISR',    width: 84,  sortable: true,  type: 'number' },
   { key: 'retencionIVA',      label: 'Ret. IVA',    width: 84,  sortable: true,  type: 'number' },
   { key: 'retenciones',       label: 'Reten.',      width: 84,  sortable: true,  type: 'number' },
@@ -160,11 +160,33 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   // The parent container determines the bucket — Traslado nodes can only feed
   // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
   const iva           = sumByTipo(trasladosBox,   'traslado',  '002')
-  // ISR/ISH bucket — every non-IVA traslado (001 ISR, 003 ISH, anything else)
-  const isrTrasladado = sumByTipo(trasladosBox,   'traslado',  t => t !== '002')
+  let   isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR from regular Traslados
   const retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
-  const retenciones   = retencionISR + retencionIVA
+  const retenciones   = retencionISR + retencionIVA  // local retentions are NOT added — retenciones is strictly from regular <Retencion> elements
+
+  // Local-tax complement: ISH (Hospedaje), EPS, and any other local tax live
+  // under <cfdi:Complemento>/<implocal:ImpuestosLocales>, NOT the regular
+  // Impuestos block. ALL local TRASLADOS feed isrTrasladado regardless of
+  // ImpLocTrasladado code. Local RETENCIONES are intentionally ignored.
+  let complemento = null
+  for (const el of doc.getElementsByTagName('*')) {
+    if (el.localName && el.localName.toLowerCase() === 'complemento') { complemento = el; break }
+  }
+  let impLocales = null
+  if (complemento) {
+    for (const el of complemento.getElementsByTagName('*')) {
+      if (el.localName && el.localName.toLowerCase() === 'impuestoslocales') { impLocales = el; break }
+    }
+  }
+  if (impLocales) {
+    for (const el of impLocales.getElementsByTagName('*')) {
+      if (!el.localName) continue
+      if (el.localName.toLowerCase() === 'trasladoslocales') {
+        isrTrasladado += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+      }
+    }
+  }
 
   // Buscar PDF asociado (por nombre base o UUID)
   const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
