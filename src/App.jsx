@@ -117,7 +117,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     }
   }
 
-  // Find a direct child element of `parent` by case-insensitive localName.
+  // Helpers — case-insensitive, namespace-agnostic, no-throw on missing nodes.
   const findChild = (parent, name) => {
     if (!parent) return null
     for (const c of parent.childNodes) {
@@ -125,33 +125,24 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     }
     return null
   }
-  // Read tax-code attr — CFDI 4.0 names it "Impuesto" on Traslado/Retencion,
-  // some writeups say "TipoImpuesto". Accept both, in both casings.
-  const readTipo = el => (ga(el, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
+  // CFDI 4.0 names the tax-code attr "Impuesto" on Traslado/Retencion; some
+  // spec writeups say "TipoImpuesto". Accept all four spellings.
+  const readTipo    = el => (ga(el, 'TipoImpuesto', 'tipoImpuesto', 'Impuesto', 'impuesto') || '').trim()
   const readImporte = el => parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
-
-  let iva = 0
-  let isrTrasladado = 0
-  let retencionISR  = 0
-  let retencionIVA  = 0
-
-  // TRASLADOS — only <Traslado> children of root <Impuestos>/<Traslados>.
-  // A Traslado(001) is ISR trasladado — it goes to isrTrasladado, NEVER retencionISR.
-  // A Traslado(002) is IVA trasladado — it goes to iva,           NEVER retencionIVA.
-  const trasladosBox = findChild(rootImp, 'traslados')
-  if (trasladosBox) {
-    for (const t of trasladosBox.childNodes) {
-      if (t.nodeType !== 1 || !t.localName || t.localName.toLowerCase() !== 'traslado') continue
-      const tipo = readTipo(t), importe = readImporte(t)
-      if      (tipo === '002') iva           += importe
-      else if (tipo === '001') isrTrasladado += importe
+  const sumByTipo = (container, childTag, tipoCode) => {
+    if (!container) return 0
+    let total = 0
+    for (const el of container.childNodes) {
+      if (el.nodeType !== 1 || !el.localName || el.localName.toLowerCase() !== childTag) continue
+      if (readTipo(el) === tipoCode) total += readImporte(el)
     }
+    return total
   }
 
-  // RETENCIONES — only <Retencion> children of root <Impuestos>/<Retenciones>.
-  // A Retencion(001) is ISR retenido — it goes to retencionISR, NEVER isrTrasladado.
-  // A Retencion(002) is IVA retenido — it goes to retencionIVA, NEVER iva.
+  const trasladosBox   = findChild(rootImp, 'traslados')
   const retencionesBox = findChild(rootImp, 'retenciones')
+
+  // Per-invoice Retencion log for in-browser verification.
   const retEls = []
   if (retencionesBox) {
     for (const r of retencionesBox.childNodes) {
@@ -160,13 +151,16 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   }
   console.log('[parseCFDI]', xmlFile.name, '— Retencion elements found:', retEls.length)
   for (const r of retEls) {
-    const tipo = readTipo(r), importe = readImporte(r)
-    console.log('[parseCFDI]   Retencion tipo=', tipo, 'importe=', importe)
-    if      (tipo === '001') retencionISR += importe
-    else if (tipo === '002') retencionIVA += importe
+    console.log('[parseCFDI]   Retencion tipo=', readTipo(r), 'importe=', readImporte(r))
   }
 
-  const retenciones = retencionISR + retencionIVA
+  // The parent container determines the bucket — Traslado nodes can only feed
+  // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
+  const iva           = sumByTipo(trasladosBox,   'traslado',  '002')
+  const isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')
+  const retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
+  const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
+  const retenciones   = retencionISR + retencionIVA
 
   // Buscar PDF asociado (por nombre base o UUID)
   const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
