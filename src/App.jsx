@@ -5,7 +5,7 @@ import JSZip from 'jszip'
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
 const COLUMNS = [
   { key: 'check',             label: '',            width: 30,  sortable: false },
-  { key: 'status',            label: 'Estado',      width: 68,  sortable: false },
+  { key: 'status',            label: 'Estado',      width: 96,  sortable: false },
   { key: 'fechaFac',          label: 'Fecha',       width: 92,  sortable: true,  type: 'date'   },
   { key: 'noFactura',         label: 'Factura',     width: 104, sortable: true,  type: 'string' },
   { key: 'proveedor',         label: 'Proveedor',   width: 155, sortable: true,  type: 'string' },
@@ -265,25 +265,12 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
    COMPONENTE: BOTÓN PREMIUM
 ═══════════════════════════════════════════════════ */
 
-function PremiumButton({ title, icon, color, isSecondary = false, isDisabled = false, onClick }) {
-  const [hov, setHov] = useState(false)
-
-  const solidStyle = (!isSecondary && !isDisabled) ? {
-    background: color,
-    transform: hov ? 'scale(1.035)' : 'scale(1)',
-    boxShadow: hov
-      ? `0 5px 18px ${color}80`
-      : `0 2px 8px  ${color}55`,
-  } : {}
-
+function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, onClick }) {
   return (
     <button
-      className={`btn-premium${isSecondary ? ' secondary' : ''}${isDisabled ? ' disabled' : ''}`}
-      style={solidStyle}
+      className={`btn-premium ${variant}${isDisabled ? ' disabled' : ''}`}
       onClick={isDisabled ? undefined : onClick}
       disabled={isDisabled}
-      onMouseEnter={() => !isDisabled && setHov(true)}
-      onMouseLeave={() => setHov(false)}
     >
       <span className="btn-icon">{icon}</span>
       {title}
@@ -336,31 +323,23 @@ function GastoRow({ g, upd, openPDF }) {
         />
       </td>
 
-      {/* Estado: PDF + Banco */}
+      {/* Estado: PDF + Banco — pill badges */}
       <td className="td-status">
         <div className="status-row">
           <button
-            className={`dot${g.tienePDF ? ' dot-pdf' : ' dot-empty'}`}
+            className={`pill ${g.tienePDF ? 'pill-green' : 'pill-muted'}`}
             onClick={g.tienePDF ? () => openPDF(g.pdfFile) : undefined}
             disabled={!g.tienePDF}
             title={g.tienePDF ? 'Clic para abrir el PDF' : 'Sin PDF'}
           >
-            {g.tienePDF ? (
-              <svg width="11" height="13" viewBox="0 0 11 13" fill="none"><path d="M1 1h6l3 3v8H1V1z" stroke="white" strokeWidth="1.4" strokeLinejoin="round"/><path d="M7 1v3h3" stroke="white" strokeWidth="1.4"/></svg>
-            ) : (
-              <svg width="11" height="13" viewBox="0 0 11 13" fill="none"><path d="M1 1h6l3 3v8H1V1z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/><path d="M7 1v3h3" stroke="currentColor" strokeWidth="1.4"/></svg>
-            )}
+            PDF
           </button>
-          <div
-            className={`dot${g.hizoMatch ? ' dot-match' : ' dot-empty'}`}
+          <span
+            className={`pill ${g.hizoMatch ? 'pill-blue' : 'pill-dim'}`}
             title={g.hizoMatch ? 'Conciliado con el Banco' : 'Pendiente en Banco'}
           >
-            {g.hizoMatch ? (
-              <svg width="11" height="9" viewBox="0 0 11 9" fill="none"><path d="M1 4.5L4 7.5L10 1" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            ) : (
-              <svg width="12" height="11" viewBox="0 0 12 11" fill="none"><rect x="1" y="3" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M3 3V2a3 3 0 016 0v1" stroke="currentColor" strokeWidth="1.3"/></svg>
-            )}
-          </div>
+            {g.hizoMatch ? '✓ OK' : '·'}
+          </span>
         </div>
       </td>
 
@@ -444,6 +423,18 @@ export default function App() {
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
+
+  // ── Métricas (cards en el encabezado de la tabla) ──
+  const metrics = useMemo(() => {
+    const sum = field => lista.reduce((s, g) => s + (g[field] || 0), 0)
+    return {
+      totalFacturado:   sum('totalCFDI'),
+      ivaTotal:         sum('iva'),
+      retencionesTotal: sum('retenciones'),
+      count:            lista.length,
+    }
+  }, [lista])
+  const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
   // ── Sort ──
   const sortedLista = useMemo(() => {
@@ -676,7 +667,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.3</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.4</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -696,13 +687,33 @@ export default function App() {
       {/* ─── BARRA DE ACCIONES ─── */}
       <div className="action-bar">
         <div className="action-group">
-          <PremiumButton title="Manual"        icon="＋" isSecondary onClick={agregarManual} />
-          <PremiumButton title="Cargar Carpeta" icon="📂" color="#007AFF" onClick={() => folderRef.current?.click()} />
-          <PremiumButton title="Validar Banco"  icon="🏦" color="#5856D6" onClick={() => bancoRef.current?.click()} />
+          <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
+          <PremiumButton title="Cargar Carpeta" icon="📂" variant="primary"   onClick={() => folderRef.current?.click()} />
+          <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
         </div>
         <div className="action-group">
-          <PremiumButton title="Copiar a Excel" icon="📋" color="#FF9500" isDisabled={!lista.length} onClick={copiar} />
-          <PremiumButton title="Exportar a ZIP" icon="📦" color="#34C759" isDisabled={!lista.length} onClick={exportar} />
+          <PremiumButton title="Copiar a Excel" icon="📋" variant="copy"   isDisabled={!lista.length} onClick={copiar} />
+          <PremiumButton title="Exportar a ZIP" icon="📦" variant="export" isDisabled={!lista.length} onClick={exportar} />
+        </div>
+      </div>
+
+      {/* ─── BARRA DE MÉTRICAS ─── */}
+      <div className="metrics-bar">
+        <div className="metric-card" style={{ '--accent': '#0A84FF' }}>
+          <div className="metric-label">Total Facturado</div>
+          <div className="metric-value">{fmtMoney(metrics.totalFacturado)}</div>
+        </div>
+        <div className="metric-card" style={{ '--accent': '#BF5AF2' }}>
+          <div className="metric-label">IVA Total</div>
+          <div className="metric-value">{fmtMoney(metrics.ivaTotal)}</div>
+        </div>
+        <div className="metric-card" style={{ '--accent': '#FF9500' }}>
+          <div className="metric-label">Retenciones</div>
+          <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
+        </div>
+        <div className="metric-card" style={{ '--accent': '#30D158' }}>
+          <div className="metric-label">Registros</div>
+          <div className="metric-value">{metrics.count}</div>
         </div>
       </div>
 
@@ -734,7 +745,7 @@ export default function App() {
                 <path d="M4 12A4 4 0 018 8h14l6 6h26a4 4 0 014 4v28a4 4 0 01-4 4H8a4 4 0 01-4-4V12z" stroke="#1c1c1e" strokeWidth="3" fill="none"/>
               </svg>
             </div>
-            <div className="empty-title">Sin registros</div>
+            <div className="empty-title">Sin facturas cargadas</div>
             <div className="empty-sub">Haz clic en "Cargar Carpeta" para importar tus facturas XML</div>
           </div>
         ) : (
