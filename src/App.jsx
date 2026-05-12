@@ -68,6 +68,10 @@ function parseCSVLine(line, sep) {
 }
 
 function parseCFDI(xmlText, xmlFile, pdfFiles) {
+  // RFCs whose <Retencion Impuesto="001"> is actually an ISR trasladado
+  // (their PDFs label it as a line-item tax, not a withholding).
+  const RFC_ISR_COMO_TRASLADO = ['AUEJ040528DNA']
+
   let doc
   try { doc = new DOMParser().parseFromString(xmlText, 'text/xml') } catch { return null }
 
@@ -161,9 +165,17 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
   const iva           = sumByTipo(trasladosBox,   'traslado',  '002')
   let   isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR from regular Traslados
-  const retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
+  let   retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
   let   retenciones   = retencionISR + retencionIVA
+
+  // Per-RFC override: some providers' <Retencion Impuesto="001"> is actually
+  // a trasladado ISR (the invoice line-item tax), not a withholding.
+  if (RFC_ISR_COMO_TRASLADO.includes(rfc)) {
+    isrTrasladado += retencionISR
+    retencionISR   = 0
+    retenciones    = retencionIVA
+  }
 
   // Local-tax complement (ISH/IEPS/etc) — flat scan, since nested scoped
   // getElementsByTagName misses implocal:-namespaced descendants in some DOM
@@ -620,7 +632,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.1</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.2</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
