@@ -805,13 +805,25 @@ export default function App() {
   }
 
   // ── Exportar a Excel usando el TEMPLATE.xls oficial ──
-  // The template lives in /public/TEMPLATE.xls. Rows 0–3 are title/labels,
-  // row 4 is the header (16 cols, A–P). Data goes from row 5 down.
+  // /public/TEMPLATE.xls: rows 0–3 banner, row 4 header, rows 5–21 templated
+  // data rows (each may have its own row styling), rows 22–23 totals.
+  //
+  // IMPORTANT: community SheetJS preserves !merges, !cols, !rows on .xls
+  // roundtrip but STRIPS cell-level styles (color/font/border) at write time.
+  // Copying `s` cell-by-cell is harmless but won't fully roundtrip until the
+  // app is on SheetJS Pro (paid) or moves to .xlsx + ExcelJS.
   const exportarExcel = async () => {
     try {
       const response = await fetch('/TEMPLATE.xls')
       const arrayBuffer = await response.arrayBuffer()
-      const wb = XLSX.read(arrayBuffer, { type: 'array', cellStyles: true })
+      const wb = XLSX.read(arrayBuffer, {
+        type: 'array',
+        cellStyles: true,
+        cellNF: true,
+        cellFormula: true,
+        bookSST: true,
+        WTF: false,
+      })
       const sheetName = wb.SheetNames[0]
       const ws = wb.Sheets[sheetName]
       console.log('[exportarExcel] Sheet names found:', wb.SheetNames)
@@ -821,13 +833,25 @@ export default function App() {
         return
       }
 
+      const DATA_START = 5     // first 0-indexed data row
+      const DATA_END   = 21    // last templated 0-indexed data row (inclusive)
+      const NUM_COLS   = 16    // A..P
+
+      // For row `r`, copy the style from row `r` of the template if it sits
+      // inside the templated range; otherwise fall back to the first data row.
+      const styleAt = (templateRow, c) => {
+        const ref = XLSX.utils.encode_cell({ r: templateRow, c })
+        return ws[ref]?.s
+      }
       const setCell = (r, c, value) => {
         const ref = XLSX.utils.encode_cell({ r, c })
         const t = typeof value === 'number' ? 'n' : 's'
-        ws[ref] = { v: value, t }
+        const src = r <= DATA_END ? r : DATA_START
+        const s = styleAt(src, c)
+        ws[ref] = s ? { v: value, t, s } : { v: value, t }
       }
 
-      let rowIndex = 5
+      let rowIndex = DATA_START
       for (const g of lista) {
         const f = g.fechaFac.split('-')
         const fechaMX = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
@@ -867,8 +891,22 @@ export default function App() {
         }
       }
 
-      ws['!ref'] = `A1:P${rowIndex}`
-      XLSX.writeFile(wb, 'Reporte_Gastos_SMTO.xls')
+      // Preserve the template's original range (which covers the totals row at
+      // 22–23) unless our data overflowed past it.
+      const origRange = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null
+      const origEndRow = origRange ? origRange.e.r : 0
+      const newEndRow = Math.max(rowIndex - 1, origEndRow)
+      ws['!ref'] = XLSX.utils.encode_range({
+        s: { r: 0, c: 0 },
+        e: { r: newEndRow, c: NUM_COLS - 1 },
+      })
+
+      XLSX.writeFile(wb, 'Reporte_Gastos_SMTO.xls', {
+        bookType: 'xls',
+        type: 'binary',
+        cellStyles: true,
+        bookSST: true,
+      })
       setAlerta('¡Excel generado! 📊\n\nReporte_Gastos_SMTO.xls descargado con todos los datos en el template oficial.')
     } catch (err) {
       setAlerta(`Error al generar Excel:\n\n${err && err.message ? err.message : String(err)}`)
@@ -897,7 +935,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.7</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v2.9</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
