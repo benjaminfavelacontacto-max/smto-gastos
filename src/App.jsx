@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo } from 'react'
 import JSZip from 'jszip'
-import * as XLSX from 'xlsx'
 
 /* Single source of truth for table columns.
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
@@ -804,129 +803,31 @@ export default function App() {
     setAlerta(`¡Éxito Total! 📦\n\nSe ha generado el archivo ZIP con tu CSV y ${r} facturas (PDF y XML) correctamente renombradas.\n\nNota: Tus archivos originales siguen intactos.`)
   }
 
-  // ── Exportar a Excel usando el TEMPLATE.xls oficial ──
-  // /public/TEMPLATE.xls: rows 0–3 banner, row 4 header, rows 5–21 templated
-  // data rows (each may have its own row styling), rows 22–23 totals.
-  //
-  // IMPORTANT: community SheetJS preserves !merges, !cols, !rows on .xls
-  // roundtrip but STRIPS cell-level styles (color/font/border) at write time.
-  // Copying `s` cell-by-cell is harmless but won't fully roundtrip until the
-  // app is on SheetJS Pro (paid) or moves to .xlsx + ExcelJS.
+  // ── Exportar a Excel ──
+  // Defers to /api/export-excel (Python serverless function on Vercel) so the
+  // .xls file gets full template formatting via xlrd + xlutils + xlwt —
+  // something community SheetJS can't preserve in the browser.
   const exportarExcel = async () => {
+    if (!lista.length) return
     try {
-      const response = await fetch('/TEMPLATE.xls')
-      if (!response.ok) {
-        setAlerta('Error: No se pudo cargar el template Excel.\n\nVerifica que el archivo TEMPLATE.xls esté en la carpeta public/ del proyecto.')
-        return
-      }
-      const arrayBuffer = await response.arrayBuffer()
-
-      // Guard against the 404-HTML-as-XLS trap: Vercel returns an HTML 404
-      // page (which begins with "<!DOCTYPE..." → 0x3C 0x21) if the asset
-      // didn't deploy. A real BIFF8 .xls starts with the OLE2 magic
-      // D0 CF 11 E0. Without this check SheetJS chokes on the HTML and
-      // produces a confusing parse error.
-      const header = new Uint8Array(arrayBuffer.slice(0, 4))
-      const isValidXLS = header[0] === 0xD0 && header[1] === 0xCF && header[2] === 0x11 && header[3] === 0xE0
-      if (!isValidXLS) {
-        setAlerta('Error: El archivo TEMPLATE.xls no es válido o no se encontró en el servidor.\n\nAsegúrate de que el template esté en la carpeta public/ y haya sido desplegado.')
-        return
-      }
-
-      const wb = XLSX.read(arrayBuffer, {
-        type: 'array',
-        cellStyles: true,
-        cellNF: true,
-        cellFormula: true,
-        bookSST: true,
-        WTF: false,
+      setAlerta(null)
+      const response = await fetch('/api/export-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lista),
       })
-      const sheetName = wb.SheetNames[0]
-      const ws = wb.Sheets[sheetName]
-      console.log('[exportarExcel] Sheet names found:', wb.SheetNames)
-      console.log('[exportarExcel] Using sheet:', sheetName)
-      if (!ws) {
-        setAlerta('Error: No se pudo leer el template Excel.')
-        return
-      }
-
-      const DATA_START = 5     // first 0-indexed data row
-      const DATA_END   = 21    // last templated 0-indexed data row (inclusive)
-      const NUM_COLS   = 16    // A..P
-
-      // For row `r`, copy the style from row `r` of the template if it sits
-      // inside the templated range; otherwise fall back to the first data row.
-      const styleAt = (templateRow, c) => {
-        const ref = XLSX.utils.encode_cell({ r: templateRow, c })
-        return ws[ref]?.s
-      }
-      const setCell = (r, c, value) => {
-        const ref = XLSX.utils.encode_cell({ r, c })
-        const t = typeof value === 'number' ? 'n' : 's'
-        const src = r <= DATA_END ? r : DATA_START
-        const s = styleAt(src, c)
-        ws[ref] = s ? { v: value, t, s } : { v: value, t }
-      }
-
-      let rowIndex = DATA_START
-      for (const g of lista) {
-        const f = g.fechaFac.split('-')
-        const fechaMX = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
-        const cobro = g.fechaCobro || 'Pendiente'
-
-        setCell(rowIndex, 0,  g.rfc)
-        setCell(rowIndex, 1,  g.proveedor)
-        setCell(rowIndex, 2,  g.noFactura)
-        setCell(rowIndex, 3,  fechaMX)
-        setCell(rowIndex, 4,  g.concepto)
-        setCell(rowIndex, 5,  g.importe || 0)
-        setCell(rowIndex, 6,  g.iva || 0)
-        setCell(rowIndex, 7,  g.retenciones || 0)
-        setCell(rowIndex, 8,  g.totalCFDI || 0)
-        setCell(rowIndex, 9,  g.formaPago || '')
-        setCell(rowIndex, 10, cobro)
-        setCell(rowIndex, 11, '')
-        setCell(rowIndex, 12, '')
-        setCell(rowIndex, 13, '')
-        setCell(rowIndex, 14, '')
-        setCell(rowIndex, 15, '')
-        rowIndex++
-
-        if (g.montoPropina > 0) {
-          setCell(rowIndex, 0,  '')
-          setCell(rowIndex, 1,  `${g.proveedor} - PROPINA`)
-          setCell(rowIndex, 2,  '')
-          setCell(rowIndex, 3,  fechaMX)
-          setCell(rowIndex, 4,  'PROPINA')
-          setCell(rowIndex, 5,  g.montoPropina)
-          setCell(rowIndex, 6,  0)
-          setCell(rowIndex, 7,  0)
-          setCell(rowIndex, 8,  g.montoPropina)
-          setCell(rowIndex, 9,  g.formaPago || '')
-          setCell(rowIndex, 10, cobro)
-          rowIndex++
-        }
-      }
-
-      // Preserve the template's original range (which covers the totals row at
-      // 22–23) unless our data overflowed past it.
-      const origRange = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null
-      const origEndRow = origRange ? origRange.e.r : 0
-      const newEndRow = Math.max(rowIndex - 1, origEndRow)
-      ws['!ref'] = XLSX.utils.encode_range({
-        s: { r: 0, c: 0 },
-        e: { r: newEndRow, c: NUM_COLS - 1 },
+      if (!response.ok) throw new Error('API error: ' + response.status)
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const a = Object.assign(document.createElement('a'), {
+        href: url,
+        download: 'Reporte_Gastos_SMTO.xls',
       })
-
-      XLSX.writeFile(wb, 'Reporte_Gastos_SMTO.xls', {
-        bookType: 'xls',
-        type: 'binary',
-        cellStyles: true,
-        bookSST: true,
-      })
-      setAlerta('¡Excel generado! 📊\n\nReporte_Gastos_SMTO.xls descargado con todos los datos en el template oficial.')
+      a.click()
+      URL.revokeObjectURL(url)
+      setAlerta('¡Excel generado correctamente! 📊\n\nReporte_Gastos_SMTO.xls descargado con todos los datos en el formato oficial SMTO.')
     } catch (err) {
-      setAlerta(`Error al generar Excel:\n\n${err && err.message ? err.message : String(err)}`)
+      setAlerta('Error al generar Excel: ' + err.message)
     }
   }
 
