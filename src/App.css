@@ -448,39 +448,147 @@ tr:hover .ext-btn { opacity: 1; }
 .total-val.is-blue { color: #0A84FF; }
 
 /* ═══════════════════════════════════════════
-   EMPTY / LOADING STATES
+   LOADING STATE
 ═══════════════════════════════════════════ */
-.center-msg {
+.loading-msg {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  height: 100%; gap: 14px;
-  text-align: center; padding: 60px;
+  height: 100%; gap: 16px;
   user-select: none;
-  color: rgba(255, 255, 255, 0.3);
 }
-.empty-icon { opacity: 1; }
-.empty-icon svg path { stroke: rgba(255, 255, 255, 0.3); }
-.empty-title {
-  font-family: 'Inter', sans-serif;
-  font-size: 16px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.4);
-}
-.empty-sub {
-  font-size: 13px;
-  max-width: 320px; line-height: 1.5;
-  color: rgba(255, 255, 255, 0.25);
-}
-
-.spinner {
-  width: 28px; height: 28px;
-  border: 2.5px solid rgba(255, 255, 255, 0.08);
-  border-top-color: var(--blue);
+.loading-spinner {
+  width: 40px; height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.08);
+  border-top-color: #0A84FF;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+.loading-text {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.4);
+}
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ═══════════════════════════════════════════
+   ONBOARDING / EMPTY STATE
+═══════════════════════════════════════════ */
+.onboarding {
+  position: relative;
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 40px;
+  user-select: none;
+  overflow: hidden;
+}
+
+.onboarding-glow {
+  position: absolute;
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(10, 132, 255, 0.06) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.onboarding-card {
+  position: relative;
+  z-index: 1;
+  width: 480px; max-width: 90%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  padding: 56px 48px;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.4),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  text-align: center;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.onboarding.is-dragging .onboarding-card {
+  border-color: rgba(10, 132, 255, 0.4);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.4),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06),
+              0 0 0 4px rgba(10, 132, 255, 0.15);
+}
+
+.onboarding-icon {
+  width: 80px; height: 80px;
+  margin: 0 auto 32px;
+  background: rgba(10, 132, 255, 0.1);
+  border: 1px solid rgba(10, 132, 255, 0.2);
+  border-radius: 24px;
+  display: flex; align-items: center; justify-content: center;
+  color: #0A84FF;
+  transition: transform 0.3s ease;
+}
+.onboarding.is-dragging .onboarding-icon {
+  animation: onboarding-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes onboarding-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.08); }
+}
+
+.onboarding-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+  margin-bottom: 12px;
+  letter-spacing: -0.3px;
+}
+
+.onboarding-sub {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.35);
+  line-height: 1.6;
+  margin-bottom: 36px;
+  transition: color 0.2s ease;
+}
+.onboarding.is-dragging .onboarding-sub {
+  color: rgba(10, 132, 255, 0.8);
+}
+
+.onboarding-cta {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 44px;
+  padding: 0 28px;
+  background: #0A84FF;
+  color: #fff;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px; font-weight: 600;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(10, 132, 255, 0.3);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.onboarding-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(10, 132, 255, 0.4);
+}
+
+.onboarding-hint {
+  margin-top: 20px;
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+/* ═══════════════════════════════════════════
+   ROW FADE-IN
+═══════════════════════════════════════════ */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+tbody { animation: fadeInUp 0.4s ease forwards; }
 
 /* ═══════════════════════════════════════════
    MODAL

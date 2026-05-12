@@ -416,6 +416,7 @@ export default function App() {
   const [carpetaNombre, setCarpetaNombre] = useState('Ninguna carpeta seleccionada')
   const [alerta,        setAlerta]        = useState(null)
   const [loading,       setLoading]       = useState(false)
+  const [isDragging,    setIsDragging]    = useState(false)
   const [colWidths,     setColWidths]     = useState(() =>
     Object.fromEntries(COLUMNS.map(c => [c.key, c.width]))
   )
@@ -486,13 +487,12 @@ export default function App() {
     }))
 
   // ── Cargar carpeta (XMLs + PDFs) ──
-  const cargar = async e => {
-    const files = Array.from(e.target.files)
+  // Shared file-processing pipeline — used by folder picker and drag/drop.
+  const processFiles = async (files, folderName) => {
     if (!files.length) return
     const xmls = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
     const pdfs = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
-    const folder = files[0]?.webkitRelativePath?.split('/')[0] || 'Carpeta'
-    setCarpetaNombre(folder)
+    setCarpetaNombre(folderName)
     setLoading(true)
     const nueva = []
     for (const f of xmls) {
@@ -504,7 +504,21 @@ export default function App() {
     }
     setLista(nueva)
     setLoading(false)
+  }
+
+  const cargar = async e => {
+    const files = Array.from(e.target.files)
+    const folder = files[0]?.webkitRelativePath?.split('/')[0] || 'Carpeta'
+    await processFiles(files, folder)
     e.target.value = ''
+  }
+
+  const onDropFiles = async e => {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    const folder = files[0]?.webkitRelativePath?.split('/')[0] || 'Archivos arrastrados'
+    await processFiles(files, folder)
   }
 
   // ── Validar estado de cuenta bancario ──
@@ -667,7 +681,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.6</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v1.7</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -734,19 +748,43 @@ export default function App() {
       {/* ─── TABLA ─── */}
       <div className="table-wrap">
         {loading ? (
-          <div className="center-msg">
-            <div className="spinner" />
-            <div>Procesando archivos XML…</div>
+          <div className="loading-msg">
+            <div className="loading-spinner" />
+            <div className="loading-text">Procesando facturas XML…</div>
           </div>
         ) : lista.length === 0 ? (
-          <div className="center-msg">
-            <div className="empty-icon">
-              <svg width="64" height="56" viewBox="0 0 64 56" fill="none" opacity=".3">
-                <path d="M4 12A4 4 0 018 8h14l6 6h26a4 4 0 014 4v28a4 4 0 01-4 4H8a4 4 0 01-4-4V12z" stroke="#1c1c1e" strokeWidth="3" fill="none"/>
-              </svg>
+          <div
+            className={`onboarding ${isDragging ? 'is-dragging' : ''}`}
+            onDragOver={e => { e.preventDefault(); if (!isDragging) setIsDragging(true) }}
+            onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragging(false) }}
+            onDrop={onDropFiles}
+          >
+            <div className="onboarding-glow" />
+            <div className="onboarding-card">
+              <div className="onboarding-icon">
+                {isDragging ? (
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                ) : (
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                )}
+              </div>
+              <div className="onboarding-title">Carga tus facturas XML</div>
+              <div className="onboarding-sub">
+                {isDragging
+                  ? 'Suelta aquí tus archivos'
+                  : 'Arrastra una carpeta o selecciónala para comenzar'}
+              </div>
+              <button className="onboarding-cta" onClick={() => folderRef.current?.click()}>
+                Cargar Carpeta
+              </button>
+              <div className="onboarding-hint">Compatible con CFDI 3.3 y 4.0 · XML + PDF</div>
             </div>
-            <div className="empty-title">Sin facturas cargadas</div>
-            <div className="empty-sub">Haz clic en "Cargar Carpeta" para importar tus facturas XML</div>
           </div>
         ) : (
           <table>
