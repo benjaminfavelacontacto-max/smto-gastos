@@ -816,7 +816,15 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(lista),
       })
-      if (!response.ok) throw new Error('API error: ' + response.status)
+      if (!response.ok) {
+        try {
+          const errData = await response.json()
+          setAlerta('Error al generar Excel:\n\n' + (errData.error || response.status) + '\n\n' + (errData.trace || '').slice(0, 300))
+        } catch {
+          setAlerta('Error al generar Excel: API error ' + response.status)
+        }
+        return
+      }
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
       const a = Object.assign(document.createElement('a'), {
