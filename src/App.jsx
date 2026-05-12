@@ -104,6 +104,17 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
 
+  // Retenciones: prefer TotalImpuestosRetenidos; fall back to summing
+  // individual <Retencion Importe="..."/> children (ISR + IVA retenido).
+  let retenciones = parseFloat(ga(imp, 'TotalImpuestosRetenidos') || '0') || 0
+  if (!retenciones) {
+    for (const el of doc.querySelectorAll('*')) {
+      if (el.localName.toLowerCase() === 'retencion') {
+        retenciones += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+      }
+    }
+  }
+
   // Buscar PDF asociado (por nombre base o UUID)
   const base = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
   const pdfFile = pdfFiles.find(f =>
@@ -120,7 +131,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     concepto:   clasificarGasto(proveedor, concepto),
     importe:    parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0,
     iva:        parseFloat(ga(imp,  'TotalImpuestosTrasladados') || '0') || 0,
-    retenciones:parseFloat(ga(imp,  'TotalImpuestosRetenidos')   || '0') || 0,
+    retenciones,
     totalCFDI:  parseFloat(ga(comp, 'Total', 'total')            || '0') || 0,
     propinaPorcentaje: 0,
     montoPropina: 0,
