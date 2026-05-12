@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/export-excel.py": {
-      "includeFiles": "public/TEMPLATE.xls"
+      "includeFiles": "public/{TEMPLATE.xlsx,logo.png}"
     }
   }
 }
