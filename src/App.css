@@ -279,7 +279,7 @@ body::before {
 
 table {
   width: 100%;
-  min-width: 1600px;
+  min-width: 1900px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -345,6 +345,8 @@ td {
   padding: 6px 8px;
   border-radius: 6px;
   transition: background 0.12s;
+  white-space: nowrap;
+  text-overflow: clip;
 }
 .cell-in:hover, .cell-in:focus { background: rgba(255, 255, 255, 0.05); }
 .cell-in.is-mono  {

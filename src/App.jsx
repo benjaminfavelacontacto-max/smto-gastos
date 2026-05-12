@@ -4,22 +4,22 @@ import JSZip from 'jszip'
 /* Single source of truth for table columns.
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
 const COLUMNS = [
-  { key: 'check',             label: '',             width: 40,  sortable: false },
-  { key: 'status',            label: 'Estado',       width: 100, sortable: false },
-  { key: 'fechaFac',          label: 'Fecha',        width: 110, sortable: true,  type: 'date'   },
-  { key: 'noFactura',         label: 'Factura',      width: 110, sortable: true,  type: 'string' },
-  { key: 'proveedor',         label: 'Proveedor',    width: 220, sortable: true,  type: 'string' },
-  { key: 'concepto',          label: 'Concepto',     width: 130, sortable: true,  type: 'string' },
-  { key: 'importe',           label: 'Subtotal',     width: 110, sortable: true,  type: 'number' },
-  { key: 'iva',               label: 'IVA',          width: 100, sortable: true,  type: 'number' },
-  { key: 'isrTrasladado',     label: 'ISR/ISH/IEPS', width: 120, sortable: true,  type: 'number' },
-  { key: 'retencionISR',      label: 'Ret. ISR',     width: 100, sortable: true,  type: 'number' },
-  { key: 'retencionIVA',      label: 'Ret. IVA',     width: 100, sortable: true,  type: 'number' },
-  { key: 'retenciones',       label: 'Reten.',       width: 100, sortable: true,  type: 'number' },
-  { key: 'totalCFDI',         label: 'Total Fac.',   width: 115, sortable: true,  type: 'number' },
-  { key: 'propinaPorcentaje', label: 'Prop. %',      width: 90,  sortable: true,  type: 'number' },
-  { key: 'montoPropina',      label: 'Prop. $',      width: 95,  sortable: true,  type: 'number' },
-  { key: 'totalFinal',        label: 'Total Final',  width: 120, sortable: true,  type: 'number',
+  { key: 'check',             label: '',             width: 52,  sortable: false },
+  { key: 'status',            label: 'Estado',       width: 110, sortable: false },
+  { key: 'fechaFac',          label: 'Fecha',        width: 115, sortable: true,  type: 'date'   },
+  { key: 'noFactura',         label: 'Factura',      width: 120, sortable: true,  type: 'string' },
+  { key: 'proveedor',         label: 'Proveedor',    width: 260, sortable: true,  type: 'string' },
+  { key: 'concepto',          label: 'Concepto',     width: 140, sortable: true,  type: 'string' },
+  { key: 'importe',           label: 'Subtotal',     width: 120, sortable: true,  type: 'number' },
+  { key: 'iva',               label: 'IVA',          width: 110, sortable: true,  type: 'number' },
+  { key: 'isrTrasladado',     label: 'ISR/ISH/IEPS', width: 135, sortable: true,  type: 'number' },
+  { key: 'retencionISR',      label: 'Ret. ISR',     width: 110, sortable: true,  type: 'number' },
+  { key: 'retencionIVA',      label: 'Ret. IVA',     width: 110, sortable: true,  type: 'number' },
+  { key: 'retenciones',       label: 'Reten.',       width: 110, sortable: true,  type: 'number' },
+  { key: 'totalCFDI',         label: 'Total Fac.',   width: 125, sortable: true,  type: 'number' },
+  { key: 'propinaPorcentaje', label: 'Prop. %',      width: 95,  sortable: true,  type: 'number' },
+  { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
+  { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
 ]
 
@@ -302,19 +302,24 @@ function GastoRow({ g, upd, openPDF }) {
       : v)
   }
 
-  const NumCell = ({ field, prefix, suffix }) => (
-    <div className="num-cell">
-      {prefix && <span className="sym">{prefix}</span>}
-      <input
-        type="number"
-        className="cell-in"
-        value={g[field] || ''}
-        placeholder="0"
-        onChange={e => upd(field, parseFloat(e.target.value) || 0)}
-      />
-      {suffix && <span className="sym">{suffix}</span>}
-    </div>
-  )
+  const NumCell = ({ field, prefix, suffix, format = true }) => {
+    const v = g[field]
+    // Money fields always render as toFixed(2); 0 renders as '' to keep cells clean.
+    const display = v ? (format ? Number(v).toFixed(2) : v) : ''
+    return (
+      <div className="num-cell">
+        {prefix && <span className="sym">{prefix}</span>}
+        <input
+          type="number"
+          className="cell-in"
+          value={display}
+          placeholder="0"
+          onChange={e => upd(field, parseFloat(e.target.value) || 0)}
+        />
+        {suffix && <span className="sym">{suffix}</span>}
+      </div>
+    )
+  }
 
   return (
     <tr className={g.hizoMatch ? 'row-match' : ''}>
@@ -395,8 +400,8 @@ function GastoRow({ g, upd, openPDF }) {
       {/* Total Factura */}
       <td><NumCell field="totalCFDI"   prefix="$" /></td>
 
-      {/* Propina % */}
-      <td><NumCell field="propinaPorcentaje" suffix="%" /></td>
+      {/* Propina % — kept unformatted so the user can type fractional percentages */}
+      <td><NumCell field="propinaPorcentaje" suffix="%" format={false} /></td>
 
       {/* Propina $ */}
       <td><NumCell field="montoPropina" prefix="$" /></td>
