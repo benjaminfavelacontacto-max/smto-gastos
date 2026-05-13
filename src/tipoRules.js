@@ -27,7 +27,7 @@ export const TIPO_RULES = [
   ['SISTEMA INTERMUNICIPAL', 'Renta Oficina'],
   ['TRANSPORTES TURISTICOS', 'Taxi'],
   ['AMAZON MX MARKETPLACE', 'Marketing'],
-  ['REST DENNYS CHIHUAHUA', 'Consumo'],
+  ['REST DENNYS CHIHUAHUA', 'Consumo Viáticos'],
   ['SORIANA981TLAQUEPAQUE', 'Consumo'],
   ['COMPANIA DE AVIACION', 'Avión'],
   ['COMPAÑIA DE AVIACION', 'Avión'],
@@ -75,7 +75,7 @@ export const TIPO_RULES = [
   ['GRUPO ALIMENTOS', 'Consumo'],
   ['LICENCIA DE USO', 'IT & SW (Software/Sistemas)'],
   ['OXXO GASCRUCERO', 'Gasolina'],
-  ['REST LA COSECHA', 'Consumo'],
+  ['REST LA COSECHA', 'Consumo Viáticos'],
   ['STARBUCKS CITAD', 'Gastos Rep (Representación)'],
   ['TALLER MECANICO', 'Manto Auto (Mantenimiento)'],
   ['TARIFA DE VIAJE', 'Taxi'],
@@ -98,7 +98,7 @@ export const TIPO_RULES = [
   ['PAGANDO ESTAC', 'Estacionamiento'],
   ['REFACCIONARIA', 'Manto Auto (Mantenimiento)'],
   ['RENTA DE AUTO', 'Renta Auto'],
-  ['REST FORJADOR', 'Consumo'],
+  ['REST FORJADOR', 'Consumo Viáticos'],
   ['STARBUCKS EST', 'Gastos Rep (Representación)'],
   ['STARBUCKS GDL', 'Gastos Rep (Representación)'],
   ['STARBUCKS LAS', 'Gastos Rep (Representación)'],
@@ -122,7 +122,7 @@ export const TIPO_RULES = [
   ['RENTA NISSAN', 'Renta Auto'],
   ['RENTA TOYOTA', 'Renta Auto'],
   ['REST CASCADA', 'Consumo'],
-  ['RESTAURANTES', 'Consumo'],
+  ['RESTAURANTES', 'Consumo Viáticos'],
   ['TARIFA AEREA', 'Avión'],
   ['A1088BMXN02', 'IT & SW (Software/Sistemas)'],
   ['AEROENLACES', 'Avión'],
@@ -319,6 +319,7 @@ const VENTAS_VARIANT = {
   'Herramientas': 'Herramientas Ventas',
   'Hotel': 'Hotel Ventas',
   'Consumo': 'Gastos Rep (Representación)',
+  'Consumo Viáticos': 'Gastos Rep Viáticos',
   'Taxi': 'Gastos Rep (Representación)',
 }
 
@@ -331,11 +332,28 @@ export function autoDetectTipo(proveedor, descripcion, categoria) {
   const texto = `${proveedor || ''} ${descripcion || ''}`.toUpperCase()
   const isVentas = categoria === 'Ventas' || categoria === 'Socio'
 
+  // 1. Primero: buscar en reglas conocidas (marcas, razones sociales, conceptos específicos)
   for (const [kw, tipoBase] of TIPO_RULES) {
     if (texto.includes(kw)) {
       return isVentas && VENTAS_VARIANT[tipoBase] ? VENTAS_VARIANT[tipoBase] : tipoBase
     }
   }
 
+  // 2. Si ninguna regla matcheó y el concepto es exactamente "TARIFA":
+  //    proveedor sin palabras corporativas = persona física (taxista/chofer) → Taxi
+  const CORPORATE_WORDS = [
+    'S.A', 'S.R.L', 'S.A.S', 'GRUPO ', 'EMPRESA', 'COMPAÑIA', 'COMPANIA',
+    'SERVICIOS', 'RESTAURANTE', 'OPERADORA', 'DISTRIBUIDORA', 'COMERCIALIZADORA',
+    'CONCESIONARIA', 'ASOCIADOS', 'CORPORATIVO', 'INMOBILIARIA', 'CONSTRUCTORA',
+    'TRANSPORTES', 'PROMOTORA', 'ADMINISTRADORA', 'ARRENDADORA', 'HOTELERA',
+  ]
+  const provUpper = (proveedor || '').toUpperCase()
+  const descUpper = (descripcion || '').toUpperCase().trim()
+  const isCorporate = CORPORATE_WORDS.some(w => provUpper.includes(w))
+  if (descUpper === 'TARIFA' && !isCorporate) {
+    return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
+  }
+
+  // 3. Fallback
   return isVentas ? 'Gastos Rep (Representación)' : 'Consumo Viáticos'
 }
