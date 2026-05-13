@@ -277,6 +277,19 @@ def build_workbook(gastos, colaborador=''):
             bottom=Side(style='medium', color=EXCEL_GREEN),
         )
 
+    # Middle cells of each merged KPI range need explicit borders too —
+    # without them, some Excel/LibreOffice versions render visible gaps
+    # inside the cards even though the anchor + end cells have borders.
+    MED_GREEN  = Side(style='medium', color=EXCEL_GREEN)
+    THIN_LIGHT = Side(style='thin',   color=BORDER_LIGHT)
+    for col_letter in ('C', 'F', 'I', 'L'):
+        ws[f'{col_letter}5'].border = Border(
+            left=MED_GREEN, right=MED_GREEN, top=MED_GREEN, bottom=THIN_LIGHT,
+        )
+        ws[f'{col_letter}6'].border = Border(
+            left=MED_GREEN, right=MED_GREEN, top=THIN_LIGHT, bottom=MED_GREEN,
+        )
+
     # Row 7 small gap + Row 8 pre-table spacer
     ws.row_dimensions[7].height = 8
     ws.row_dimensions[8].height = 14
@@ -430,7 +443,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v5.6'
+    ft.value = 'SMTO Engineering · v5.7'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
