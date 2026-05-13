@@ -1146,6 +1146,106 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   line-height: 1.5;
 }
 
+/* ═══════════════════════════════════════════
+   IMPORT SUCCESS — hero "+N", stat card, progress bar
+   Shares the .cm-* shell; only the body is new.
+═══════════════════════════════════════════ */
+
+.ism-hero {
+  text-align: center;
+  margin: 4px 0 22px;
+}
+.ism-plus {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.ism-plus-sign {
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(180deg, #10B981 0%, #06B6D4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.ism-plus-num {
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  background: linear-gradient(180deg, #10B981 0%, #06B6D4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.ism-hero-label {
+  margin-top: 10px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Stat card — "Registros totales" line, dashboard-style row. */
+.ism-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  margin-bottom: 18px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.015) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: default;
+  transition: border-color 0.2s;
+}
+.ism-total:hover { border-color: rgba(255, 255, 255, 0.12); }
+.ism-total-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  letter-spacing: 0.01em;
+}
+.ism-total-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #F1F1F3;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Progress bar — 4px track, green→cyan fill with a soft brand glow. */
+.ism-progress { margin-bottom: 22px; }
+.ism-progress-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.ism-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #10B981 0%, #06B6D4 100%);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.45),
+              0 0 28px -4px rgba(6, 182, 212, 0.35);
+}
+.ism-progress-label {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 9px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+.ism-progress-label span:last-child {
+  color: #34D399;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 /* Responsive — stack KPIs and shrink padding on narrow viewports. */
 @media (max-width: 520px) {
   .cm-modal       { padding: 28px 22px 22px; border-radius: 20px; }

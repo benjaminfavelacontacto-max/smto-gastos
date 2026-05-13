@@ -1026,6 +1026,120 @@ function ColaboradorModal({ onSelect }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MODAL DE IMPORTACIÓN COMPLETADA
+═══════════════════════════════════════════════════ */
+
+// Premium import success modal. Shares the .cm-* glass shell with the
+// other premium modals (orb, cta, overlay). The body adds a "+N" hero,
+// a total-registros stat card, and a 100% progress bar with a brand glow.
+function ImportSuccessModal({ data, onClose }) {
+  const cAdded = useCountUp(data.added)
+  const cTotal = useCountUp(data.total)
+
+  return (
+    <motion.div
+      className="cm-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="cm-modal cm-modal-narrow"
+        initial={{ opacity: 0, y: 32, scale: 0.94 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 16, scale: 0.96 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="cm-close" onClick={onClose} aria-label="Cerrar">
+          <X size={16} />
+        </button>
+
+        {/* Header */}
+        <div className="cm-header">
+          <motion.div
+            className="cm-orb"
+            initial={{ scale: 0, rotate: -20 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: 'spring', stiffness: 220, damping: 14, delay: 0.1 }}
+          >
+            <CheckCircle2 size={30} strokeWidth={2.2} />
+          </motion.div>
+          <h2 className="cm-title">Importación completada</h2>
+          <p className="cm-subtitle">
+            {data.mode === 'replace'
+              ? 'Reporte importado correctamente'
+              : 'Reporte actualizado correctamente'}
+          </p>
+        </div>
+
+        {/* Hero "+N" */}
+        <motion.div
+          className="ism-hero"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25, type: 'spring', stiffness: 240, damping: 22 }}
+        >
+          <div className="ism-plus">
+            <span className="ism-plus-sign">+</span>
+            <span className="ism-plus-num">{Math.round(cAdded)}</span>
+          </div>
+          <div className="ism-hero-label">facturas importadas</div>
+        </motion.div>
+
+        {/* Total registros card */}
+        <motion.div
+          className="ism-total"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, type: 'spring', stiffness: 260, damping: 24 }}
+          whileHover={{ y: -2 }}
+        >
+          <div className="ism-total-label">Registros totales</div>
+          <div className="ism-total-value">{Math.round(cTotal)}</div>
+        </motion.div>
+
+        {/* Progress bar — fills 0 → 100% with a slight delay, glowing green→cyan */}
+        <motion.div
+          className="ism-progress"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.45 }}
+        >
+          <div className="ism-progress-track">
+            <motion.div
+              className="ism-progress-fill"
+              initial={{ width: 0 }}
+              animate={{ width: '100%' }}
+              transition={{ delay: 0.5, duration: 1, ease: 'easeOut' }}
+            />
+          </div>
+          <div className="ism-progress-label">
+            <span>Procesado</span>
+            <span>100%</span>
+          </div>
+        </motion.div>
+
+        {/* CTA */}
+        <motion.button
+          className="cm-cta"
+          onClick={onClose}
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.98 }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+        >
+          Continuar
+        </motion.button>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    APP PRINCIPAL
 ═══════════════════════════════════════════════════ */
 
@@ -1039,6 +1153,7 @@ export default function App() {
   const [showColabModal, setShowColabModal] = useState(true)
   const [colabSearch,   setColabSearch]   = useState('')
   const [importSuccess, setImportSuccess] = useState(false)
+  const [importSummary, setImportSummary] = useState(null)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1634,11 +1749,17 @@ export default function App() {
 
       if (action) {
         setLista(prev => [...prev, ...tagged])
-        setAlerta(`✓ Se agregaron ${gastos.length} registros al reporte actual. Total: ${lista.length + gastos.length} registros.`)
       } else {
         setLista(tagged)
-        setAlerta(`✓ Reporte importado con ${gastos.length} registros.`)
       }
+
+      // Premium success modal (count-up + progress bar + glow). Replaces the
+      // plain-text alerta success line; errors still route through setAlerta.
+      setImportSummary({
+        added: gastos.length,
+        total: action ? lista.length + gastos.length : gastos.length,
+        mode: action ? 'append' : 'replace',
+      })
 
       // Flash the toolbar button green for 2.5s and clear the isNew flags
       // after 1s so subsequent renders do not replay the row animation.
@@ -1953,6 +2074,13 @@ export default function App() {
       <AnimatePresence>
         {exportExito && (
           <ExportSuccessModal data={exportExito} onClose={() => setExportExito(null)} />
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL IMPORTACIÓN COMPLETADA (premium glass) ─── */}
+      <AnimatePresence>
+        {importSummary && (
+          <ImportSuccessModal data={importSummary} onClose={() => setImportSummary(null)} />
         )}
       </AnimatePresence>
     </div>
