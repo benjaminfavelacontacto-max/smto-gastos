@@ -1393,6 +1393,7 @@ export default function App() {
   const [importSummary, setImportSummary] = useState(null)
   const [dropSummary,   setDropSummary]   = useState(null)
   const [ocrLoading,    setOcrLoading]    = useState(false)
+  const [carpetaSuccess, setCarpetaSuccess] = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1535,6 +1536,28 @@ export default function App() {
     }
     setLista(nueva)
     setLoading(false)
+
+    // Surface a premium success modal + flash the toolbar button green for
+    // 2.5s. Skipped on a zero-result load (empty folder / all parses failed)
+    // — the empty-state onboarding card already explains what's needed.
+    if (nueva.length > 0) {
+      const linkedPDFs = nueva.filter(g => g.tienePDF).length
+      const ocrCount = 0  // processFiles does not run OCR; only handleDrop does.
+      showModal({
+        type: 'success',
+        title: 'Carpeta cargada',
+        subtitle: `Procesamos ${xmls.length} archivo${xmls.length === 1 ? '' : 's'} correctamente.`,
+        stats: [
+          { value: `+${nueva.length}`,                 label: 'Facturas nuevas', color: '#59D39B' },
+          { value: xmls.length,                        label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
+          ...(linkedPDFs > 0 ? [{ value: linkedPDFs,   label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
+          ...(ocrCount   > 0 ? [{ value: ocrCount,     label: 'OCR IA',          color: '#f59e0b' }] : []),
+        ],
+        primaryLabel: 'Continuar',
+      })
+      setCarpetaSuccess(true)
+      setTimeout(() => setCarpetaSuccess(false), 2500)
+    }
   }
 
   const cargar = async e => {
@@ -2466,7 +2489,20 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleImportExcel}
           />
-          <PremiumButton title="Cargar Carpeta" icon="📂" variant="primary"   onClick={() => folderRef.current?.click()} />
+          <PremiumButton
+            title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
+            variant={carpetaSuccess ? 'success' : 'primary'}
+            onClick={() => folderRef.current?.click()}
+            icon={carpetaSuccess ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+              </svg>
+            )}
+          />
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {(() => {
             const total = lista.length
