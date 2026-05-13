@@ -145,8 +145,8 @@ def build_workbook(gastos, colaborador=''):
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates) so
     # each column gets the width that fits its content, regardless of order.
     col_widths = {
-        'A': 5, 'B': 22, 'C': 43, 'D': 16, 'E': 23, 'F': 16, 'G': 14.5,
-        'H': 42, 'I': 18, 'J': 16, 'K': 16, 'L': 20, 'M': 24, 'N': 5
+        'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 14, 'F': 11, 'G': 11,
+        'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 13, 'M': 15, 'N': 3
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -158,35 +158,35 @@ def build_workbook(gastos, colaborador=''):
         fill_row_bg(ws, r, 1, 14, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
-    ws.row_dimensions[1].height = 54
-    ws.row_dimensions[2].height = 36
+    ws.row_dimensions[1].height = 32
+    ws.row_dimensions[2].height = 28
 
-    # Title — centered across D1:G2; pairs with the 60px logo at B1
+    # Title — centered across D1:G2; pairs with the 32px logo at B1
     ws.merge_cells('D1:G2')
     title = ws['D1']
     title.value = 'Reporte de Gastos'
-    title.font = Font(name='Aptos', size=36, bold=True, color=SMTO_BLACK)
+    title.font = Font(name='Aptos', size=26, bold=True, color=SMTO_BLACK)
     title.alignment = Alignment(horizontal='center', vertical='center')
     title.fill = PatternFill('solid', start_color=BG_PAGE)
 
-    # Right-side form labels (col H) — larger, non-bold per reference
+    # Right-side form labels (col H) — compact 11pt bold
     lbl1 = ws['H1']
     lbl1.value = 'Nombre de colaborador:'
-    lbl1.font = Font(name='Aptos', size=18, color=TEXT_SECONDARY)
+    lbl1.font = Font(name='Aptos', size=11, bold=True, color=TEXT_SECONDARY)
     lbl1.alignment = Alignment(horizontal='right', vertical='center')
     lbl1.fill = PatternFill('solid', start_color=BG_PAGE)
 
     lbl2 = ws['H2']
     lbl2.value = 'Fecha de viaje:'
-    lbl2.font = Font(name='Aptos', size=18, color=TEXT_SECONDARY)
+    lbl2.font = Font(name='Aptos', size=11, bold=True, color=TEXT_SECONDARY)
     lbl2.alignment = Alignment(horizontal='right', vertical='center')
     lbl2.fill = PatternFill('solid', start_color=BG_PAGE)
 
-    # Right-side form fields (cols J:M) — white fill, font 14
+    # Right-side form fields (cols J:M) — compact 11pt
     ws.merge_cells('J1:M1')
     f1 = ws['J1']
     f1.value = colaborador  # filled programmatically from the selected colaborador
-    f1.font = Font(name='Aptos', size=14, color=TEXT_PRIMARY)
+    f1.font = Font(name='Aptos', size=11, color=TEXT_PRIMARY)
     f1.fill = PatternFill('solid', start_color=WHITE)
     f1.border = Border(bottom=Side(style='thin', color=BORDER_LIGHT))
     f1.alignment = Alignment(horizontal='left', vertical='center', indent=1)
@@ -194,8 +194,8 @@ def build_workbook(gastos, colaborador=''):
     ws.merge_cells('J2:M2')
     f2 = ws['J2']
     fecha_min, fecha_max = compute_date_range(gastos)
-    f2.value = f'DE: {fecha_min}   A: {fecha_max}' if fecha_min else ''
-    f2.font = Font(name='Aptos', size=14, color=TEXT_PRIMARY)
+    f2.value = f'DE: {fecha_min}  A: {fecha_max}' if fecha_min else ''
+    f2.font = Font(name='Aptos', size=11, color=TEXT_PRIMARY)
     f2.fill = PatternFill('solid', start_color=WHITE)
     f2.alignment = Alignment(horizontal='left', vertical='center', indent=1)
 
@@ -203,7 +203,7 @@ def build_workbook(gastos, colaborador=''):
     # H3 carries a thin EXCEL_GREEN underline below the "Nombre/Fecha de viaje"
     # labels; row 4 itself is a 1pt-tall band sandwiched between a thin top
     # green border and a medium bottom green border so it reads as one bar.
-    ws.row_dimensions[3].height = 18
+    ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
     for c in range(2, 14):
@@ -215,8 +215,8 @@ def build_workbook(gastos, colaborador=''):
         )
 
     # ═══ KPI CARDS (rows 5-6) ═══
-    ws.row_dimensions[5].height = 46  # KPI VALUES
-    ws.row_dimensions[6].height = 23  # KPI LABELS
+    ws.row_dimensions[5].height = 32  # KPI VALUES
+    ws.row_dimensions[6].height = 16  # KPI LABELS
 
     total_facturado = round(sum(g.get('totalCFDI', 0) + g.get('montoPropina', 0) for g in gastos), 2)
     total_iva = round(sum(g.get('iva', 0) for g in gastos), 2)
@@ -238,7 +238,7 @@ def build_workbook(gastos, colaborador=''):
         ws.merge_cells(f'{col_start}5:{col_end}5')
         v_cell = ws[f'{col_start}5']
         v_cell.value = value
-        v_cell.font = Font(name='Aptos', size=26, bold=True, color=value_color)
+        v_cell.font = Font(name='Aptos', size=20, bold=True, color=value_color)
         v_cell.alignment = Alignment(horizontal='left', vertical='center', indent=2)
         v_cell.fill = PatternFill('solid', start_color=WHITE)
         v_cell.border = Border(
@@ -252,7 +252,7 @@ def build_workbook(gastos, colaborador=''):
         ws.merge_cells(f'{col_start}6:{col_end}6')
         l_cell = ws[f'{col_start}6']
         l_cell.value = label
-        l_cell.font = Font(name='Aptos', size=14, bold=True, color=TEXT_MUTED)
+        l_cell.font = Font(name='Aptos', size=9, bold=True, color=TEXT_MUTED)
         l_cell.alignment = Alignment(horizontal='left', vertical='center', indent=2)
         l_cell.fill = PatternFill('solid', start_color=WHITE)
         l_cell.border = Border(
@@ -261,12 +261,12 @@ def build_workbook(gastos, colaborador=''):
             bottom=Side(style='medium', color=EXCEL_GREEN),
         )
 
-    # Row 7 small gap + Row 8 larger pre-table spacer
-    ws.row_dimensions[7].height = 4
-    ws.row_dimensions[8].height = 28
+    # Row 7 small gap + Row 8 pre-table spacer
+    ws.row_dimensions[7].height = 8
+    ws.row_dimensions[8].height = 14
 
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
-    ws.row_dimensions[9].height = 48
+    ws.row_dimensions[9].height = 28
 
     headers = ['RFC', 'PROVEEDOR', 'TIPO', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
@@ -275,7 +275,7 @@ def build_workbook(gastos, colaborador=''):
     for i, h in enumerate(headers):
         col = i + 2
         cell = ws.cell(row=9, column=col, value=h)
-        cell.font = Font(name='Aptos', size=14, bold=True, color=EXCEL_GREEN)
+        cell.font = Font(name='Aptos', size=11, bold=True, color=EXCEL_GREEN)
         is_left = h in left_align_headers
         cell.alignment = Alignment(
             horizontal='left' if is_left else 'center',
@@ -295,7 +295,7 @@ def build_workbook(gastos, colaborador=''):
     # ═══ DATA ROWS (row 10+) ═══
     row = 10
     for idx, g in enumerate(gastos):
-        ws.row_dimensions[row].height = 48
+        ws.row_dimensions[row].height = 24
         is_alt = (idx % 2 == 1)
         bg = ROW_ALT if is_alt else WHITE
 
@@ -311,7 +311,7 @@ def build_workbook(gastos, colaborador=''):
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
         cells = [
-            (2,  g.get('rfc', ''),       'left',   'normal_bold'),
+            (2,  g.get('rfc', ''),       'left',   'rfc'),
             (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
             (4,  tipo,                   'center', 'badge_tipo'),
             (5,  g.get('noFactura', ''), 'center', 'normal'),
@@ -337,21 +337,25 @@ def build_workbook(gastos, colaborador=''):
 
             if style_type == 'currency':
                 cell.number_format = '"$"#,##0.00'
-                cell.font = Font(name='Aptos', size=13, color=TEXT_PRIMARY)
+                cell.font = Font(name='Aptos', size=10, color=TEXT_PRIMARY)
             elif style_type == 'currency_bold':
                 cell.number_format = '"$"#,##0.00'
-                cell.font = Font(name='Aptos', size=14, bold=True, color=SMTO_BLACK)
+                cell.font = Font(name='Aptos', size=11, bold=True, color=SMTO_BLACK)
+            elif style_type == 'rfc':
+                # RFC sits one notch smaller than the supplier name so the
+                # supplier reads as the row's primary identifier.
+                cell.font = Font(name='Aptos', size=9, bold=True, color=TEXT_PRIMARY)
             elif style_type == 'normal_bold':
-                cell.font = Font(name='Aptos', size=11, bold=True, color=TEXT_PRIMARY)
+                cell.font = Font(name='Aptos', size=10, bold=True, color=TEXT_PRIMARY)
             elif style_type == 'badge_tipo':
                 bg_b, fg_b = get_tipo_badge_colors(tipo)
                 cell.fill = PatternFill('solid', start_color=bg_b)
-                cell.font = Font(name='Aptos', size=11, bold=True, color=fg_b)
+                cell.font = Font(name='Aptos', size=9, bold=True, color=fg_b)
             elif style_type == 'badge_pago':
                 cell.fill = PatternFill('solid', start_color=BADGE_GRAY_BG)
-                cell.font = Font(name='Aptos', size=11, bold=True, color=BADGE_GRAY_FG)
+                cell.font = Font(name='Aptos', size=9, bold=True, color=BADGE_GRAY_FG)
             else:  # 'normal'
-                cell.font = Font(name='Aptos', size=13, color=TEXT_PRIMARY)
+                cell.font = Font(name='Aptos', size=10, color=TEXT_PRIMARY)
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
@@ -363,7 +367,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 14  # spacer
     row += 1
 
-    ws.row_dimensions[row].height = 44
+    ws.row_dimensions[row].height = 32
     for c in range(2, 14):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
@@ -371,7 +375,7 @@ def build_workbook(gastos, colaborador=''):
 
     ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
     lbl = ws.cell(row=row, column=2, value='TOTAL CUENTA')
-    lbl.font = Font(name='Aptos', size=14, bold=True, color=WHITE)
+    lbl.font = Font(name='Aptos', size=12, bold=True, color=WHITE)
     lbl.alignment = Alignment(horizontal='right', vertical='center', indent=2)
     lbl.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
@@ -386,7 +390,7 @@ def build_workbook(gastos, colaborador=''):
         cell.number_format = '"$"#,##0.00'
         cell.font = Font(
             name='Aptos',
-            size=20 if is_main else 13,
+            size=16 if is_main else 11,
             bold=is_main,
             color=SMTO_GREEN if is_main else WHITE,
         )
@@ -397,11 +401,11 @@ def build_workbook(gastos, colaborador=''):
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
-    ws.row_dimensions[row].height = 24
+    ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v5.3'
-    ft.font = Font(name='Aptos', size=9, italic=True, color=TEXT_MUTED)
+    ft.value = 'SMTO Engineering · v5.4'
+    ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
 
@@ -411,7 +415,7 @@ def build_workbook(gastos, colaborador=''):
         try:
             pil = PILImage.open(logo_path)
             pil = crop_logo(pil)
-            target_h = 60
+            target_h = 32
             ratio = target_h / pil.height
             target_w = int(pil.width * ratio)
             pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
