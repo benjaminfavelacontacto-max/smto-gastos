@@ -8,6 +8,7 @@ try:
     import xlrd
     import xlwt
     from xlutils.copy import copy as xl_copy
+    from PIL import Image
 except Exception:
     IMPORT_ERROR = traceback.format_exc()
 
@@ -64,6 +65,42 @@ def find_template():
     raise FileNotFoundError(f'TEMPLATE.xls not found. Tried: {candidates}')
 
 
+def find_logo():
+    candidates = [
+        os.path.join(os.path.dirname(__file__), 'logo.png'),
+        os.path.join(os.path.dirname(__file__), '..', 'public', 'logo.png'),
+        '/var/task/api/logo.png',
+        '/var/task/public/logo.png',
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def insert_logo(ws, logo_path):
+    """PNG → 24-bit BMP (xlwt's required format) → ws.insert_bitmap.
+    Failures are swallowed (logged) so a bad logo can't break the export."""
+    try:
+        img = Image.open(logo_path)
+        img = img.resize((180, 75), Image.LANCZOS)
+        if img.mode in ('RGBA', 'LA', 'P'):
+            bg = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            bg.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+            img = bg
+        else:
+            img = img.convert('RGB')
+        with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as tmp:
+            bmp_path = tmp.name
+        img.save(bmp_path, 'BMP')
+        ws.insert_bitmap(bmp_path, 0, 0, x=5, y=5)
+        os.unlink(bmp_path)
+    except Exception as e:
+        print(f'Logo insert warning: {e}')
+
+
 class handler(BaseHTTPRequestHandler):
     # Connectivity probe: GET returns 200 + diagnostic JSON so we can verify the
     # function is reachable even when POST is failing.
@@ -79,6 +116,7 @@ class handler(BaseHTTPRequestHandler):
             diag['template_path'] = find_template()
         except Exception as e:
             diag['template_error'] = str(e)
+        diag['logo_path'] = find_logo()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -98,6 +136,11 @@ class handler(BaseHTTPRequestHandler):
             rb = xlrd.open_workbook(template_path, formatting_info=True)
             wb = xl_copy(rb)
             ws = wb.get_sheet(0)
+
+            # Embed SMTO logo (xlutils.copy doesn't carry .xls images through).
+            logo_path = find_logo()
+            if logo_path:
+                insert_logo(ws, logo_path)
 
             row_idx = 5
             for g in gastos:
