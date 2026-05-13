@@ -1,16 +1,7 @@
 // src/tipoRules.js
-// Reglas predictivas de Tipo de gasto.
-// Combina dos fuentes:
-//   1. Patrones aprendidos del histórico bancario SMTo 2024-2025 (18,846 transacciones, 17 cuentas)
-//      → marcas comerciales tal como aparecen en estados de cuenta (VOLARIS, OXXO GAS, UBER…)
-//   2. Razones sociales fiscales mexicanas y palabras clave del concepto del CFDI
-//      → cubren las facturas reales (CONCESIONARIA VUELA, OPERADORA DE HOTELES, HABITACION…)
-//
-// El match se hace contra: PROVEEDOR (emisor del CFDI) + DESCRIPCION (concepto del CFDI).
-// Las reglas están ordenadas por longitud descendente: las más específicas ganan primero.
-//
-// Sufijo "Ventas" se aplica en autoDetectTipo() según la categoría del colaborador
-// (Ventas/Socio → variante Ventas, el resto → tipo base).
+// Reglas predictivas de Tipo de gasto — v3
+// 18,846 transacciones históricas SMTo + razones sociales fiscales mexicanas + conceptos CFDI
+// Keywords largos primero (greedy specificity). Sin keywords ≤3 chars ambiguos.
 
 export const TIPO_RULES = [
   ['COMERCIALIZADORA DE COMBUSTIBLES', 'Gasolina'],
@@ -18,6 +9,7 @@ export const TIPO_RULES = [
   ['OPERADORA DE ESTACIONAMIENTOS', 'Estacionamiento'],
   ['CONCESIONARIA DE AUTOPISTA', 'Casetas'],
   ['MATERIALES DE CONSTRUCCION', 'Herramientas'],
+  ['TARIFA SERVICIO TRANSPORTE', 'Taxi'],
   ['ARRENDADORA DE VEHICULOS', 'Renta Auto'],
   ['OPERADORA DE FRANQUICIAS', 'Consumo'],
   ['TRANSPORTADORA EJECUTIVA', 'Taxi'],
@@ -77,6 +69,7 @@ export const TIPO_RULES = [
   ['HOLIDAYINNCIUDAD', 'Hotel'],
   ['RADIOMOVIL DIPSA', 'Celular'],
   ['SERVICIO DE AGUA', 'Renta Oficina'],
+  ['TARIFA POR VIAJE', 'Taxi'],
   ['BOLETO DE AVION', 'Avión'],
   ['CADENA HOTELERA', 'Hotel'],
   ['GRUPO ALIMENTOS', 'Consumo'],
@@ -85,6 +78,7 @@ export const TIPO_RULES = [
   ['REST LA COSECHA', 'Consumo'],
   ['STARBUCKS CITAD', 'Gastos Rep (Representación)'],
   ['TALLER MECANICO', 'Manto Auto (Mantenimiento)'],
+  ['TARIFA DE VIAJE', 'Taxi'],
   ['ABC AEROLINEAS', 'Avión'],
   ['AEROMEXICO WEB', 'Avión'],
   ['CARLS JR STIVA', 'Consumo'],
@@ -296,7 +290,6 @@ export const TIPO_RULES = [
   ['DIDI', 'Taxi'],
   ['GRAB', 'Taxi'],
   ['GULF', 'Gasolina'],
-  ['HOME', 'Herramientas'],
   ['IZZI', 'IT & SW (Software/Sistemas)'],
   ['JMAS', 'Renta Oficina'],
   ['LYFT', 'Taxi'],
@@ -310,15 +303,11 @@ export const TIPO_RULES = [
   ['VIPS', 'Consumo'],
   ['VIVA', 'Avión'],
   ['ZOOM', 'IT & SW (Software/Sistemas)'],
-  ['AMK', 'Gastos Rep (Representación)'],
   ['AWS', 'IT & SW (Software/Sistemas)'],
   ['CFE', 'Renta Oficina'],
   ['DHL', 'Envíos'],
   ['GAS', 'Gasolina'],
-  ['GOB', 'Manto Auto (Mantenimiento)'],
-  ['KIA', 'Manto Auto (Mantenimiento)'],
   ['PZA', 'Casetas'],
-  ['REA', 'Casetas'],
   ['UPS', 'Envíos'],
 ]
 
@@ -334,11 +323,9 @@ const VENTAS_VARIANT = {
 }
 
 /**
- * Auto-detecta el Tipo de gasto a partir del proveedor + descripción del CFDI.
- * @param {string} proveedor    Nombre del emisor del CFDI (ej. "CONCESIONARIA VUELA COMPAÑIA DE AVIACION")
- * @param {string} descripcion  Primera línea de la descripción del concepto del CFDI
- * @param {string} categoria    Categoría del colaborador: 'Admin'|'Servicio'|'Ventas'|'Socio'
- * @returns {string} Tipo de gasto (ej. "Avión" o "Avión Ventas")
+ * @param {string} proveedor    Nombre del emisor del CFDI
+ * @param {string} descripcion  Primera línea del concepto del CFDI
+ * @param {string} categoria    'Admin'|'Servicio'|'Ventas'|'Socio'
  */
 export function autoDetectTipo(proveedor, descripcion, categoria) {
   const texto = `${proveedor || ''} ${descripcion || ''}`.toUpperCase()
@@ -350,5 +337,5 @@ export function autoDetectTipo(proveedor, descripcion, categoria) {
     }
   }
 
-  return isVentas ? 'Gastos Rep (Representación)' : 'Consumo'
+  return isVentas ? 'Gastos Rep (Representación)' : 'Consumo Viáticos'
 }
