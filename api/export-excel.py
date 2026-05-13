@@ -64,6 +64,55 @@ def find_template():
     raise FileNotFoundError(f'TEMPLATE.xls not found. Tried: {candidates}')
 
 
+def find_logo():
+    candidates = [
+        os.path.join(os.path.dirname(__file__), 'logo.png'),
+        os.path.join(os.path.dirname(__file__), '..', 'public', 'logo.png'),
+        '/var/task/public/logo.png',
+        '/var/task/api/logo.png',
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def insert_logo(ws, logo_path):
+    """Convert PNG → 24-bit BMP and insert via xlwt's insert_bitmap.
+
+    xlwt only accepts 24-bit uncompressed BMP. Pillow's BMP writer on RGB
+    mode produces exactly that. Errors are swallowed (logged) so a bad
+    logo never breaks the export.
+    """
+    try:
+        from PIL import Image
+        import tempfile
+
+        img = Image.open(logo_path)
+        # Match the template logo size roughly (180x75 px)
+        img = img.resize((180, 75), Image.LANCZOS)
+        # BMP has no alpha channel — flatten transparent PNGs onto white
+        if img.mode in ('RGBA', 'LA', 'P'):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+            img = background
+        else:
+            img = img.convert('RGB')
+
+        with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as tmp:
+            bmp_path = tmp.name
+        img.save(bmp_path, 'BMP')
+
+        # Anchor at row 0, col 0 with a 5px×5px inset
+        ws.insert_bitmap(bmp_path, 0, 0, x=5, y=5, scale_x=1.0, scale_y=1.0)
+
+        os.unlink(bmp_path)
+    except Exception as e:
+        print(f'Logo insert warning: {e}')
+
+
 class handler(BaseHTTPRequestHandler):
     # Connectivity probe: GET returns 200 + diagnostic JSON so we can verify the
     # function is reachable even when POST is failing.
@@ -79,6 +128,7 @@ class handler(BaseHTTPRequestHandler):
             diag['template_path'] = find_template()
         except Exception as e:
             diag['template_error'] = str(e)
+        diag['logo_path'] = find_logo()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -98,6 +148,12 @@ class handler(BaseHTTPRequestHandler):
             rb = xlrd.open_workbook(template_path, formatting_info=True)
             wb = xl_copy(rb)
             ws = wb.get_sheet(0)
+
+            # Embed SMTO logo at top-left. xlutils.copy doesn't carry .xls
+            # images through, so we insert it explicitly from logo.png.
+            logo_path = find_logo()
+            if logo_path:
+                insert_logo(ws, logo_path)
 
             row_idx = 5
             for g in gastos:
