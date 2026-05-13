@@ -235,23 +235,28 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[5].height = 32  # KPI VALUES
     ws.row_dimensions[6].height = 16  # KPI LABELS
 
-    total_facturado = round(sum(g.get('totalCFDI', 0) + g.get('montoPropina', 0) for g in gastos), 2)
-    total_iva = round(sum(g.get('iva', 0) for g in gastos), 2)
-    total_ret = round(sum(g.get('retenciones', 0) for g in gastos), 2)
-    total_usd = round(sum(g.get('montoUSD', 0) for g in gastos), 2)
+    # Pre-compute the data range so the KPI cards AND the bottom totals row
+    # share the same =SUM() references. Counts every main row + any propina
+    # sub-row, clamps to data_first when no gastos so the SUM range stays
+    # valid (I10:I10 → 0).
+    data_first = 10
+    has_propina = lambda g: (g.get('montoPropina', 0) or 0) > 0 or (g.get('propinaExtranjero', 0) or 0) > 0
+    data_rows_total = len(gastos) + sum(1 for g in gastos if has_propina(g))
+    data_last = max(data_first, data_first + data_rows_total - 1)
     num_facturas = len(gastos)
 
     # (col_start, col_end, label, value, number_format, value_color)
-    # KPI values are now stored as raw numerics with number_format so Excel
-    # does not flag the cells with "Number Stored as Text" warning triangles.
+    # KPI cards are live Excel formulas referencing the data band so the
+    # numbers always match the bottom totals row — edit any data cell and
+    # both update together. REGISTROS stays a static count (not a sum).
     # All five cards share a medium EXCEL_GREEN frame; TOTAL FACTURADO and
     # USD are tinted brand-green, the rest stay SMTO_BLACK.
     kpis = [
-        ('B', 'D', 'TOTAL FACTURADO', total_facturado, '"$"#,##0.00', SMTO_GREEN),
-        ('E', 'G', 'IVA TOTAL',       total_iva,       '"$"#,##0.00', SMTO_BLACK),
-        ('H', 'J', 'RETENCIONES',     total_ret,       '"$"#,##0.00', SMTO_BLACK),
-        ('K', 'M', 'REGISTROS',       num_facturas,    '0',           SMTO_BLACK),
-        ('N', 'O', 'USD',             total_usd,       '"$"#,##0.00', SMTO_GREEN),
+        ('B', 'D', 'TOTAL FACTURADO', f'=SUM(L{data_first}:L{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('E', 'G', 'IVA TOTAL',       f'=SUM(J{data_first}:J{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('H', 'J', 'RETENCIONES',     f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('K', 'M', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
+        ('N', 'O', 'USD',             f'=SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -522,13 +527,11 @@ def build_workbook(gastos, colaborador=''):
     lbl.alignment = Alignment(horizontal='right', vertical='center', indent=2)
     lbl.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # Use Excel SUM formulas so the totals re-compute if the user edits any
-    # data cell, and so Excel does not flag the column with the green
-    # "inconsistent formula" warning triangle. `data_last` is clamped to
-    # data_first so a zero-row report stays valid. T/C (col O) intentionally
-    # has no total — a sum of exchange rates is not meaningful.
-    data_first = 10
-    data_last = max(data_first, row - 2)
+    # Same SUM formulas as the KPI cards above so the two views always agree.
+    # `data_first` / `data_last` are pre-computed once at the top of the KPI
+    # section and cover both main rows and any propina sub-rows that the data
+    # loop inserted. T/C (col O) intentionally has no total — a sum of
+    # exchange rates is not meaningful.
     totals = [
         (9,  f'=SUM(I{data_first}:I{data_last})', False),
         (10, f'=SUM(J{data_first}:J{data_last})', False),
@@ -558,7 +561,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=15)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v7.15'
+    ft.value = 'SMTO Engineering · v7.16'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
