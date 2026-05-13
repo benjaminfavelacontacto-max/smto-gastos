@@ -6,7 +6,8 @@ import JSZip from 'jszip'
 const COLUMNS = [
   { key: 'check',             label: '',             width: 52,  sortable: true,  type: 'string' },
   { key: 'status',            label: 'Estado',       width: 110, sortable: true,  type: 'string' },
-  { key: 'fechaFac',          label: 'Fecha',        width: 115, sortable: true,  type: 'date'   },
+  { key: 'fechaFac',          label: 'Fecha Factura',width: 115, sortable: true,  type: 'date'   },
+  { key: 'fechaCobro',        label: 'Fecha Cobro',  width: 120, sortable: true,  type: 'date'   },
   { key: 'noFactura',         label: 'Factura',      width: 120, sortable: true,  type: 'string' },
   { key: 'proveedor',         label: 'Proveedor',    width: 260, sortable: true,  type: 'string' },
   { key: 'concepto',          label: 'Concepto',     width: 140, sortable: true,  type: 'string' },
@@ -22,7 +23,6 @@ const COLUMNS = [
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
-  { key: 'fechaCobro',        label: 'Fecha Cobro',  width: 120, sortable: true,  type: 'date'   },
 ]
 
 /* ═══════════════════════════════════════════════════
@@ -225,12 +225,13 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   }) || null
   console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
+  const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
   return {
     id: genId(),
     rfc,
     proveedor,
     noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
-    fechaFac:  (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10),
+    fechaFac,
     concepto:   conceptoClasif,
     importe,
     iva,
@@ -241,7 +242,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     totalCFDI,
     propinaPorcentaje: 0,
     montoPropina: 0,
-    fechaCobro: '',
+    fechaCobro: fechaFac,
     formaPago:  ga(comp, 'FormaPago') || '04',
     uuid,
     tienePDF: !!pdfFile,
@@ -346,9 +347,28 @@ function GastoRow({ g, upd, openPDF }) {
         </div>
       </td>
 
-      {/* Fecha */}
+      {/* Fecha Factura */}
       <td className="td-fecha">
         <input className="cell-in" value={dateDisplay} onChange={e => onDateChange(e.target.value)} />
+      </td>
+
+      {/* Fecha Cobro — native date picker. Bank-matched dates come in as
+          DD/MM/YYYY; we convert to YYYY-MM-DD for the type="date" input,
+          which roundtrips its own value as YYYY-MM-DD on user edit. */}
+      <td>
+        <input
+          type="date"
+          className="cell-date-input"
+          value={(() => {
+            if (!g.fechaCobro) return ''
+            if (g.fechaCobro.includes('/')) {
+              const [d, m, y] = g.fechaCobro.split('/')
+              return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+            }
+            return g.fechaCobro
+          })()}
+          onChange={e => upd('fechaCobro', e.target.value)}
+        />
       </td>
 
       {/* Factura */}
@@ -364,7 +384,7 @@ function GastoRow({ g, upd, openPDF }) {
       </td>
 
       {/* Proveedor */}
-      <td className="td-proveedor">
+      <td>
         <input className="cell-in is-bold" value={g.proveedor} onChange={e => upd('proveedor', e.target.value)} />
       </td>
 
@@ -420,25 +440,6 @@ function GastoRow({ g, upd, openPDF }) {
           ${(g.totalCFDI + g.montoPropina).toFixed(2)}
         </span>
       </td>
-
-      {/* Fecha Cobro — native date picker. Bank-matched dates come in as
-          DD/MM/YYYY; we convert to YYYY-MM-DD for the type="date" input,
-          which roundtrips its own value as YYYY-MM-DD on user edit. */}
-      <td>
-        <input
-          type="date"
-          className="cell-date-input"
-          value={(() => {
-            if (!g.fechaCobro) return ''
-            if (g.fechaCobro.includes('/')) {
-              const [d, m, y] = g.fechaCobro.split('/')
-              return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
-            }
-            return g.fechaCobro
-          })()}
-          onChange={e => upd('fechaCobro', e.target.value)}
-        />
-      </td>
     </tr>
   )
 }
@@ -454,12 +455,11 @@ export default function App() {
   const [loading,       setLoading]       = useState(false)
   const [isDragging,    setIsDragging]    = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
-  // [0] checkbox, [1] estado, [2] fecha, [3] factura, [4] proveedor,
-  // [5] concepto, [6] subtotal, [7] iva, [8] isr/ish/ieps, [9] ret.isr,
-  // [10] ret.iva, [11] reten, [12] total fac, [13] forma pago, [14] prop%,
-  // [15] prop$, [16] total final, [17] fecha cobro, [18] delete (unused
-  // until a delete column lands)
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 260, 140, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130, 120, 52])
+  // [0] checkbox, [1] estado, [2] fecha factura, [3] fecha cobro,
+  // [4] factura, [5] proveedor, [6] concepto, [7] subtotal, [8] iva,
+  // [9] isr/ish/ieps, [10] ret.isr, [11] ret.iva, [12] reten,
+  // [13] total fac, [14] forma pago, [15] prop%, [16] prop$, [17] total final
+  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
 
   const folderRef = useRef(null)
@@ -790,7 +790,7 @@ export default function App() {
       rfc: 'PUBLICO GENERAL', proveedor: 'Escribe aquí...', noFactura: 'Ticket',
       fechaFac: hoy, concepto: 'Consumo', importe: 0, iva: 0, isrTrasladado: 0,
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
-      propinaPorcentaje: 0, montoPropina: 0, fechaCobro: '', formaPago: '01', uuid: 'MANUAL',
+      propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, checkManual: false,
     }])
   }
@@ -1021,14 +1021,13 @@ export default function App() {
             // Sticky-column left offsets — derived from indices 1 (Estado) and
             // 2 (Fecha) so resizing them shifts the pinned cells correctly.
             '--sl-fecha':     `${colWidths[1]}px`,
-            '--sl-proveedor': `${colWidths[1] + colWidths[2]}px`,
           }}>
             <thead>
               <tr>
                 {COLUMNS.map((col, idx) => (
                   <th
                     key={col.key}
-                    className={col.key === 'status' ? 'th-status' : col.key === 'fechaFac' ? 'th-fecha' : col.key === 'proveedor' ? 'th-proveedor' : undefined}
+                    className={col.key === 'status' ? 'th-status' : col.key === 'fechaFac' ? 'th-fecha' : undefined}
                     style={{ width: colWidths[idx], cursor: col.sortable ? 'pointer' : undefined }}
                     onClick={col.sortable ? () => toggleSort(col.key) : undefined}
                   >
