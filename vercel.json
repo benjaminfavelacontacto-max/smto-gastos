@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/export-excel.py": {
-      "runtime": "vercel-python@4.3.1"
+      "includeFiles": ["public/TEMPLATE.xls", "public/logo.png", "api/logo.png", "api/TEMPLATE.xls"]
     }
   }
 }
