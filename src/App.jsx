@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import JSZip from 'jszip'
+import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check } from 'lucide-react'
 
@@ -1399,6 +1400,122 @@ export default function App() {
     })
   }
 
+  // ── Importar Excel previamente exportado ──
+  // Reads a Reporte_Gastos_SMTO.xlsx and reconstructs the gastos list.
+  // The export writes data starting at row 10 (table header on row 9); we
+  // walk rows downward until we hit an empty RFC or the "TOTAL CUENTA"
+  // sentinel. The Excel only carries the rolled-up RETENCIÓN column, so
+  // retencionISR/IVA breakdown defaults to 0 — caller can edit manually.
+  const handleImportExcel = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const wb = XLSX.read(arrayBuffer, { type: 'array', cellStyles: true })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+
+      // Data starts at row 10 (0-indexed: r=9). Columns:
+      // B=RFC, C=PROVEEDOR, D=TIPO, E=FACTURA, F=F.FACTURA, G=F.COBRO,
+      // H=CONCEPTO, I=IMPORTE, J=IVA, K=RETENCIÓN, L=TOTAL, M=FORMA PAGO
+      const gastos = []
+      let row = 10
+
+      while (true) {
+        const rfc = ws[XLSX.utils.encode_cell({ r: row - 1, c: 1 })]?.v
+        if (!rfc || rfc === 'TOTAL CUENTA') break
+
+        const getVal = (col) => ws[XLSX.utils.encode_cell({ r: row - 1, c: col })]?.v ?? ''
+
+        // Forma de pago: cell carries the "04 - Tarjeta de Crédito" label,
+        // so strip back to the leading two-digit code.
+        const formaLabel = String(getVal(12))
+        const formaCode = formaLabel.startsWith('04') ? '04'
+          : formaLabel.startsWith('03') ? '03'
+          : formaLabel.startsWith('02') ? '02'
+          : formaLabel.startsWith('01') ? '01' : '04'
+
+        // Dates round-trip as MM-DD-YY strings in the export; convert back
+        // to YYYY-MM-DD for internal use.
+        const parseDate = (d) => {
+          if (!d) return ''
+          const s = String(d)
+          if (s.includes('-') && s.length === 8) {
+            const [mm, dd, yy] = s.split('-')
+            return `20${yy}-${mm}-${dd}`
+          }
+          return s
+        }
+
+        // Numeric fields. The export writes column L as an Excel formula
+        // `=I+J-K`, and SheetJS returns 0/undefined for formula cells when
+        // there is no cached evaluated value — so fall back to recomputing
+        // the total from I+J-K if L came back empty.
+        const importe     = Number(getVal(8))  || 0
+        const iva         = Number(getVal(9))  || 0
+        const retenciones = Number(getVal(10)) || 0
+        const lRaw        = Number(getVal(11)) || 0
+        const totalCFDI   = lRaw || (importe + iva - retenciones)
+
+        gastos.push({
+          // id is required by React (table key) and the delete handler;
+          // tienePDF/pdfFile/xmlFile/hizoMatch/isrTrasladado keep the row
+          // shape identical to parseCFDI-produced rows so every cell
+          // renders correctly.
+          id: genId(),
+          rfc: String(rfc || ''),
+          proveedor: String(getVal(2) || ''),
+          tipo: String(getVal(3) || ''),
+          noFactura: String(getVal(4) || ''),
+          fechaFac: parseDate(getVal(5)),
+          fechaCobro: parseDate(getVal(6)),
+          concepto: String(getVal(7) || ''),
+          importe,
+          iva,
+          isrTrasladado: 0,
+          retencionISR: 0,
+          retencionIVA: 0,
+          retenciones,
+          totalCFDI,
+          formaPago: formaCode,
+          propinaPorcentaje: 0,
+          montoPropina: 0,
+          uuid: crypto.randomUUID(),
+          tienePDF: false,
+          pdfFile: null,
+          xmlFile: null,
+          hizoMatch: false,
+          validado: false,
+        })
+        row++
+      }
+
+      if (gastos.length === 0) {
+        setAlerta('No se encontraron registros válidos en el archivo Excel.')
+        return
+      }
+
+      // Ask user: append or replace.
+      const action = window.confirm(
+        `Se encontraron ${gastos.length} registros en el Excel.\n\n` +
+        `¿Deseas AGREGAR a los ${lista.length} registros actuales?\n\n` +
+        `OK = Agregar al reporte actual\n` +
+        `Cancelar = Reemplazar todo`
+      )
+
+      if (action) {
+        setLista(prev => [...prev, ...gastos])
+        setAlerta(`✓ Se agregaron ${gastos.length} registros al reporte actual. Total: ${lista.length + gastos.length} registros.`)
+      } else {
+        setLista(gastos)
+        setAlerta(`✓ Reporte importado con ${gastos.length} registros.`)
+      }
+    } catch (err) {
+      setAlerta('Error al importar Excel: ' + err.message)
+    }
+  }
+
   // ── Exportar a Excel ──
   // Defers to /api/export-excel (Python serverless function on Vercel) so the
   // .xls file gets full template formatting via xlrd + xlutils + xlwt —
@@ -1469,7 +1586,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.0</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.1</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -1497,6 +1614,21 @@ export default function App() {
       <div className="action-bar">
         <div className="action-group">
           <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
+          <button className="btn-secondary" onClick={() => document.getElementById('import-xlsx-input').click()}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Importar Excel
+          </button>
+          <input
+            id="import-xlsx-input"
+            type="file"
+            accept=".xlsx"
+            style={{ display: 'none' }}
+            onChange={handleImportExcel}
+          />
           <PremiumButton title="Cargar Carpeta" icon="📂" variant="primary"   onClick={() => folderRef.current?.click()} />
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {(() => {
