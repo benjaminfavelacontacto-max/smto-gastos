@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import JSZip from 'jszip'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText } from 'lucide-react'
+import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Check } from 'lucide-react'
 
 const TIPOS_GASTO = [
   'Aduana','Avión','Avión Ventas','Casetas','Casetas Ventas','Celular','COGS',
@@ -95,6 +95,13 @@ const parseDateDisplay = (s) => {
   if (y.length === 2) return `20${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
   if (y.length === 4) return `${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
   return s
+}
+
+// Human-readable file size for the export-success card.
+const formatBytes = (b) => {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  return `${(b / 1024 / 1024).toFixed(2)} MB`
 }
 
 function parseDateRobusto(text) {
@@ -709,6 +716,91 @@ function ConciliacionModal({ data, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MODAL DE ÉXITO AL EXPORTAR EXCEL
+═══════════════════════════════════════════════════ */
+
+function ExportSuccessModal({ data, onClose }) {
+  return (
+    <motion.div
+      className="cm-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="cm-modal cm-modal-narrow"
+        initial={{ opacity: 0, y: 32, scale: 0.94 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 16, scale: 0.96 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="cm-close" onClick={onClose} aria-label="Cerrar">
+          <X size={16} />
+        </button>
+
+        {/* Header */}
+        <div className="cm-header">
+          <motion.div
+            className="cm-orb"
+            initial={{ scale: 0, rotate: -20 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: 'spring', stiffness: 220, damping: 14, delay: 0.1 }}
+          >
+            <CheckCircle2 size={30} strokeWidth={2.2} />
+          </motion.div>
+          <h2 className="cm-title">¡Excel Generado!</h2>
+          <p className="cm-subtitle">Reporte descargado en formato oficial SMTO</p>
+        </div>
+
+        {/* File card */}
+        <motion.div
+          className="cm-file-card"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25, type: 'spring', stiffness: 260, damping: 24 }}
+          whileHover={{ y: -2 }}
+        >
+          <div className="cm-file-icon">
+            <FileSpreadsheet size={20} strokeWidth={2} />
+          </div>
+          <div className="cm-file-info">
+            <div className="cm-file-name">{data.filename}</div>
+            <div className="cm-file-meta">
+              {data.registros} {data.registros === 1 ? 'registro' : 'registros'} · {formatBytes(data.sizeBytes)}
+            </div>
+          </div>
+          <motion.div
+            className="cm-file-check"
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ delay: 0.45, type: 'spring', stiffness: 320, damping: 16 }}
+            aria-hidden="true"
+          >
+            <Check size={14} strokeWidth={3} />
+          </motion.div>
+        </motion.div>
+
+        {/* CTA */}
+        <motion.button
+          className="cm-cta"
+          onClick={onClose}
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.98 }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+        >
+          Listo
+        </motion.button>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    APP PRINCIPAL
 ═══════════════════════════════════════════════════ */
 
@@ -717,6 +809,7 @@ export default function App() {
   const [carpetaNombre, setCarpetaNombre] = useState('Ninguna carpeta seleccionada')
   const [alerta,        setAlerta]        = useState(null)
   const [conciliacion,  setConciliacion]  = useState(null)
+  const [exportExito,   setExportExito]   = useState(null)
   const [loading,       setLoading]       = useState(false)
   const [isDragging,    setIsDragging]    = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1126,13 +1219,11 @@ export default function App() {
       }
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
-      const a = Object.assign(document.createElement('a'), {
-        href: url,
-        download: 'Reporte_Gastos_SMTO.xlsx',
-      })
+      const filename = 'Reporte_Gastos_SMTO.xlsx'
+      const a = Object.assign(document.createElement('a'), { href: url, download: filename })
       a.click()
       URL.revokeObjectURL(url)
-      setAlerta('¡Excel generado correctamente! 📊\n\nReporte_Gastos_SMTO.xlsx descargado con todos los datos en el formato oficial SMTO.')
+      setExportExito({ filename, sizeBytes: blob.size, registros: lista.length })
     } catch (err) {
       setAlerta('Error al generar Excel: ' + err.message)
     }
@@ -1327,6 +1418,13 @@ export default function App() {
       <AnimatePresence>
         {conciliacion && (
           <ConciliacionModal data={conciliacion} onClose={() => setConciliacion(null)} />
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL ÉXITO AL EXPORTAR EXCEL (premium glass) ─── */}
+      <AnimatePresence>
+        {exportExito && (
+          <ExportSuccessModal data={exportExito} onClose={() => setExportExito(null)} />
         )}
       </AnimatePresence>
     </div>
