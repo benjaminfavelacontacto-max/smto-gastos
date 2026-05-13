@@ -118,22 +118,22 @@ def build_workbook(gastos):
         ws.row_dimensions[r].height = 18
 
     # ═══ HEADER (rows 4-7) ═══
-    ws.row_dimensions[4].height = 72  # title
-    ws.row_dimensions[5].height = 30  # subtitle
+    ws.row_dimensions[4].height = 80  # title (sized for larger logo)
+    ws.row_dimensions[5].height = 32  # subtitle
     ws.row_dimensions[6].height = 10  # spacer
     ws.row_dimensions[7].height = 1   # hairline separator
 
-    # Title
-    ws.merge_cells('C4:G4')
-    title = ws['C4']
+    # Title — starts at col D so the 72px logo can occupy cols B-C
+    ws.merge_cells('D4:H4')
+    title = ws['D4']
     title.value = 'Reporte de Gastos'
-    title.font = Font(name='Aptos', size=32, bold=True, color=SMTO_BLACK)
+    title.font = Font(name='Aptos', size=30, bold=True, color=SMTO_BLACK)
     title.alignment = Alignment(horizontal='left', vertical='center')
     title.fill = PatternFill('solid', start_color=BG_PAGE)
 
     # Subtitle
-    ws.merge_cells('C5:G5')
-    sub = ws['C5']
+    ws.merge_cells('D5:H5')
+    sub = ws['D5']
     sub.value = 'SMTO Engineering · Análisis Financiero'
     sub.font = Font(name='Aptos', size=13, color=TEXT_SECONDARY)
     sub.alignment = Alignment(horizontal='left', vertical='top')
@@ -361,7 +361,7 @@ def build_workbook(gastos):
     if logo_path:
         try:
             pil = PILImage.open(logo_path)
-            target_h = 50
+            target_h = 72
             ratio = target_h / pil.height
             target_w = int(pil.width * ratio)
             pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
