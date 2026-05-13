@@ -363,21 +363,25 @@ def build_workbook(gastos, colaborador=''):
         monto_usd_raw = round(g.get('montoUSD', 0) or 0, 2)
         tipo_cambio = round(g.get('tipoCambio', 0) or 0, 2)
 
-        # Propina-row fields. OCR tickets matched by validarBanco Pass 0 have
-        # importe/montoUSD that already INCLUDE the tip — so for those rows
-        # we subtract the propina from the main-row display so the new
-        # propina sub-row does not double-count the tip in SUM(I) / SUM(N).
-        # CFDI rows with manual propina keep importe as the pre-tip subtotal
-        # (the SAT XML stores SubTotal pre-tip), so no adjustment is needed.
+        # Propina-row fields. When the gasto has any propina, the main row
+        # shows the NET amount (total − tip) so main_row + propina_sub_row
+        # always sums to the full charge in SUM(I) / SUM(L) / SUM(N).
+        # Basis is totalCFDI − montoPropina (and montoExtranjero −
+        # propinaExtranjero on the foreign side). Both fields are clamped
+        # to ≥ 0.
         propina_mxn = round(g.get('montoPropina', 0) or 0, 2)
         propina_ext = round(g.get('propinaExtranjero', 0) or 0, 2)
         moneda_code = g.get('monedaCodigo') or g.get('moneda') or 'MXN'
-        es_ticket = bool(g.get('esTicket'))
-        if es_ticket and propina_mxn > 0:
-            importe = max(0, round(importe_raw - propina_mxn, 2))
-            monto_usd = max(0, round(monto_usd_raw - propina_ext, 2))
+        total_mxn   = round(g.get('totalCFDI', 0) or 0, 2)
+        monto_ext   = round(g.get('montoExtranjero', 0) or g.get('montoUSD', 0) or 0, 2)
+
+        if propina_mxn > 0 or propina_ext > 0:
+            # Net (without tip) — main row carries this, the propina sub-row
+            # below it carries the tip itself, SUM yields the total charged.
+            importe   = max(0, round(total_mxn - propina_mxn, 2))
+            monto_usd = max(0, round(monto_ext - propina_ext, 2))
         else:
-            importe = importe_raw
+            importe   = importe_raw
             monto_usd = monto_usd_raw
 
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
@@ -561,7 +565,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=15)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v7.16'
+    ft.value = 'SMTO Engineering · v7.18'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
