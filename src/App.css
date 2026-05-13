@@ -778,3 +778,272 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   transition: filter 0.15s;
 }
 .modal-ok:hover { filter: brightness(1.1); }
+
+/* ═══════════════════════════════════════════
+   CONCILIATION MODAL — glass + glow + framer
+═══════════════════════════════════════════ */
+
+/* Backdrop: dark + heavy blur so the app sits behind frosted glass. */
+.cm-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(6, 10, 18, 0.55);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+
+/* Modal shell — translucent dark gradient + cyan-to-indigo accent glow. */
+.cm-modal {
+  position: relative;
+  width: 100%;
+  max-width: 540px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 36px 32px 28px;
+  border-radius: 24px;
+  background:
+    radial-gradient(120% 100% at 0% 0%,   rgba(56, 189, 248, 0.10) 0%, transparent 55%),
+    radial-gradient(120% 100% at 100% 100%, rgba(99, 102, 241, 0.10) 0%, transparent 55%),
+    linear-gradient(180deg, rgba(20, 24, 36, 0.92) 0%, rgba(14, 17, 27, 0.96) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 60px 120px -40px rgba(0, 0, 0, 0.7),
+    0 0 80px -20px rgba(56, 189, 248, 0.35);
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #E8ECF4;
+}
+.cm-modal::-webkit-scrollbar       { width: 8px; }
+.cm-modal::-webkit-scrollbar-track { background: transparent; }
+.cm-modal::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 4px; }
+.cm-modal::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* Close button — top-right, low-emphasis until hover. */
+.cm-close {
+  position: absolute; top: 16px; right: 16px;
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s, transform 0.15s;
+}
+.cm-close:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.92);
+  transform: scale(1.06);
+}
+
+/* Header */
+.cm-header { text-align: center; margin-bottom: 28px; }
+
+/* Animated success orb — gradient pill with a soft pulsing halo. */
+.cm-orb {
+  width: 64px; height: 64px;
+  margin: 0 auto 16px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #10B981 0%, #06B6D4 100%);
+  color: #fff;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 14px 30px -8px rgba(16, 185, 129, 0.55),
+    0 0 60px -10px rgba(6, 182, 212, 0.45);
+  position: relative;
+  z-index: 0;
+}
+.cm-orb::after {
+  content: '';
+  position: absolute; inset: -14px;
+  border-radius: 28px;
+  background: radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.35), transparent 65%);
+  z-index: -1;
+  animation: cm-pulse 2.6s ease-in-out infinite;
+}
+@keyframes cm-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.10); }
+}
+
+.cm-title {
+  font-size: 22px; font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 6px;
+  background: linear-gradient(180deg, #FFFFFF 0%, #C8D1E3 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.cm-subtitle {
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0;
+}
+
+/* KPI grid — 3 cards above, labels in a single row below for tighter rhythm. */
+.cm-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.cm-kpi-labels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.cm-kpi-labels span {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.cm-kpi {
+  position: relative;
+  padding: 18px 16px 16px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.015) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+.cm-kpi::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 16px;
+  background: radial-gradient(100% 60% at 50% 0%, var(--kpi-glow) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.cm-kpi:hover::before { opacity: 1; }
+.cm-kpi:hover         { border-color: rgba(255, 255, 255, 0.14); }
+.cm-kpi-blue   { --kpi-glow: rgba(59, 130, 246, 0.22); }
+.cm-kpi-green  { --kpi-glow: rgba(16, 185, 129, 0.22); }
+.cm-kpi-purple { --kpi-glow: rgba(168, 85, 247, 0.22); }
+
+.cm-kpi-icon {
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  margin-bottom: 12px;
+}
+.cm-kpi-blue   .cm-kpi-icon { color: #60A5FA; background: rgba(59,130,246, 0.10);  border: 1px solid rgba(59,130,246, 0.18); }
+.cm-kpi-green  .cm-kpi-icon { color: #34D399; background: rgba(16,185,129, 0.10);  border: 1px solid rgba(16,185,129, 0.18); }
+.cm-kpi-purple .cm-kpi-icon { color: #C084FC; background: rgba(168,85,247, 0.10);  border: 1px solid rgba(168,85,247, 0.18); }
+
+.cm-kpi-value {
+  font-size: 28px; font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: #F1F1F3;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sections — warn (amber) and neutral (gray) variants share a base. */
+.cm-section { margin-bottom: 18px; }
+.cm-section-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+.cm-section-header.cm-warn    { color: #FBBF24; }
+.cm-section-header.cm-neutral { color: rgba(255, 255, 255, 0.55); }
+
+.cm-count-pill {
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.cm-count-pill.cm-warn    { background: rgba(251, 191, 36, 0.12); color: #FBBF24; }
+.cm-count-pill.cm-neutral { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.75); }
+
+.cm-alert-list {
+  display: flex; flex-direction: column;
+  gap: 6px;
+}
+.cm-alert {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.06) 0%, rgba(251, 191, 36, 0.02) 100%);
+  border: 1px solid rgba(251, 191, 36, 0.10);
+}
+.cm-alert-date {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.5);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+}
+.cm-alert-desc {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-alert-amount {
+  font-size: 13px;
+  font-weight: 600;
+  color: #FCD34D;
+  font-variant-numeric: tabular-nums;
+}
+.cm-more {
+  padding: 6px 14px 2px;
+  text-align: center;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.02em;
+}
+
+/* CTA — blue gradient with a soft glow that intensifies on hover. */
+.cm-cta {
+  display: block; width: 100%;
+  padding: 14px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #3B82F6 0%, #2563EB 100%);
+  color: #fff;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14.5px; font-weight: 600;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 10px 30px -6px rgba(59, 130, 246, 0.45);
+  transition: box-shadow 0.22s ease, transform 0.15s ease;
+}
+.cm-cta:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.20),
+    0 16px 36px -8px rgba(59, 130, 246, 0.60),
+    0 0 28px 0 rgba(59, 130, 246, 0.32);
+}
+.cm-cta:active { transform: scale(0.99); }
+
+/* Responsive — stack KPIs and shrink padding on narrow viewports. */
+@media (max-width: 520px) {
+  .cm-modal       { padding: 28px 22px 22px; border-radius: 20px; }
+  .cm-kpi-grid,
+  .cm-kpi-labels  { grid-template-columns: 1fr; }
+  .cm-kpi-labels span { text-align: left; }
+  .cm-alert       { grid-template-columns: 64px 1fr auto; padding: 10px 12px; }
+  .cm-title       { font-size: 20px; }
+}
+

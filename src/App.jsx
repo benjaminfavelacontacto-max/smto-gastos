@@ -1,5 +1,7 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import JSZip from 'jszip'
+import { motion, AnimatePresence } from 'framer-motion'
+import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText } from 'lucide-react'
 
 const TIPOS_GASTO = [
   'Aduana','Avión','Avión Ventas','Casetas','Casetas Ventas','Celular','COGS',
@@ -532,6 +534,181 @@ function GastoRow({ g, upd, openPDF }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MODAL DE CONCILIACIÓN (glass + framer-motion)
+═══════════════════════════════════════════════════ */
+
+// Eased count-up — drives the big KPI numbers from 0 → target on mount.
+function useCountUp(target, duration = 900) {
+  const [v, setV] = useState(0)
+  useEffect(() => {
+    let raf, start
+    const step = t => {
+      if (start === undefined) start = t
+      const p = Math.min((t - start) / duration, 1)
+      const eased = 1 - Math.pow(1 - p, 3)  // ease-out cubic
+      setV(target * eased)
+      if (p < 1) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target, duration])
+  return v
+}
+
+function KpiCard({ variants, accent, Icon, value }) {
+  return (
+    <motion.div
+      className={`cm-kpi cm-kpi-${accent}`}
+      variants={variants}
+      whileHover={{ y: -3, scale: 1.02 }}
+      transition={{ type: 'spring', stiffness: 260, damping: 20 }}
+    >
+      <div className="cm-kpi-icon"><Icon size={16} strokeWidth={2.2} /></div>
+      <div className="cm-kpi-value">{Math.round(value)}</div>
+    </motion.div>
+  )
+}
+
+function ConciliacionModal({ data, onClose }) {
+  const cBanco    = useCountUp(data.bancoRows)
+  const cMatches  = useCountUp(data.matches)
+  const cPropinas = useCountUp(data.propinas)
+
+  const stagger = {
+    hidden: { opacity: 0 },
+    show:   { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.15 } },
+  }
+  const item = {
+    hidden: { opacity: 0, y: 14 },
+    show:   { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 240, damping: 22 } },
+  }
+
+  return (
+    <motion.div
+      className="cm-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="cm-modal"
+        initial={{ opacity: 0, y: 32, scale: 0.94 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 16, scale: 0.96 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="cm-close" onClick={onClose} aria-label="Cerrar">
+          <X size={16} />
+        </button>
+
+        {/* Header */}
+        <div className="cm-header">
+          <motion.div
+            className="cm-orb"
+            initial={{ scale: 0, rotate: -20 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: 'spring', stiffness: 220, damping: 14, delay: 0.1 }}
+          >
+            <CheckCircle2 size={30} strokeWidth={2.2} />
+          </motion.div>
+          <h2 className="cm-title">Conciliación Terminada</h2>
+          <p className="cm-subtitle">
+            Procesamos {data.bancoRows} {data.bancoRows === 1 ? 'cargo' : 'cargos'} del estado de cuenta
+          </p>
+        </div>
+
+        {/* KPI grid */}
+        <motion.div className="cm-kpi-grid" variants={stagger} initial="hidden" animate="show">
+          <KpiCard variants={item} accent="blue"   Icon={CreditCard} value={cBanco} />
+          <KpiCard variants={item} accent="green"  Icon={Target}     value={cMatches} />
+          <KpiCard variants={item} accent="purple" Icon={Sparkles}   value={cPropinas} />
+        </motion.div>
+        <motion.div
+          className="cm-kpi-labels"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4 }}
+        >
+          <span>Cargos en banco</span>
+          <span>Matches exitosos</span>
+          <span>Propinas detectadas</span>
+        </motion.div>
+
+        {/* Cargos sin factura */}
+        {data.sinFactura.length > 0 && (
+          <motion.section
+            className="cm-section"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.45 }}
+          >
+            <div className="cm-section-header cm-warn">
+              <AlertTriangle size={14} strokeWidth={2.4} />
+              <span>Cargos sin factura</span>
+              <span className="cm-count-pill cm-warn">{data.sinFactura.length}</span>
+            </div>
+            <div className="cm-alert-list">
+              {data.sinFactura.slice(0, 8).map((s, i) => (
+                <motion.div
+                  key={i}
+                  className="cm-alert"
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.5 + i * 0.04, type: 'spring', stiffness: 280, damping: 24 }}
+                >
+                  <div className="cm-alert-date">{formatDateDisplay(s.fecha)}</div>
+                  <div className="cm-alert-desc" title={s.descripcion || ''}>
+                    {s.descripcion || 'Sin descripción'}
+                  </div>
+                  <div className="cm-alert-amount">
+                    ${s.monto.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </motion.div>
+              ))}
+              {data.sinFactura.length > 8 && (
+                <div className="cm-more">+{data.sinFactura.length - 8} más</div>
+              )}
+            </div>
+          </motion.section>
+        )}
+
+        {/* Facturas sin cargo */}
+        {data.facturasSinCargo > 0 && (
+          <motion.section
+            className="cm-section"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.55 }}
+          >
+            <div className="cm-section-header cm-neutral">
+              <FileText size={14} strokeWidth={2.4} />
+              <span>Facturas sin cargo en banco</span>
+              <span className="cm-count-pill cm-neutral">{data.facturasSinCargo}</span>
+            </div>
+          </motion.section>
+        )}
+
+        {/* CTA */}
+        <motion.button
+          className="cm-cta"
+          onClick={onClose}
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.98 }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.62 }}
+        >
+          Listo
+        </motion.button>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    APP PRINCIPAL
 ═══════════════════════════════════════════════════ */
 
@@ -539,6 +716,7 @@ export default function App() {
   const [lista,         setLista]         = useState([])
   const [carpetaNombre, setCarpetaNombre] = useState('Ninguna carpeta seleccionada')
   const [alerta,        setAlerta]        = useState(null)
+  const [conciliacion,  setConciliacion]  = useState(null)
   const [loading,       setLoading]       = useState(false)
   const [isDragging,    setIsDragging]    = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -850,24 +1028,13 @@ export default function App() {
     }
 
     setLista(nl)
-    const divider = '──────────────────────'
-    const sinFacturaList = sinFactura.slice(0, 20)
-      .map(s => `  • ${formatDateDisplay(s.fecha)} — ${fmtMoney(s.monto)}${s.descripcion ? ' — ' + s.descripcion : ''}`)
-      .join('\n')
-    const extra = sinFactura.length > 20
-      ? `\n  ...y ${sinFactura.length - 20} más`
-      : ''
-    setAlerta(
-      `✅ Conciliación Terminada\n\n` +
-      `💳 Cargos en Banco: ${bancoRows}\n` +
-      `🎯 Matches exitosos: ${matches}\n` +
-      `🪄 Propinas detectadas: ${propinas}\n\n` +
-      `${divider}\n` +
-      `⚠️ CARGOS SIN FACTURA: ${bancoRows - matches}` +
-      (sinFacturaList ? `\n${sinFacturaList}${extra}` : '') +
-      `\n\n${divider}\n` +
-      `📋 Facturas SIN cargo en banco: ${nl.length - matches}`
-    )
+    setConciliacion({
+      bancoRows,
+      matches,
+      propinas,
+      sinFactura,
+      facturasSinCargo: nl.length - matches,
+    })
     e.target.value = ''
   }
 
@@ -1145,7 +1312,7 @@ export default function App() {
         )}
       </div>
 
-      {/* ─── MODAL ALERTA ─── */}
+      {/* ─── MODAL ALERTA (texto simple — usado por copy/export/PDF) ─── */}
       {alerta && (
         <div className="overlay" onClick={() => setAlerta(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1155,6 +1322,13 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ─── MODAL CONCILIACIÓN BANCARIA (premium glass) ─── */}
+      <AnimatePresence>
+        {conciliacion && (
+          <ConciliacionModal data={conciliacion} onClose={() => setConciliacion(null)} />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
