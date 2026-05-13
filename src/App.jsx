@@ -1,6 +1,37 @@
 import { useState, useRef, useMemo } from 'react'
 import JSZip from 'jszip'
 
+const TIPOS_GASTO = [
+  'Aduana','Avión','Avión Ventas','Casetas','Casetas Ventas','Celular','COGS',
+  'Consumo','Consumo Viáticos','Devolución','Envios','Estacionamiento',
+  'Estacionamiento Ventas','Gasolina','Gasolina Ventas','Gasolina Ventas Viáticos',
+  'Gasolina Viáticos','Gastos Rep','Gastos Rep Ventas','Gastos Rep Viáticos',
+  'Herramientas','Hotel','Hotel Ventas','IT & SW','Manto Auto','Marketing',
+  'No Comprobado','Papelería','PC','Rechazada','Renta Auto','Renta Oficina',
+  'Taxi','Taxi Ventas','Traspaso','Uniformes'
+]
+
+const autoDetectTipo = (descripcion) => {
+  const d = (descripcion || '').toLowerCase()
+  if (d.includes('hotel') || d.includes('hospedaje')) return 'Hotel'
+  if (d.includes('vuelo') || d.includes('avion') || d.includes('tarifa aerea')) return 'Avión'
+  if (d.includes('taxi') || d.includes('uber') || d.includes('didi')) return 'Taxi'
+  if (d.includes('gasolina') || d.includes('combustible')) return 'Gasolina'
+  if (d.includes('caseta') || d.includes('autopista') || d.includes('peaje')) return 'Casetas'
+  if (d.includes('renta') && (d.includes('auto') || d.includes('veh'))) return 'Renta Auto'
+  if (d.includes('renta') && (d.includes('oficina') || d.includes('local'))) return 'Renta Oficina'
+  if (d.includes('estacionamiento') || d.includes('parking')) return 'Estacionamiento'
+  if (d.includes('celular') || d.includes('telefon') || d.includes('telcel')) return 'Celular'
+  if (d.includes('herramienta') || d.includes('ferreteria')) return 'Herramientas'
+  if (d.includes('software') || d.includes('licencia') || d.includes('suscripci')) return 'IT & SW'
+  if (d.includes('marketing') || d.includes('publicidad')) return 'Marketing'
+  if (d.includes('uniforme')) return 'Uniformes'
+  if (d.includes('envio') || d.includes('paquete') || d.includes('flete') || d.includes('dhl') || d.includes('fedex')) return 'Envios'
+  if (d.includes('aduana')) return 'Aduana'
+  if (d.includes('mantenimiento')) return 'Manto Auto'
+  return 'Consumo'
+}
+
 /* Single source of truth for table columns.
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
 const COLUMNS = [
@@ -125,7 +156,8 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const descripcionRaw = conceptoEl ? (ga(conceptoEl, 'Descripcion', 'descripcion') || '') : ''
   // Title-case so ALL-CAPS or all-lowercase descriptions render naturally.
   const toTitleCase = str => str.toLowerCase().replace(/(?:^|\s|\/|-)\S/g, c => c.toUpperCase())
-  const concepto = toTitleCase(descripcionRaw.split(/[\n\r]/)[0].trim().slice(0, 80) || 'Consumo')
+  const descripcionFirstLine = descripcionRaw.split(/[\n\r]/)[0].trim()
+  const concepto = toTitleCase(descripcionFirstLine.slice(0, 80) || 'Consumo')
 
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
@@ -259,9 +291,6 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
   const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
-  const tipoComp = ga(comp, 'TipoDeComprobante', 'tipoDeComprobante') || 'I'
-  const tipoMap  = { I: 'Ingreso', E: 'Egreso', T: 'Traslado', N: 'Nómina', P: 'Pago' }
-  const tipo     = tipoMap[tipoComp] || 'Factura'
   return {
     id: genId(),
     rfc,
@@ -269,7 +298,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
     fechaFac,
     concepto:   conceptoClasif,
-    tipo,
+    tipo: autoDetectTipo(descripcionFirstLine),
     importe,
     iva,
     isrTrasladado,
@@ -437,9 +466,18 @@ function GastoRow({ g, upd, openPDF }) {
         <input className="cell-in is-dim" value={g.concepto} onChange={e => upd('concepto', e.target.value)} />
       </td>
 
-      {/* Tipo — CFDI TipoDeComprobante (Ingreso/Egreso/...) or 'Factura' for manual rows */}
+      {/* Tipo — categoría de gasto auto-detectada del XML, editable vía dropdown */}
       <td>
-        <input className="cell-in" value={g.tipo || ''} onChange={e => upd('tipo', e.target.value)} />
+        <select
+          className="cell-select"
+          value={g.tipo || ''}
+          onChange={e => upd('tipo', e.target.value)}
+        >
+          <option value="">— Tipo —</option>
+          {TIPOS_GASTO.map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
       </td>
 
       {/* Subtotal */}
