@@ -1,5 +1,7 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "framework": "vite"
+  "functions": {
+    "api/export-excel.py": {
+      "runtime": "@vercel/python@4.3.1"
+    }
+  }
 }
