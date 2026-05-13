@@ -1279,13 +1279,111 @@ function DropSuccessModal({ data, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: PREMIUM MODAL (reusable info / confirm)
+═══════════════════════════════════════════════════ */
+
+// Reusable success / warning / error modal. Replaces the old plain-text
+// `setAlerta` modal plus native window.confirm. Specific premium modals
+// (Conciliacion / Export / Import / Drop) are richer experiences with
+// count-up animations and stat grids; this is the workhorse for everything
+// else (errors, confirmations, simple successes).
+function PremiumModal({ open, type, title, subtitle, stats, primaryLabel, secondaryLabel, onPrimary, onSecondary, children }) {
+  if (!open) return null
+
+  const isSuccess = type === 'success'
+  const isWarning = type === 'warning'
+  const isError   = type === 'error'
+
+  const accentColor = isSuccess ? '#59D39B'
+    : isWarning ? '#f59e0b'
+    : isError   ? '#ef4444'
+    : '#3b82f6'
+  const accentBg = isSuccess ? 'rgba(89,211,155,0.12)'
+    : isWarning ? 'rgba(245,158,11,0.12)'
+    : isError   ? 'rgba(239,68,68,0.12)'
+    : 'rgba(59,130,246,0.12)'
+
+  return (
+    <div className="premium-overlay" onClick={onSecondary}>
+      <div className="premium-modal" onClick={e => e.stopPropagation()}>
+        <div
+          className="premium-icon-wrap"
+          style={{ background: accentBg, boxShadow: `0 0 40px ${accentColor}30` }}
+        >
+          {isSuccess && (
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2.5" className="premium-check">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          )}
+          {isWarning && (
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2.5">
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          )}
+          {isError && (
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2.5">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+          )}
+        </div>
+
+        <h2 className="premium-title">{title}</h2>
+        {subtitle && <p className="premium-subtitle">{subtitle}</p>}
+
+        {stats && stats.length > 0 && (
+          <div className="premium-stats">
+            {stats.map((s, i) => (
+              <div key={i} className="premium-stat-card" style={{ animationDelay: `${i * 80}ms` }}>
+                <div className="premium-stat-value" style={{ color: s.color || accentColor }}>{s.value}</div>
+                <div className="premium-stat-label">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {children}
+
+        <div className="premium-actions">
+          {secondaryLabel && (
+            <button className="premium-btn-secondary" onClick={onSecondary}>
+              {secondaryLabel}
+            </button>
+          )}
+          {primaryLabel && (
+            <button
+              className="premium-btn-primary"
+              style={{
+                background: `linear-gradient(135deg, ${accentColor}, ${accentColor}dd)`,
+                boxShadow: `0 8px 24px ${accentColor}40`,
+              }}
+              onClick={onPrimary}
+            >
+              {primaryLabel}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    APP PRINCIPAL
 ═══════════════════════════════════════════════════ */
 
 export default function App() {
   const [lista,         setLista]         = useState([])
   const [carpetaNombre, setCarpetaNombre] = useState('Ninguna carpeta seleccionada')
-  const [alerta,        setAlerta]        = useState(null)
+  // Reusable premium modal for info / warning / error / confirm flows.
+  // Replaces the old setAlerta plain-text modal + window.confirm dialogs.
+  // Specific success modals (Conciliacion / Export / Import / Drop) keep
+  // their own state because they need richer affordances (count-up
+  // animations, sin-factura lists, KPI cards, etc.).
+  const [modal,         setModal]         = useState(null)
   const [conciliacion,  setConciliacion]  = useState(null)
   const [exportExito,   setExportExito]   = useState(null)
   const [colaborador,   setColaborador]   = useState(null)
@@ -1307,6 +1405,19 @@ export default function App() {
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
+
+  // ── PremiumModal helpers ──
+  const showModal  = (config) => setModal(config)
+  const closeModal = () => setModal(null)
+  // Promise-wrapped confirm: await askConfirm({...}) returns true on
+  // primary click, false on secondary / overlay click.
+  const askConfirm = (config) => new Promise(resolve => {
+    setModal({
+      ...config,
+      onPrimary:   () => { resolve(true);  setModal(null) },
+      onSecondary: () => { resolve(false); setModal(null) },
+    })
+  })
 
   // ── Métricas (cards en el encabezado de la tabla) ──
   const metrics = useMemo(() => {
@@ -1591,12 +1702,19 @@ export default function App() {
     // spending money. Errors per file route through the plain alerta modal.
     const ocrFiles = [...unmatchedPDFs, ...imageFiles]
     if (ocrFiles.length > 0) {
-      const userConfirmed = window.confirm(
-        `Se detectaron ${ocrFiles.length} archivo(s) sin XML:\n\n` +
-        ocrFiles.map(f => `• ${f.name}`).join('\n') +
-        `\n\n⚡ ¿Procesarlos con OCR (IA)?\n` +
-        `Costo estimado: ~$${(ocrFiles.length * 0.01).toFixed(2)} USD`
-      )
+      const userConfirmed = await askConfirm({
+        type: 'warning',
+        title: 'Procesar archivos sin XML',
+        subtitle: ocrFiles.length === 1
+          ? `Se detectó 1 archivo sin XML: ${ocrFiles[0].name}`
+          : `Se detectaron ${ocrFiles.length} archivos sin XML.`,
+        stats: [
+          { value: ocrFiles.length, label: 'Archivos OCR' },
+          { value: `~$${(ocrFiles.length * 0.01).toFixed(2)}`, label: 'Costo estimado' },
+        ],
+        primaryLabel: 'Procesar con IA',
+        secondaryLabel: 'Cancelar',
+      })
 
       if (userConfirmed) {
         setOcrLoading(true)
@@ -1620,7 +1738,12 @@ export default function App() {
             }
           } catch (err) {
             console.warn('OCR error:', file.name, err)
-            setAlerta(`Error procesando ${file.name}: ${err.message}`)
+            showModal({
+              type: 'error',
+              title: 'Error de OCR',
+              subtitle: `${file.name}\n\n${err.message}`,
+              primaryLabel: 'Entendido',
+            })
           }
         }
         setOcrLoading(false)
@@ -1632,7 +1755,12 @@ export default function App() {
     // failed, exit silently (the user already knows).
     if (allNewGastos.length === 0) {
       if (xmlFiles.length === 0 && ocrFiles.length === 0) {
-        setAlerta('Solo se aceptan archivos XML, PDF, JPG, PNG o WEBP.')
+        showModal({
+          type: 'warning',
+          title: 'Archivo no soportado',
+          subtitle: 'Solo se aceptan archivos XML, PDF, JPG, PNG o WEBP.',
+          primaryLabel: 'Entendido',
+        })
       }
       return
     }
@@ -1981,8 +2109,18 @@ export default function App() {
       return [r, p]
     })
     navigator.clipboard.writeText(hdr + rows.join(''))
-      .then(() => setAlerta('¡Copiado al portapapeles! 🎉\n\nVe a tu Excel, haz clic en la celda donde quieres los datos y presiona Ctrl+V (o Cmd+V en Mac) para pegar.'))
-      .catch(() => setAlerta('Error al copiar. Verifica los permisos del navegador.'))
+      .then(() => showModal({
+        type: 'success',
+        title: '¡Copiado al portapapeles!',
+        subtitle: 'Ve a tu Excel, haz clic en la celda donde quieres los datos y presiona Ctrl+V (o Cmd+V en Mac) para pegar.',
+        primaryLabel: 'OK',
+      }))
+      .catch(() => showModal({
+        type: 'error',
+        title: 'No se pudo copiar',
+        subtitle: 'Verifica los permisos del navegador.',
+        primaryLabel: 'Entendido',
+      }))
   }
 
   // ── Exportar ZIP con CSV + archivos renombrados ──
@@ -2124,17 +2262,28 @@ export default function App() {
       }
 
       if (gastos.length === 0) {
-        setAlerta('No se encontraron registros válidos en el archivo Excel.')
+        showModal({
+          type: 'warning',
+          title: 'Archivo vacío',
+          subtitle: 'No se encontraron registros válidos en el archivo Excel.',
+          primaryLabel: 'Entendido',
+        })
         return
       }
 
-      // Ask user: append or replace.
-      const action = window.confirm(
-        `Se encontraron ${gastos.length} registros en el Excel.\n\n` +
-        `¿Deseas AGREGAR a los ${lista.length} registros actuales?\n\n` +
-        `OK = Agregar al reporte actual\n` +
-        `Cancelar = Reemplazar todo`
-      )
+      // Ask user: append or replace. Primary = append, secondary = replace
+      // (matches the old window.confirm pattern where Cancel meant replace).
+      const action = await askConfirm({
+        type: 'warning',
+        title: 'Importar al reporte',
+        subtitle: `Se encontraron ${gastos.length} registros en el archivo.`,
+        stats: [
+          { value: gastos.length, label: 'Encontrados' },
+          { value: lista.length,  label: 'Actuales' },
+        ],
+        primaryLabel: 'Agregar al actual',
+        secondaryLabel: 'Reemplazar todo',
+      })
 
       // Tag every imported row as isNew so each one picks up the green-flash
       // row-fade-in animation; flag is cleared after the animation settles.
@@ -2146,8 +2295,8 @@ export default function App() {
         setLista(tagged)
       }
 
-      // Premium success modal (count-up + progress bar + glow). Replaces the
-      // plain-text alerta success line; errors still route through setAlerta.
+      // Premium success modal (count-up + progress bar + glow). Errors
+      // still route through the generic PremiumModal via showModal().
       setImportSummary({
         added: gastos.length,
         total: action ? lista.length + gastos.length : gastos.length,
@@ -2162,7 +2311,12 @@ export default function App() {
         setLista(prev => prev.map(g => g.isNew ? { ...g, isNew: false } : g))
       }, 1000)
     } catch (err) {
-      setAlerta('Error al importar Excel: ' + err.message)
+      showModal({
+        type: 'error',
+        title: 'Error al importar Excel',
+        subtitle: err.message,
+        primaryLabel: 'Entendido',
+      })
     }
   }
 
@@ -2173,7 +2327,7 @@ export default function App() {
   const exportarExcel = async () => {
     if (!lista.length) return
     try {
-      setAlerta(null)
+      closeModal()
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2182,9 +2336,19 @@ export default function App() {
       if (!response.ok) {
         try {
           const errData = await response.json()
-          setAlerta('Error al generar Excel:\n\n' + (errData.error || response.status) + '\n\n' + (errData.trace || '').slice(0, 300))
+          showModal({
+            type: 'error',
+            title: 'Error al generar Excel',
+            subtitle: (errData.error || `API error ${response.status}`) + (errData.trace ? `\n\n${(errData.trace || '').slice(0, 300)}` : ''),
+            primaryLabel: 'Entendido',
+          })
         } catch {
-          setAlerta('Error al generar Excel: API error ' + response.status)
+          showModal({
+            type: 'error',
+            title: 'Error al generar Excel',
+            subtitle: `API error ${response.status}`,
+            primaryLabel: 'Entendido',
+          })
         }
         return
       }
@@ -2202,7 +2366,12 @@ export default function App() {
         Icon: FileSpreadsheet,
       })
     } catch (err) {
-      setAlerta('Error al generar Excel: ' + err.message)
+      showModal({
+        type: 'error',
+        title: 'Error al generar Excel',
+        subtitle: err.message,
+        primaryLabel: 'Entendido',
+      })
     }
   }
 
@@ -2212,9 +2381,19 @@ export default function App() {
     try {
       const url = URL.createObjectURL(pdfFile)
       const win = window.open(url, '_blank')
-      if (!win) setAlerta('No se pudo abrir el PDF.\n\nVerifica que el navegador permita ventanas emergentes para este sitio.')
+      if (!win) showModal({
+        type: 'warning',
+        title: 'No se pudo abrir el PDF',
+        subtitle: 'Verifica que el navegador permita ventanas emergentes para este sitio.',
+        primaryLabel: 'Entendido',
+      })
     } catch (err) {
-      setAlerta(`Error al abrir el PDF:\n\n${err && err.message ? err.message : String(err)}`)
+      showModal({
+        type: 'error',
+        title: 'Error al abrir el PDF',
+        subtitle: err && err.message ? err.message : String(err),
+        primaryLabel: 'Entendido',
+      })
     }
   }
 
@@ -2236,7 +2415,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.11</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.13</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -2445,15 +2624,25 @@ export default function App() {
         )}
       </div>
 
-      {/* ─── MODAL ALERTA (texto simple — usado por copy/export/PDF) ─── */}
-      {alerta && (
-        <div className="overlay" onClick={() => setAlerta(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Resultado</div>
-            <pre className="modal-body">{alerta}</pre>
-            <button className="modal-ok" onClick={() => setAlerta(null)}>OK</button>
-          </div>
-        </div>
+      {/* ─── PREMIUM MODAL (info / warning / error / confirm) ─── */}
+      {modal && (
+        <PremiumModal
+          open={true}
+          type={modal.type || 'success'}
+          title={modal.title}
+          subtitle={modal.subtitle}
+          stats={modal.stats}
+          primaryLabel={modal.primaryLabel || 'Continuar'}
+          secondaryLabel={modal.secondaryLabel}
+          onPrimary={() => {
+            if (modal.onPrimary) modal.onPrimary()
+            else closeModal()
+          }}
+          onSecondary={() => {
+            if (modal.onSecondary) modal.onSecondary()
+            else closeModal()
+          }}
+        />
       )}
 
       {/* ─── MODAL CONCILIACIÓN BANCARIA (premium glass) ─── */}
