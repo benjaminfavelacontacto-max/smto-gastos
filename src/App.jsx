@@ -649,7 +649,9 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
         </span>
       </td>
 
-      {/* Monto USD — editing it auto-derives Tipo de Cambio from totalCFDI. */}
+      {/* Monto USD — editing it auto-derives Tipo de Cambio from totalCFDI.
+          When Pass 0 of validarBanco detects a foreign-currency tip on a
+          matched ticket, it surfaces here as a small green subtitle. */}
       <td>
         <input
           type="number"
@@ -666,6 +668,11 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
             upd('tipoCambio', tc)
           }}
         />
+        {g.propinaExtranjero > 0 && (
+          <div className="propina-extranjera-hint" title="Propina detectada en moneda extranjera">
+            💵 +${g.propinaExtranjero.toFixed(2)} propina
+          </div>
+        )}
       </td>
 
       {/* Tipo de Cambio — manual override (or auto-set when Monto USD changes). */}
@@ -784,11 +791,11 @@ function ConciliacionModal({ data, onClose }) {
           <p className="cm-subtitle">
             Procesamos {data.bancoRows} {data.bancoRows === 1 ? 'cargo' : 'cargos'} del estado de cuenta
           </p>
-          {(data.ticketsMatched > 0 || data.usdMatched > 0) && (
+          {(data.ticketsMatched > 0 || data.foreignMatched > 0) && (
             <p className="cm-subtitle cm-subtitle-extra">
               {[
                 data.ticketsMatched > 0 && `🎯 ${data.ticketsMatched} ticket${data.ticketsMatched === 1 ? '' : 's'} por código de autorización`,
-                data.usdMatched > 0 && `💵 ${data.usdMatched} USD con T/C automático`,
+                data.foreignMatched > 0 && `💵 ${data.foreignMatched} en moneda extranjera vinculada${data.foreignMatched === 1 ? '' : 's'}`,
               ].filter(Boolean).join(' · ')}
             </p>
           )}
@@ -1462,7 +1469,8 @@ export default function App() {
     }
     const parsed = await response.json()
     const uuid = crypto.randomUUID()
-    const isUSD = parsed.moneda === 'USD'
+    const monedaCode = (parsed.moneda || 'MXN').toString().toUpperCase()
+    const isExtranjera = !!monedaCode && monedaCode !== 'MXN'
     const today = new Date().toISOString().slice(0, 10)
     const subtotal = Number(parsed.subtotal) || 0
     const iva = Number(parsed.iva) || 0
@@ -1482,15 +1490,18 @@ export default function App() {
       fechaFac: parsed.fecha || today,
       concepto: parsed.concepto || '',
       tipo: autoDetectTipo(parsed.concepto || '', colaborador?.categoria),
-      importe: isUSD ? 0 : subtotal,
-      iva: isUSD ? 0 : iva,
-      isrTrasladado: 0,
-      retencionISR: 0,
-      retencionIVA: 0,
-      retenciones: 0,
-      totalCFDI: isUSD ? 0 : total,
+      // For foreign-currency tickets leave the MXN side at 0 — Pass 0 of
+      // validarBanco will fill it from the bank statement's "Monto en MXN"
+      // column once the authorization code matches.
+      importe:        isExtranjera ? 0 : subtotal,
+      iva:            isExtranjera ? 0 : iva,
+      isrTrasladado:  0,
+      retencionISR:   0,
+      retencionIVA:   0,
+      retenciones:    0,
+      totalCFDI:      isExtranjera ? 0 : total,
       propinaPorcentaje: 0,
-      montoPropina: isUSD ? 0 : propina,
+      montoPropina:   isExtranjera ? 0 : propina,
       fechaCobro: parsed.fecha || today,
       formaPago: parsed.formaPago || '04',
       uuid,
@@ -1499,9 +1510,17 @@ export default function App() {
       xmlFile: null,
       hizoMatch: false,
       validado: false,
-      montoUSD: isUSD ? total : 0,
-      tipoCambio: 0,
-      moneda: isUSD ? 'USD' : 'MXN',
+      // Foreign-currency-aware fields. montoExtranjero / propinaExtranjero
+      // generalize the older USD-only fields; we keep montoUSD/moneda in
+      // sync so the existing MONTO USD table column, USD KPI card, badge
+      // and Excel export keep working without a wider refactor.
+      montoExtranjero:    isExtranjera ? total   : 0,
+      propinaExtranjero:  isExtranjera ? propina : 0,
+      monedaCodigo:       monedaCode,
+      esMonedaExtranjera: isExtranjera,
+      montoUSD:           isExtranjera ? total : 0,
+      tipoCambio:         0,
+      moneda:             monedaCode,
       // Flag OCR-derived rows so validarBanco's Pass 0 can match them by
       // authorization code against the Clara bank statement.
       esTicket: true,
@@ -1789,13 +1808,14 @@ export default function App() {
     }
 
     // Pass 0 — TICKET (OCR-derived) rows match the bank statement's
-    // "Código de autorización" against their noFactura. When the bank
-    // currency is USD we auto-fill montoUSD + tipoCambio from the MXN side,
-    // because Clara already charged the user in MXN at its own rate. Other
-    // ticket cases (MXN cards) just stamp totalCFDI/importe from the bank
-    // row so the user doesn't have to retype it.
-    let ticketsMatched = 0
-    let usdMatched = 0
+    // "Código de autorización" against their noFactura. Generalized to any
+    // foreign currency (not just USD): when bank moneda != 'MXN' we fill
+    // importe/totalCFDI from the MXN side, derive tipoCambio = MXN÷foreign,
+    // and detect a foreign-currency tip from the delta between the bank's
+    // recorded foreign total and the OCR'd ticket subtotal (if the delta
+    // sits in the typical 5–35% tip window).
+    let ticketsMatched  = 0
+    let foreignMatched  = 0
     for (const row of csvRows) {
       if (row.matched) continue
       if (!row.autorizacion) continue
@@ -1809,15 +1829,36 @@ export default function App() {
       nl[idx].hizoMatch  = true
       nl[idx].fechaCobro = formatCobro(row.dCSV)
       nl[idx].formaPago  = '04'
-      if (row.moneda === 'USD' && row.montoUSD > 0) {
-        nl[idx].montoUSD    = row.montoUSD
-        nl[idx].totalCFDI   = row.montoMXN
-        nl[idx].importe     = row.montoMXN
-        nl[idx].tipoCambio  = row.montoMXN > 0
-          ? +(row.montoMXN / row.montoUSD).toFixed(2)
+
+      const isExtranjera = row.moneda && row.moneda !== 'MXN' && row.montoUSD > 0
+      if (isExtranjera) {
+        nl[idx].monedaCodigo       = row.moneda
+        nl[idx].moneda             = row.moneda  // keep legacy field in sync
+        nl[idx].esMonedaExtranjera = true
+        nl[idx].importe   = row.montoMXN
+        nl[idx].totalCFDI = row.montoMXN
+        nl[idx].tipoCambio = row.montoUSD > 0
+          ? +(row.montoMXN / row.montoUSD).toFixed(4)
           : 0
-        nl[idx].moneda      = 'USD'
-        usdMatched++
+
+        // Propina detection in foreign currency: bank's foreign total > OCR'd
+        // ticket total → the delta IS the tip (sanity-checked 5–35%).
+        const ticketTotal = nl[idx].montoExtranjero || 0
+        if (row.montoUSD > ticketTotal && ticketTotal > 0) {
+          const tipDetected = +(row.montoUSD - ticketTotal).toFixed(2)
+          const tipPct = (tipDetected / ticketTotal) * 100
+          if (tipPct >= 5 && tipPct <= 35) {
+            nl[idx].propinaExtranjero = tipDetected
+            // Mirror into the MXN propina field via tipoCambio so the
+            // existing Prop $ / Prop % cells light up too.
+            nl[idx].montoPropina = +(tipDetected * nl[idx].tipoCambio).toFixed(2)
+            nl[idx].propinaPorcentaje = +tipPct.toFixed(2)
+          }
+        }
+        // After-tip foreign total goes into both the new and legacy fields.
+        nl[idx].montoExtranjero = row.montoUSD
+        nl[idx].montoUSD        = row.montoUSD
+        foreignMatched++
       } else if (row.montoMXN > 0) {
         nl[idx].totalCFDI = row.montoMXN
         nl[idx].importe   = row.montoMXN
@@ -1891,6 +1932,11 @@ export default function App() {
       })
     }
 
+    // Surface the total foreign-currency matches at the end so the modal can
+    // show "X en moneda extranjera vinculadas" — covers Pass 0 hits plus any
+    // existing row already flagged esMonedaExtranjera that got matched.
+    const foreignMatchesTotal = nl.filter(g => g.esMonedaExtranjera && g.fechaCobro).length
+
     setLista(nl)
     setConciliacion({
       bancoRows,
@@ -1899,7 +1945,7 @@ export default function App() {
       sinFactura,
       facturasSinCargo: nl.length - matches,
       ticketsMatched,
-      usdMatched,
+      foreignMatched: foreignMatchesTotal,
     })
     e.target.value = ''
   }
@@ -2186,7 +2232,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.8</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.10</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
