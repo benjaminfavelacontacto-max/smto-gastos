@@ -278,7 +278,9 @@ body::before {
 .table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 
 table {
-  width: 100%;
+  table-layout: fixed;     /* honour the inline th widths exactly; resizing one
+                              column does NOT redistribute siblings */
+  width: max-content;      /* table is exactly the sum of column widths */
   min-width: 1900px;
   border-collapse: collapse;
   font-size: 13px;
@@ -353,11 +355,13 @@ tbody td.td-proveedor {
   width: 6px; height: 100%;
   cursor: col-resize;
   user-select: none;
+  background: transparent;
   border-right: 1px solid transparent;
   transition: border-color 0.12s, background 0.12s;
+  z-index: 1;
 }
-.col-resizer:hover  { border-right-color: var(--blue); background: rgba(10, 132, 255, 0.18); }
-.col-resizer:active { border-right-color: var(--blue); background: rgba(10, 132, 255, 0.3); }
+.col-resizer:hover  { background: rgba(255, 255, 255, 0.15); border-right-color: var(--blue); }
+.col-resizer:active { background: rgba(10, 132, 255, 0.3);   border-right-color: var(--blue); }
 
 tbody tr {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -375,6 +379,10 @@ td {
   font-size: 13px;
   vertical-align: middle;
   white-space: nowrap;
+  overflow: hidden;        /* with table-layout: fixed, content that's wider
+                              than the column gets clipped instead of expanding
+                              the column and shifting siblings */
+  text-overflow: ellipsis;
 }
 
 /* ═══════════════════════════════════════════

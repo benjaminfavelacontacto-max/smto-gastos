@@ -460,9 +460,13 @@ export default function App() {
   const [alerta,        setAlerta]        = useState(null)
   const [loading,       setLoading]       = useState(false)
   const [isDragging,    setIsDragging]    = useState(false)
-  const [colWidths,     setColWidths]     = useState(() =>
-    Object.fromEntries(COLUMNS.map(c => [c.key, c.width]))
-  )
+  // Index-based fixed pixel widths — order matches COLUMNS positions:
+  // [0] checkbox, [1] estado, [2] fecha, [3] factura, [4] proveedor,
+  // [5] concepto, [6] subtotal, [7] iva, [8] isr/ish/ieps, [9] ret.isr,
+  // [10] ret.iva, [11] reten, [12] total fac, [13] forma pago, [14] prop%,
+  // [15] prop$, [16] total final, [17] fecha cobro, [18] delete (unused
+  // until a delete column lands)
+  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 260, 140, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130, 120, 52])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
 
   const folderRef = useRef(null)
@@ -501,17 +505,25 @@ export default function App() {
   )
 
   // ── Column resize (drag right edge of th) ──
-  const startResize = (key, e) => {
+  const startResize = (colIndex, e) => {
     e.preventDefault(); e.stopPropagation()
     const startX = e.clientX
-    const startW = colWidths[key]
-    const onMove = ev => setColWidths(w => ({ ...w, [key]: Math.max(30, startW + ev.clientX - startX) }))
-    const onUp   = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup',   onUp)
+    const startWidth = colWidths[colIndex]
+    const onMouseMove = ev => {
+      const delta = ev.clientX - startX
+      const newWidth = Math.max(40, startWidth + delta)
+      setColWidths(prev => {
+        const next = [...prev]
+        next[colIndex] = newWidth
+        return next
+      })
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup',   onUp)
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup',   onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup',   onMouseUp)
   }
 
   // ── Actualizar campo de un gasto (con recálculo de propina) ──
@@ -991,18 +1003,18 @@ export default function App() {
           </div>
         ) : (
           <table style={{
-            // Sticky-column left offsets derived from current column widths, so
-            // resizing Estado / Fecha shifts the pinned cells correctly.
-            '--sl-fecha':     `${colWidths.status}px`,
-            '--sl-proveedor': `${colWidths.status + colWidths.fechaFac}px`,
+            // Sticky-column left offsets — derived from indices 1 (Estado) and
+            // 2 (Fecha) so resizing them shifts the pinned cells correctly.
+            '--sl-fecha':     `${colWidths[1]}px`,
+            '--sl-proveedor': `${colWidths[1] + colWidths[2]}px`,
           }}>
             <thead>
               <tr>
-                {COLUMNS.map(col => (
+                {COLUMNS.map((col, idx) => (
                   <th
                     key={col.key}
                     className={col.key === 'status' ? 'th-status' : col.key === 'fechaFac' ? 'th-fecha' : col.key === 'proveedor' ? 'th-proveedor' : undefined}
-                    style={{ width: colWidths[col.key], cursor: col.sortable ? 'pointer' : undefined }}
+                    style={{ width: colWidths[idx], cursor: col.sortable ? 'pointer' : undefined }}
                     onClick={col.sortable ? () => toggleSort(col.key) : undefined}
                   >
                     {col.label}
@@ -1011,7 +1023,7 @@ export default function App() {
                     )}
                     <div
                       className="col-resizer"
-                      onMouseDown={e => startResize(col.key, e)}
+                      onMouseDown={e => startResize(idx, e)}
                       onClick={e => e.stopPropagation()}
                     />
                   </th>
