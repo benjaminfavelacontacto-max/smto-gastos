@@ -212,6 +212,23 @@ body::before {
   filter: none !important;
 }
 
+/* Success-flash variant — used as a momentary state on toolbar buttons
+   after a successful action (currently: Importar Excel). The transition
+   matches the other variants so swapping into/out of this variant feels
+   continuous, not a hard cut. */
+.btn-premium.success {
+  background: rgba(89, 211, 155, 0.15);
+  border-color: rgba(89, 211, 155, 0.5);
+  color: #59D39B;
+  box-shadow: none;
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+.btn-premium.success:hover {
+  filter: none;
+  transform: none;
+  background: rgba(89, 211, 155, 0.22);
+}
+
 .btn-icon { font-size: 14px; line-height: 1; }
 
 /* ═══════════════════════════════════════════
@@ -1307,6 +1324,24 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   outline-offset: -3px;
   background: rgba(89, 211, 155, 0.03);
 }
+/* New-row entrance animation — applied for ~1s after import or drop, then
+   the isNew flag clears and the row settles into its natural styling. */
+@keyframes rowFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+    background: rgba(89, 211, 155, 0.08);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    background: transparent;
+  }
+}
+tr.row-new {
+  animation: rowFadeIn 0.4s ease forwards;
+}
+
 .table-container.drag-over::after {
   content: 'Suelta aquí los archivos XML o PDF';
   position: fixed;

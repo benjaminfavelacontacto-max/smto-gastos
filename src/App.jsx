@@ -489,7 +489,7 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
   }
 
   return (
-    <tr className={g.hizoMatch ? 'row-match' : ''}>
+    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new'].filter(Boolean).join(' ')}>
       {/* Checkbox */}
       <td className="td-chk">
         <input
@@ -1001,6 +1001,7 @@ export default function App() {
   const [colaborador,   setColaborador]   = useState(null)
   const [showColabModal, setShowColabModal] = useState(true)
   const [colabSearch,   setColabSearch]   = useState('')
+  const [importSuccess, setImportSuccess] = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1584,13 +1585,25 @@ export default function App() {
         `Cancelar = Reemplazar todo`
       )
 
+      // Tag every imported row as isNew so each one picks up the green-flash
+      // row-fade-in animation; flag is cleared after the animation settles.
+      const tagged = gastos.map(g => ({ ...g, isNew: true }))
+
       if (action) {
-        setLista(prev => [...prev, ...gastos])
+        setLista(prev => [...prev, ...tagged])
         setAlerta(`✓ Se agregaron ${gastos.length} registros al reporte actual. Total: ${lista.length + gastos.length} registros.`)
       } else {
-        setLista(gastos)
+        setLista(tagged)
         setAlerta(`✓ Reporte importado con ${gastos.length} registros.`)
       }
+
+      // Flash the toolbar button green for 2.5s and clear the isNew flags
+      // after 1s so subsequent renders do not replay the row animation.
+      setImportSuccess(true)
+      setTimeout(() => setImportSuccess(false), 2500)
+      setTimeout(() => {
+        setLista(prev => prev.map(g => g.isNew ? { ...g, isNew: false } : g))
+      }, 1000)
     } catch (err) {
       setAlerta('Error al importar Excel: ' + err.message)
     }
@@ -1695,16 +1708,20 @@ export default function App() {
         <div className="action-group">
           <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
           <PremiumButton
-            title="Importar Excel"
-            variant="ghost"
+            title={importSuccess ? 'Importado' : 'Importar Excel'}
+            variant={importSuccess ? 'success' : 'ghost'}
             onClick={() => document.getElementById('import-xlsx-input').click()}
-            icon={
+            icon={importSuccess ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            ) : (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                 <polyline points="17 8 12 3 7 8"/>
                 <line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
-            }
+            )}
           />
           <input
             id="import-xlsx-input"
