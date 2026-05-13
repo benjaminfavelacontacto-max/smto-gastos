@@ -1269,3 +1269,32 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   padding-left: 8px;
 }
 
+/* ═══════════════════════════════════════════
+   VALIDATION COUNTER — sits next to "Validar Banco"
+   Shows N/total while in-progress, brand-green when complete.
+═══════════════════════════════════════════ */
+.validacion-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.validacion-counter svg { opacity: 0.5; }
+.validacion-counter.all-done {
+  background: rgba(89, 211, 155, 0.12);
+  border-color: rgba(89, 211, 155, 0.35);
+  color: #59D39B;
+}
+.validacion-counter.all-done svg {
+  opacity: 1;
+  stroke: #59D39B;
+}
+

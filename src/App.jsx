@@ -416,7 +416,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     pdfFile,
     xmlFile,
     hizoMatch: false,
-    checkManual: false,
+    validado: false,
   }
 }
 
@@ -493,8 +493,8 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
       <td className="td-chk">
         <input
           type="checkbox"
-          checked={g.checkManual}
-          onChange={e => upd('checkManual', e.target.checked)}
+          checked={g.validado || false}
+          onChange={e => upd('validado', e.target.checked)}
         />
       </td>
 
@@ -1336,7 +1336,7 @@ export default function App() {
       fechaFac: hoy, concepto: 'Consumo', tipo: 'Factura', importe: 0, iva: 0, isrTrasladado: 0,
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
-      tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, checkManual: false,
+      tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, validado: false,
     }])
   }
 
@@ -1499,6 +1499,23 @@ export default function App() {
           <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
           <PremiumButton title="Cargar Carpeta" icon="📂" variant="primary"   onClick={() => folderRef.current?.click()} />
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          {(() => {
+            const total = lista.length
+            const validados = lista.filter(g => g.validado).length
+            const allDone = total > 0 && validados === total
+            return total > 0 ? (
+              <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <span>
+                  {allDone
+                    ? `✓ ${total} facturas validadas`
+                    : `${validados} / ${total} validadas`}
+                </span>
+              </div>
+            ) : null
+          })()}
         </div>
         <div className="action-group">
           <PremiumButton title="Copiar a Excel"  icon="📋" variant="copy"    isDisabled={!lista.length} onClick={copiar} />
