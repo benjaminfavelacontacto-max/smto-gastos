@@ -68,18 +68,22 @@ def crop_logo(pil_img):
 def compute_date_range(gastos):
     """Min/max of fechaCobro across gastos (falls back to fechaFac when a
     row has no cobro date). Returns ('', '') when no parseable dates exist.
-    Output format: MM-DD-YY."""
+    Output format: MM-DD-YY (2-digit year)."""
     dates = []
     for g in gastos:
         for key in ('fechaCobro', 'fechaFac'):
             v = g.get(key, '')
-            if v and '-' in v and len(v) == 10:
-                dates.append(v)  # YYYY-MM-DD
+            if v and len(v) >= 8:
+                # Normalize to YYYY-MM-DD for sorting
+                if '-' in v and len(v) == 10 and v[4] == '-':
+                    dates.append(v)  # already YYYY-MM-DD
                 break
     if not dates:
         return '', ''
-    dates.sort()
-    fmt = lambda d: f'{d[5:7]}-{d[8:10]}-{d[2:4]}'
+    dates.sort()  # ascending — smallest date first
+    def fmt(d):
+        # YYYY-MM-DD → MM-DD-YY
+        return f'{d[5:7]}-{d[8:10]}-{d[2:4]}'
     return fmt(dates[0]), fmt(dates[-1])
 
 def find_logo():
@@ -194,7 +198,10 @@ def build_workbook(gastos, colaborador=''):
     ws.merge_cells('J2:M2')
     f2 = ws['J2']
     fecha_min, fecha_max = compute_date_range(gastos)
-    f2.value = f'DE: {fecha_min}  A: {fecha_max}' if fecha_min else ''
+    if fecha_min:
+        f2.value = f'DE: {fecha_min}  A: {fecha_max}'
+    else:
+        f2.value = ''
     f2.font = Font(name='Aptos', size=11, color=TEXT_PRIMARY)
     f2.fill = PatternFill('solid', start_color=WHITE)
     f2.alignment = Alignment(horizontal='left', vertical='center', indent=1)
