@@ -15,6 +15,7 @@ except Exception:
 # SMTO Brand palette
 SMTO_BLACK = '050505'
 SMTO_GREEN = '59D39B'
+EXCEL_GREEN = '00B050'
 SMTO_GREEN_DARK = '41C784'
 SMTO_GREEN_SOFT = 'E8F8F0'
 
@@ -144,7 +145,7 @@ def build_workbook(gastos, colaborador=''):
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates) so
     # each column gets the width that fits its content, regardless of order.
     col_widths = {
-        'A': 5, 'B': 22, 'C': 43, 'D': 22, 'E': 23, 'F': 16, 'G': 14.5,
+        'A': 5, 'B': 22, 'C': 43, 'D': 16, 'E': 23, 'F': 16, 'G': 14.5,
         'H': 42, 'I': 18, 'J': 16, 'K': 16, 'L': 20, 'M': 24, 'N': 5
     }
     for col, w in col_widths.items():
@@ -198,13 +199,20 @@ def build_workbook(gastos, colaborador=''):
     f2.fill = PatternFill('solid', start_color=WHITE)
     f2.alignment = Alignment(horizontal='left', vertical='center', indent=1)
 
-    # Row 3 spacer + Row 4 hairline (1pt row with bottom border)
+    # Row 3 spacer + Row 4 closing line under the header section.
+    # H3 carries a thin EXCEL_GREEN underline below the "Nombre/Fecha de viaje"
+    # labels; row 4 itself is a 1pt-tall band sandwiched between a thin top
+    # green border and a medium bottom green border so it reads as one bar.
     ws.row_dimensions[3].height = 18
     ws.row_dimensions[4].height = 1
+    ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
     for c in range(2, 14):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
-        cell.border = Border(bottom=Side(style='thin', color=BORDER_LIGHT))
+        cell.border = Border(
+            top=Side(style='thin', color=EXCEL_GREEN),
+            bottom=Side(style='medium', color=EXCEL_GREEN),
+        )
 
     # ═══ KPI CARDS (rows 5-6) ═══
     ws.row_dimensions[5].height = 46  # KPI VALUES
@@ -234,8 +242,8 @@ def build_workbook(gastos, colaborador=''):
         v_cell.alignment = Alignment(horizontal='left', vertical='center', indent=2)
         v_cell.fill = PatternFill('solid', start_color=WHITE)
         v_cell.border = Border(
-            left=Side(style='thick', color=SMTO_GREEN),
-            top=Side(style='thin', color=BORDER_LIGHT),
+            left=Side(style='medium', color=EXCEL_GREEN),
+            top=Side(style='medium', color=EXCEL_GREEN),
             right=Side(style='thin', color=BORDER_LIGHT),
             bottom=Side(style='thin', color=BORDER_LIGHT),
         )
@@ -248,9 +256,9 @@ def build_workbook(gastos, colaborador=''):
         l_cell.alignment = Alignment(horizontal='left', vertical='center', indent=2)
         l_cell.fill = PatternFill('solid', start_color=WHITE)
         l_cell.border = Border(
-            left=Side(style='thick', color=SMTO_GREEN),
+            left=Side(style='medium', color=EXCEL_GREEN),
             right=Side(style='thin', color=BORDER_LIGHT),
-            bottom=Side(style='thin', color=BORDER_LIGHT),
+            bottom=Side(style='medium', color=EXCEL_GREEN),
         )
 
     # Row 7 small gap + Row 8 larger pre-table spacer
@@ -267,15 +275,22 @@ def build_workbook(gastos, colaborador=''):
     for i, h in enumerate(headers):
         col = i + 2
         cell = ws.cell(row=9, column=col, value=h)
-        cell.font = Font(name='Aptos', size=14, bold=True, color=SMTO_GREEN)
+        cell.font = Font(name='Aptos', size=14, bold=True, color=EXCEL_GREEN)
         is_left = h in left_align_headers
         cell.alignment = Alignment(
             horizontal='left' if is_left else 'center',
             vertical='center',
             indent=2 if is_left else 0
         )
-        cell.fill = PatternFill('solid', start_color=HEADER_BG)
-        cell.border = Border(bottom=Side(style='medium', color=SMTO_BLACK))
+        cell.fill = PatternFill(fill_type=None)
+        # Top + bottom medium green on every header; left edge on B9 (first),
+        # right edge on M9 (last) so the band reads as one bordered strip.
+        cell.border = Border(
+            top=Side(style='medium', color=EXCEL_GREEN),
+            bottom=Side(style='medium', color=EXCEL_GREEN),
+            left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 13 else None,
+        )
 
     # ═══ DATA ROWS (row 10+) ═══
     row = 10
@@ -385,7 +400,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 24
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v4.11'
+    ft.value = 'SMTO Engineering · v5.3'
     ft.font = Font(name='Aptos', size=9, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
