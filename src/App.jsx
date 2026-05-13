@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check } from 'lucide-react'
+import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check, Plus, Link2 } from 'lucide-react'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -1140,6 +1140,117 @@ function ImportSuccessModal({ data, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MODAL DE ARCHIVOS PROCESADOS (drag-and-drop)
+═══════════════════════════════════════════════════ */
+
+// Drag/drop success modal. Same .cm-* glass shell + KpiCard grid as the
+// conciliacion modal, plus the progress bar from the import modal —
+// three count-up stats (Nuevas / Actualizadas / PDFs) under the orb.
+function DropSuccessModal({ data, onClose }) {
+  const cAdded   = useCountUp(data.added)
+  const cUpdated = useCountUp(data.updated)
+  const cPdfs    = useCountUp(data.pdfs)
+
+  const stagger = {
+    hidden: { opacity: 0 },
+    show:   { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.15 } },
+  }
+  const item = {
+    hidden: { opacity: 0, y: 14 },
+    show:   { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 240, damping: 22 } },
+  }
+
+  return (
+    <motion.div
+      className="cm-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="cm-modal cm-modal-narrow"
+        initial={{ opacity: 0, y: 32, scale: 0.94 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 16, scale: 0.96 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="cm-close" onClick={onClose} aria-label="Cerrar">
+          <X size={16} />
+        </button>
+
+        {/* Header */}
+        <div className="cm-header">
+          <motion.div
+            className="cm-orb"
+            initial={{ scale: 0, rotate: -20 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: 'spring', stiffness: 220, damping: 14, delay: 0.1 }}
+          >
+            <CheckCircle2 size={30} strokeWidth={2.2} />
+          </motion.div>
+          <h2 className="cm-title">Archivos procesados</h2>
+          <p className="cm-subtitle">Tu reporte está actualizado</p>
+        </div>
+
+        {/* KPI grid — 3 count-up stats with brand-tinted icons */}
+        <motion.div className="cm-kpi-grid" variants={stagger} initial="hidden" animate="show">
+          <KpiCard variants={item} accent="green"  Icon={Plus}     value={cAdded} />
+          <KpiCard variants={item} accent="blue"   Icon={Link2}    value={cUpdated} />
+          <KpiCard variants={item} accent="purple" Icon={FileText} value={cPdfs} />
+        </motion.div>
+        <motion.div
+          className="cm-kpi-labels"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4 }}
+        >
+          <span>Nuevas</span>
+          <span>Actualizadas</span>
+          <span>PDFs recibidos</span>
+        </motion.div>
+
+        {/* 100% progress bar — same shape as the import modal */}
+        <motion.div
+          className="ism-progress"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+        >
+          <div className="ism-progress-track">
+            <motion.div
+              className="ism-progress-fill"
+              initial={{ width: 0 }}
+              animate={{ width: '100%' }}
+              transition={{ delay: 0.55, duration: 1, ease: 'easeOut' }}
+            />
+          </div>
+          <div className="ism-progress-label">
+            <span>Procesado</span>
+            <span>100%</span>
+          </div>
+        </motion.div>
+
+        {/* CTA */}
+        <motion.button
+          className="cm-cta"
+          onClick={onClose}
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.98 }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.7 }}
+        >
+          Continuar
+        </motion.button>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    APP PRINCIPAL
 ═══════════════════════════════════════════════════ */
 
@@ -1154,6 +1265,7 @@ export default function App() {
   const [colabSearch,   setColabSearch]   = useState('')
   const [importSuccess, setImportSuccess] = useState(false)
   const [importSummary, setImportSummary] = useState(null)
+  const [dropSummary,   setDropSummary]   = useState(null)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1367,13 +1479,15 @@ export default function App() {
         }
       }
 
-      const parts = []
-      if (added > 0)         parts.push(`➕ ${added} nuevas facturas agregadas`)
-      if (updated > 0)       parts.push(`🔗 ${updated} facturas actualizadas`)
-      if (pdfFiles.length)   parts.push(`📄 ${pdfFiles.length} PDFs recibidos`)
-      if (parts.length > 0) {
-        // setTimeout so the modal renders after the lista update commits.
-        setTimeout(() => setAlerta('✓ Archivos procesados:\n' + parts.join('\n')), 100)
+      // Premium glass modal replaces the plain-text alerta. Only opens if at
+      // least one of the three counters is non-zero — silently no-op for
+      // drops that produced nothing actionable (e.g. all duplicates).
+      if (added > 0 || updated > 0 || pdfFiles.length > 0) {
+        setTimeout(() => setDropSummary({
+          added,
+          updated,
+          pdfs: pdfFiles.length,
+        }), 100)
       }
 
       return merged
@@ -2081,6 +2195,13 @@ export default function App() {
       <AnimatePresence>
         {importSummary && (
           <ImportSuccessModal data={importSummary} onClose={() => setImportSummary(null)} />
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL ARCHIVOS PROCESADOS (drag-and-drop, premium glass) ─── */}
+      <AnimatePresence>
+        {dropSummary && (
+          <DropSuccessModal data={dropSummary} onClose={() => setDropSummary(null)} />
         )}
       </AnimatePresence>
     </div>
