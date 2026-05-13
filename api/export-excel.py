@@ -80,10 +80,14 @@ def find_logo():
 
 def insert_logo(ws, logo_path):
     """PNG → 24-bit BMP (xlwt's required format) → ws.insert_bitmap.
-    Failures are swallowed (logged) so a bad logo can't break the export."""
+    Aspect ratio preserved (fixed 60px height, proportional width)."""
     try:
         img = Image.open(logo_path)
-        img = img.resize((180, 75), Image.LANCZOS)
+        target_height = 60
+        ratio = target_height / img.height
+        target_width = int(img.width * ratio)
+        img = img.resize((target_width, target_height), Image.LANCZOS)
+
         if img.mode in ('RGBA', 'LA', 'P'):
             bg = Image.new('RGB', img.size, (255, 255, 255))
             if img.mode == 'P':
@@ -92,10 +96,11 @@ def insert_logo(ws, logo_path):
             img = bg
         else:
             img = img.convert('RGB')
+
         with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as tmp:
             bmp_path = tmp.name
         img.save(bmp_path, 'BMP')
-        ws.insert_bitmap(bmp_path, 0, 0, x=5, y=5)
+        ws.insert_bitmap(bmp_path, 0, 0, x=10, y=8)
         os.unlink(bmp_path)
     except Exception as e:
         print(f'Logo insert warning: {e}')

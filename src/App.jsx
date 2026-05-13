@@ -31,17 +31,6 @@ const COLUMNS = [
 
 const genId = () => Math.random().toString(36).slice(2, 11)
 
-function clasificarGasto(proveedor, concepto) {
-  const t = `${proveedor} ${concepto}`.toUpperCase()
-  const has = (...kws) => kws.some(k => t.includes(k))
-  if (has('VUELO','AVIACION','CONCESIONARIA VUELA','AEROENLACES','AEROMEXICO','VIVA AEROBUS','AEREA','AEROPUERTO','BOLETO')) return 'Vuelo'
-  if (has('HOTEL','HOSPEDAJE','HILTON','MARRIOTT','HOLIDAY','CITY EXPRESS','HABITACION','INN')) return 'Hotel'
-  if (has('UBER','DIDI','TAXI','PEAJE','CASETA','AUTOPISTA','FONADIN','CAPUFE','ESTACIONAMIENTO')) return 'Transporte'
-  if (has('HOME DEPOT','FERRETERIA','MATERIAL','TRUPER','GRAINGER','HERRAMIENTA')) return 'Herramienta'
-  if (has('GASNGO','COMBUSTIBLE','GASOLINA','MAGNA','PREMIUM','DIESEL')) return 'Combustible'
-  return 'Consumo'
-}
-
 function parseDateRobusto(text) {
   if (!text) return null
   const chars = text.trim().replace(/[^0-9/\-]/g, '')
@@ -97,18 +86,11 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const rfc = ga(emisor, 'Rfc', 'RFC') || ''
   if (!rfc) return null
 
-  // Concepto
-  let concepto = 'Consumo'
-  if (conceptoEl) {
-    const desc = ga(conceptoEl, 'Descripcion', 'descripcion') || ''
-    const clean = []
-    for (const p of desc.split(/\s+/).filter(Boolean)) {
-      if (p.length === 8 && /^\d+$/.test(p)) continue
-      if (p.toUpperCase() === 'NO' && clean.length === 0) continue
-      clean.push(p)
-    }
-    concepto = clean.slice(0, 4).join(' ') || 'Consumo'
-  }
+  // Concepto — first line of the first Concepto's Descripcion, capped at 80
+  // chars. Replaces the old keyword-based categorizer (Vuelo/Hotel/etc.) so
+  // each row shows the actual product description from the XML.
+  const descripcionRaw = conceptoEl ? (ga(conceptoEl, 'Descripcion', 'descripcion') || '') : ''
+  const concepto = descripcionRaw.split(/[\n\r]/)[0].trim().slice(0, 80) || 'Consumo'
 
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
@@ -199,7 +181,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   const descuento    = parseFloat(ga(comp, 'Descuento', 'descuento') || '0') || 0
   let importe        = (parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0) - descuento
   let totalCFDI      = parseFloat(ga(comp, 'Total',    'total')    || '0') || 0
-  let conceptoClasif = clasificarGasto(proveedor, concepto)
+  let conceptoClasif = concepto   // raw first-line Descripcion (EDC may override)
 
   // EDC (Estado de Cuenta de Combustible — GasNGo & similar). The regular
   // <cfdi:Comprobante> has placeholder amounts (SubTotal=1.00, Total=0.00);
@@ -941,7 +923,7 @@ export default function App() {
           <div className="metric-value">{metrics.count}</div>
         </div>
         <div className="metric-card" style={{ '--accent': '#FF453A' }}>
-          <div className="metric-label">Sin Cobrar</div>
+          <div className="metric-label">Por Corroborar</div>
           <div className="metric-value">{metrics.sinCobrar}</div>
         </div>
       </div>
