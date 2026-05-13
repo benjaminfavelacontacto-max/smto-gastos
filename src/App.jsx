@@ -205,6 +205,17 @@ const fileToBase64 = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file)
 })
 
+// Read a File/Blob as a full data URL (e.g. "data:application/pdf;base64,…").
+// Used to persist PDF bytes onto the gasto so the ZIP export is independent
+// of the original File reference, which can become unreadable in some
+// browsers once the source <input> / drop event is GC'd.
+const fileToDataURL = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(String(reader.result || ''))
+  reader.onerror = reject
+  reader.readAsDataURL(file)
+})
+
 // Human-readable file size for the export-success card.
 const formatBytes = (b) => {
   if (b < 1024) return `${b} B`
@@ -431,6 +442,10 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     tienePDF: !!pdfFile,
     pdfFile,
     xmlFile,
+    // The raw XML text gets stashed here so the ZIP export can write the
+    // file without re-reading the original File handle (which is unreliable
+    // long-term in some browsers).
+    xmlContent: xmlText,
     hizoMatch: false,
     validado: false,
     montoUSD: 0,
@@ -1534,6 +1549,16 @@ export default function App() {
         if (g) nueva.push(g)
       } catch {}
     }
+    // Persist PDF bytes as data URLs so the ZIP export survives even if
+    // the original File reference goes stale. XMLs already carry their
+    // text via gasto.xmlContent from parseCFDI.
+    for (const g of nueva) {
+      if (g.pdfFile && !g.pdfDataURL) {
+        try { g.pdfDataURL = await fileToDataURL(g.pdfFile) }
+        catch (err) { console.warn('PDF read failed:', g.pdfFile.name, err) }
+      }
+    }
+
     setLista(nueva)
     setLoading(false)
 
@@ -1752,8 +1777,11 @@ export default function App() {
             const gasto = await extractReceiptData(base64, mediaType, file.name)
             if (gasto) {
               // Keep the source PDF attached so it rides the ZIP export.
+              // Reuse the base64 we already computed for the OCR call
+              // instead of re-reading the file.
               if (mediaType === 'application/pdf') {
                 gasto.pdfFile = file
+                gasto.pdfDataURL = `data:application/pdf;base64,${base64}`
                 gasto.tienePDF = true
               }
               gasto.isNew = true
@@ -1786,6 +1814,17 @@ export default function App() {
         })
       }
       return
+    }
+
+    // Persist PDF bytes as data URLs so the ZIP export doesn't depend on
+    // the original File reference. OCR rows already set pdfDataURL above;
+    // XML-paired PDFs (parseCFDI auto-match or the manual second pass)
+    // still hold pdfFile only, so convert them here.
+    for (const g of allNewGastos) {
+      if (g.pdfFile && !g.pdfDataURL) {
+        try { g.pdfDataURL = await fileToDataURL(g.pdfFile) }
+        catch (err) { console.warn('PDF read failed:', g.pdfFile.name, err) }
+      }
     }
 
     // STEP 5 — single setLista commit, then surface the premium drop modal.
@@ -2146,45 +2185,103 @@ export default function App() {
       }))
   }
 
-  // ── Exportar ZIP con CSV + archivos renombrados ──
+  // ── Exportar ZIP con Excel + carpeta Facturas/ ──
+  // Output: SMTO_Gastos_<Colab>_<YYYYMMDD>.zip containing
+  //   • Reporte_<Colab>_<YYYYMMDD>.xlsx  (fetched from /api/export-excel)
+  //   • Facturas/<PROVEEDOR>_<FOLIO>.xml + .pdf for every row
+  // PDFs are read from gasto.pdfDataURL (intake-time data URL) so the
+  // export doesn't depend on the original File handle, which can be
+  // unreliable later. Falls back to pdfFile.arrayBuffer() for any gasto
+  // that pre-dates the data-URL change in this session.
   const exportar = async () => {
-    const zip    = new JSZip()
-    const folder = zip.folder('Reporte_Gastos')
-    let csv = '\uFEFFRFC PROVEEDOR,PROVEEDOR,NO. DE FACTURA,FECHA FAC.,CONCEPTO,IMPORTE (MXP),IVA,ISR,RET. ISR,RET. IVA,RET/ ISR IVA,TOTAL CFDI,Gastos en USD,Tipo de Cambio,Total Checking,FORMA DE PAGO,FECHA DE COBRO\n'
-    let r = 0
+    const zip = new JSZip()
+    const facturas = zip.folder('Facturas')
 
+    const colabSlug = (colaborador?.nombre || 'SMTO')
+      .replace(/[^a-zA-Z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+
+    // 1) Pull the Excel report from the server-side renderer. If it fails,
+    //    the ZIP still ships with just the Facturas folder.
+    try {
+      const response = await fetch('/api/export-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gastos: lista, colaborador: colaborador?.nombre || '' }),
+      })
+      if (response.ok) {
+        const excelBlob = await response.blob()
+        zip.file(`Reporte_${colabSlug}_${today}.xlsx`, excelBlob)
+      }
+    } catch (err) {
+      console.warn('Excel fetch failed for ZIP:', err)
+    }
+
+    // 2) Add each gasto's XML + PDF to Facturas/ with PROVEEDOR_FOLIO naming.
+    const slugify = (s, max) => (s || '')
+      .replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\s]/g, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .toUpperCase()
+      .slice(0, max)
     for (const g of lista) {
-      const fac   = formatDateDisplay(g.fechaFac)          // MM-DD-YY for CSV cells
-      const fa    = fac                                    // also used for ZIP filename
-      const cobro = formatDateDisplay(g.fechaCobro) || 'Pendiente'
-      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${fac},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},${(g.montoUSD||0).toFixed(2)},${(g.tipoCambio||0).toFixed(2)},,${g.formaPago},${cobro}\n`
-      if (g.montoPropina > 0)
-        csv += `,${g.proveedor} - PROPINA,,${fac},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},${cobro}\n`
+      const provNombre = slugify(g.proveedor || 'PROVEEDOR', 35) || 'PROVEEDOR'
+      const folio = (g.noFactura || 'SN').replace(/[^a-zA-Z0-9]/g, '') || 'SN'
+      const base = `${provNombre}_${folio}`
 
-      if (g.xmlFile) {
-        const titleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase())
-        const pf  = titleCase(g.proveedor.replace(/,/g, ''))
-        const nom = `${pf} ${g.noFactura} ${g.concepto} ${fa}`.replace(/[\/\\:*?"<>|]/g, '')
-        folder.file(`${nom}.xml`, await g.xmlFile.arrayBuffer()); r++
-        if (g.pdfFile) folder.file(`${nom}.pdf`, await g.pdfFile.arrayBuffer())
+      // XML — prefer the cached xmlContent string. Fall back to xmlFile for
+      // gastos that pre-date the xmlContent change.
+      let xmlContent = g.xmlContent
+      if (!xmlContent && g.xmlFile) {
+        try { xmlContent = await g.xmlFile.text() } catch {}
+      }
+      if (xmlContent) {
+        facturas.file(`${base}.xml`, xmlContent)
+      }
+
+      // PDF — prefer pdfDataURL (intake-time snapshot). Fall back to
+      // pdfFile.arrayBuffer() for older rows.
+      if (g.pdfDataURL) {
+        const base64 = String(g.pdfDataURL).split(',')[1] || ''
+        const binary = atob(base64)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        facturas.file(`${base}.pdf`, bytes, { binary: true })
+      } else if (g.pdfFile) {
+        try {
+          const buf = await g.pdfFile.arrayBuffer()
+          facturas.file(`${base}.pdf`, buf)
+        } catch (err) {
+          console.warn('PDF fallback read failed:', g.pdfFile.name, err)
+        }
       }
     }
 
-    folder.file('Reporte_Gastos_Final.csv', csv)
-    const blob = await zip.generateAsync({ type: 'blob' })
-    const filename = 'Reporte_Gastos_Empaquetado.zip'
+    // 3) Generate + trigger download.
+    const zipBlob = await zip.generateAsync({ type: 'blob' })
+    const zipName = `SMTO_Gastos_${colabSlug}_${today}.zip`
     const a = Object.assign(document.createElement('a'), {
-      href: URL.createObjectURL(blob),
-      download: filename,
+      href: URL.createObjectURL(zipBlob),
+      download: zipName,
     })
-    a.click(); URL.revokeObjectURL(a.href)
-    setExportExito({
+    a.click()
+    URL.revokeObjectURL(a.href)
+
+    // 4) Success modal — generic PremiumModal with three stats.
+    const xmlCount = lista.filter(g => g.xmlContent || g.xmlFile).length
+    const pdfCount = lista.filter(g => g.pdfDataURL || g.pdfFile).length
+    showModal({
+      type: 'success',
       title: '¡ZIP Generado!',
-      subtitle: 'Paquete descargado con CSV + facturas renombradas',
-      filename,
-      meta: `${r} ${r === 1 ? 'factura' : 'facturas'} · ${formatBytes(blob.size)}`,
-      Icon: Package,
-      note: 'Tus archivos originales siguen intactos.',
+      subtitle: 'Paquete descargado con Excel + facturas renombradas.',
+      stats: [
+        { value: xmlCount, label: 'XMLs',   color: '#59D39B' },
+        { value: pdfCount, label: 'PDFs',   color: '#60a5fa' },
+        { value: formatBytes(zipBlob.size), label: 'Tamaño', color: 'rgba(255,255,255,0.6)' },
+      ],
+      primaryLabel: 'Listo',
     })
   }
 
@@ -2438,7 +2535,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.19</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.20</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
