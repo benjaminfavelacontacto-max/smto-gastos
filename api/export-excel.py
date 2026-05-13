@@ -104,10 +104,10 @@ def format_date(date_str):
     return date_str
 
 FORMA_PAGO_MAP = {
-    '01': 'Efectivo',
-    '02': 'Efectivo',
-    '03': 'Transferencia',
-    '04': 'Tarjeta Crédito',
+    '01': '01 - Efectivo',
+    '02': '02 - Efectivo',
+    '03': '03 - Transferencia',
+    '04': '04 - Tarjeta de Crédito',
 }
 
 def get_tipo_badge_colors(tipo):
@@ -141,10 +141,10 @@ def build_workbook(gastos):
     ws.title = 'Reporte SMTO'
     ws.sheet_view.showGridLines = False
 
-    # Column widths
+    # Column widths — compact layout, TIPO sits right after PROVEEDOR (col D)
     col_widths = {
-        'A': 5, 'B': 22, 'C': 38, 'D': 22, 'E': 14, 'F': 14,
-        'G': 40, 'H': 22, 'I': 18, 'J': 16, 'K': 16, 'L': 20, 'M': 24, 'N': 5
+        'A': 3, 'B': 16, 'C': 28, 'D': 16, 'E': 18, 'F': 11, 'G': 11,
+        'H': 28, 'I': 14, 'J': 13, 'K': 11, 'L': 14, 'M': 20, 'N': 3
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -156,8 +156,8 @@ def build_workbook(gastos):
         fill_row_bg(ws, r, 1, 14, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title (logo) | colaborador labels + fields ═══
-    ws.row_dimensions[1].height = 36
-    ws.row_dimensions[2].height = 36
+    ws.row_dimensions[1].height = 28
+    ws.row_dimensions[2].height = 28
 
     # Title — merged across two rows so it visually pairs with the 60px logo
     ws.merge_cells('D1:G2')
@@ -197,16 +197,16 @@ def build_workbook(gastos):
     f2.fill = PatternFill('solid', start_color=BG_PAGE)
 
     # Row 3 spacer + Row 4 hairline separator (B4:M4)
-    ws.row_dimensions[3].height = 16
-    ws.row_dimensions[4].height = 4
+    ws.row_dimensions[3].height = 10
+    ws.row_dimensions[4].height = 2
     for c in range(2, 14):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(bottom=Side(style='thin', color=BORDER_LIGHT))
 
     # ═══ KPI CARDS (rows 5-6) ═══
-    ws.row_dimensions[5].height = 56  # KPI VALUES
-    ws.row_dimensions[6].height = 26  # KPI LABELS
+    ws.row_dimensions[5].height = 44  # KPI VALUES
+    ws.row_dimensions[6].height = 20  # KPI LABELS
 
     total_facturado = round(sum(g.get('totalCFDI', 0) + g.get('montoPropina', 0) for g in gastos), 2)
     total_iva = round(sum(g.get('iva', 0) for g in gastos), 2)
@@ -228,7 +228,7 @@ def build_workbook(gastos):
         ws.merge_cells(f'{col_start}5:{col_end}5')
         v_cell = ws[f'{col_start}5']
         v_cell.value = value
-        v_cell.font = Font(name='Aptos', size=28, bold=True, color=value_color)
+        v_cell.font = Font(name='Aptos', size=20, bold=True, color=value_color)
         v_cell.alignment = Alignment(horizontal='left', vertical='center', indent=2)
         v_cell.fill = PatternFill('solid', start_color=WHITE)
         v_cell.border = Border(
@@ -252,7 +252,7 @@ def build_workbook(gastos):
         )
 
     # Row 7 spacer + Row 8 hairline (B8:M8)
-    ws.row_dimensions[7].height = 24
+    ws.row_dimensions[7].height = 14
     ws.row_dimensions[8].height = 1
     for c in range(2, 14):
         cell = ws.cell(row=8, column=c)
@@ -260,14 +260,14 @@ def build_workbook(gastos):
         cell.border = Border(bottom=Side(style='thin', color=BORDER_LIGHT))
 
     # ═══ TABLE HEADER (row 9) ═══
-    ws.row_dimensions[9].height = 40
+    ws.row_dimensions[9].height = 28
 
-    headers = ['RFC', 'PROVEEDOR', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'TIPO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO']
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO']
 
     for i, h in enumerate(headers):
         col = i + 2
         cell = ws.cell(row=9, column=col, value=h)
-        cell.font = Font(name='Aptos', size=11, bold=True, color=TEXT_SECONDARY)
+        cell.font = Font(name='Aptos', size=9, bold=True, color=TEXT_SECONDARY)
         is_num = h in ('IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL')
         cell.alignment = Alignment(
             horizontal='right' if is_num else 'left',
@@ -280,7 +280,7 @@ def build_workbook(gastos):
     # ═══ DATA ROWS (row 10+) ═══
     row = 10
     for idx, g in enumerate(gastos):
-        ws.row_dimensions[row].height = 32
+        ws.row_dimensions[row].height = 22
         is_alt = (idx % 2 == 1)
         bg = ROW_ALT if is_alt else WHITE
 
@@ -293,19 +293,21 @@ def build_workbook(gastos):
         total = round(g.get('totalCFDI', 0) + g.get('montoPropina', 0), 2)
         tipo = g.get('tipo', 'Consumo')
 
+        # Column order: RFC | PROVEEDOR | TIPO | FACTURA | F.FACTURA | F.COBRO
+        #               | CONCEPTO | IMPORTE | IVA | RETENCIÓN | TOTAL | FORMA
         cells = [
-            (2, g.get('rfc', ''), 'left', 'mono'),
-            (3, g.get('proveedor', ''), 'left', 'bold'),
-            (4, g.get('noFactura', ''), 'left', 'normal'),
-            (5, fecha_fac, 'left', 'normal'),
-            (6, fecha_cobro, 'left', 'normal'),
-            (7, g.get('concepto', ''), 'left', 'normal'),
-            (8, tipo, 'center', 'badge_tipo'),
-            (9, importe, 'right', 'currency'),
-            (10, iva, 'right', 'currency'),
-            (11, ret, 'right', 'currency'),
-            (12, total, 'right', 'currency_bold'),
-            (13, forma, 'center', 'badge_pago'),
+            (2,  g.get('rfc', ''),       'left',   'mono'),
+            (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
+            (4,  tipo,                   'center', 'badge_tipo'),
+            (5,  g.get('noFactura', ''), 'left',   'normal'),
+            (6,  fecha_fac,              'left',   'normal'),
+            (7,  fecha_cobro,            'left',   'normal'),
+            (8,  g.get('concepto', ''),  'left',   'normal'),
+            (9,  importe,                'right',  'currency'),
+            (10, iva,                    'right',  'currency'),
+            (11, ret,                    'right',  'currency'),
+            (12, total,                  'right',  'currency_bold'),
+            (13, forma,                  'left',   'normal'),
         ]
 
         for col, val, align, style_type in cells:
@@ -320,23 +322,20 @@ def build_workbook(gastos):
 
             if style_type == 'currency':
                 cell.number_format = '"$"#,##0.00'
-                cell.font = Font(name='Aptos', size=12, color=TEXT_PRIMARY)
+                cell.font = Font(name='Aptos', size=10, color=TEXT_PRIMARY)
             elif style_type == 'currency_bold':
                 cell.number_format = '"$"#,##0.00'
-                cell.font = Font(name='Aptos', size=13, bold=True, color=SMTO_BLACK)
+                cell.font = Font(name='Aptos', size=11, bold=True, color=SMTO_BLACK)
             elif style_type == 'mono':
-                cell.font = Font(name='Aptos', size=10, color=TEXT_SECONDARY)
-            elif style_type == 'bold':
-                cell.font = Font(name='Aptos', size=12, bold=True, color=TEXT_PRIMARY)
+                cell.font = Font(name='Aptos', size=9, color=TEXT_SECONDARY)
+            elif style_type == 'normal_bold':
+                cell.font = Font(name='Aptos', size=10, bold=True, color=TEXT_PRIMARY)
             elif style_type == 'badge_tipo':
                 bg_b, fg_b = get_tipo_badge_colors(tipo)
                 cell.fill = PatternFill('solid', start_color=bg_b)
-                cell.font = Font(name='Aptos', size=11, bold=True, color=fg_b)
-            elif style_type == 'badge_pago':
-                cell.fill = PatternFill('solid', start_color=BADGE_GRAY_BG)
-                cell.font = Font(name='Aptos', size=11, bold=True, color=BADGE_GRAY_FG)
+                cell.font = Font(name='Aptos', size=9, bold=True, color=fg_b)
             else:
-                cell.font = Font(name='Aptos', size=12, color=TEXT_PRIMARY)
+                cell.font = Font(name='Aptos', size=10, color=TEXT_PRIMARY)
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
@@ -345,10 +344,10 @@ def build_workbook(gastos):
         row += 1
 
     # ═══ ADAPTIVE TOTALS — placed right after the last data row ═══
-    ws.row_dimensions[row].height = 14  # spacer
+    ws.row_dimensions[row].height = 8  # spacer
     row += 1
 
-    ws.row_dimensions[row].height = 44
+    ws.row_dimensions[row].height = 34
     for c in range(2, 14):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
@@ -356,7 +355,7 @@ def build_workbook(gastos):
 
     ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
     lbl = ws.cell(row=row, column=2, value='TOTAL CUENTA')
-    lbl.font = Font(name='Aptos', size=14, bold=True, color=WHITE)
+    lbl.font = Font(name='Aptos', size=11, bold=True, color=WHITE)
     lbl.alignment = Alignment(horizontal='right', vertical='center', indent=2)
     lbl.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
@@ -371,7 +370,7 @@ def build_workbook(gastos):
         cell.number_format = '"$"#,##0.00'
         cell.font = Font(
             name='Aptos',
-            size=20 if is_main else 13,
+            size=16 if is_main else 10,
             bold=is_main,
             color=SMTO_GREEN if is_main else WHITE,
         )
@@ -380,10 +379,10 @@ def build_workbook(gastos):
 
     ws.cell(row=row, column=13).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # ═══ FOOTER — spacer (12) → hairline (1) → spacer (8) → footer (24) ═══
+    # ═══ FOOTER — spacer (7) → hairline (1) → spacer (5) → footer (24) ═══
     now = datetime.now()
     row += 1
-    ws.row_dimensions[row].height = 12  # spacer above hairline
+    ws.row_dimensions[row].height = 7   # spacer above hairline
     row += 1
     ws.row_dimensions[row].height = 1   # hairline
     for c in range(2, 14):
@@ -391,7 +390,7 @@ def build_workbook(gastos):
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(bottom=Side(style='thin', color=BORDER_LIGHT))
     row += 1
-    ws.row_dimensions[row].height = 8   # spacer below hairline
+    ws.row_dimensions[row].height = 5   # spacer below hairline
     row += 1
     ws.row_dimensions[row].height = 24  # footer
 
