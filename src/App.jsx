@@ -11,6 +11,7 @@ const COLUMNS = [
   { key: 'noFactura',         label: 'Factura',      width: 120, sortable: true,  type: 'string' },
   { key: 'proveedor',         label: 'Proveedor',    width: 260, sortable: true,  type: 'string' },
   { key: 'concepto',          label: 'Concepto',     width: 140, sortable: true,  type: 'string' },
+  { key: 'tipo',              label: 'Tipo',         width: 100, sortable: true,  type: 'string' },
   { key: 'importe',           label: 'Subtotal',     width: 120, sortable: true,  type: 'number' },
   { key: 'iva',               label: 'IVA',          width: 110, sortable: true,  type: 'number' },
   { key: 'isrTrasladado',     label: 'ISR/ISH/IEPS', width: 135, sortable: true,  type: 'number' },
@@ -258,6 +259,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
   const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
+  const tipoComp = ga(comp, 'TipoDeComprobante', 'tipoDeComprobante') || 'I'
+  const tipoMap  = { I: 'Ingreso', E: 'Egreso', T: 'Traslado', N: 'Nómina', P: 'Pago' }
+  const tipo     = tipoMap[tipoComp] || 'Factura'
   return {
     id: genId(),
     rfc,
@@ -265,6 +269,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
     fechaFac,
     concepto:   conceptoClasif,
+    tipo,
     importe,
     iva,
     isrTrasladado,
@@ -432,6 +437,11 @@ function GastoRow({ g, upd, openPDF }) {
         <input className="cell-in is-dim" value={g.concepto} onChange={e => upd('concepto', e.target.value)} />
       </td>
 
+      {/* Tipo — CFDI TipoDeComprobante (Ingreso/Egreso/...) or 'Factura' for manual rows */}
+      <td>
+        <input className="cell-in" value={g.tipo || ''} onChange={e => upd('tipo', e.target.value)} />
+      </td>
+
       {/* Subtotal */}
       <td><NumCell field="importe"     prefix="$" /></td>
 
@@ -495,10 +505,10 @@ export default function App() {
   const [isDragging,    setIsDragging]    = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
   // [0] checkbox, [1] estado, [2] fecha factura, [3] fecha cobro,
-  // [4] factura, [5] proveedor, [6] concepto, [7] subtotal, [8] iva,
-  // [9] isr/ish/ieps, [10] ret.isr, [11] ret.iva, [12] reten,
-  // [13] total fac, [14] forma pago, [15] prop%, [16] prop$, [17] total final
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130])
+  // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
+  // [9] iva, [10] isr/ish/ieps, [11] ret.isr, [12] ret.iva, [13] reten,
+  // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
+  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
 
   const folderRef = useRef(null)
@@ -829,7 +839,7 @@ export default function App() {
     setLista(prev => [...prev, {
       id: genId(),
       rfc: 'PUBLICO GENERAL', proveedor: 'Escribe aquí...', noFactura: 'Ticket',
-      fechaFac: hoy, concepto: 'Consumo', importe: 0, iva: 0, isrTrasladado: 0,
+      fechaFac: hoy, concepto: 'Consumo', tipo: 'Factura', importe: 0, iva: 0, isrTrasladado: 0,
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, checkManual: false,
@@ -913,11 +923,11 @@ export default function App() {
       const url = URL.createObjectURL(blob)
       const a = Object.assign(document.createElement('a'), {
         href: url,
-        download: 'Reporte_Gastos_SMTO.xls',
+        download: 'Reporte_Gastos_SMTO.xlsx',
       })
       a.click()
       URL.revokeObjectURL(url)
-      setAlerta('¡Excel generado correctamente! 📊\n\nReporte_Gastos_SMTO.xls descargado con todos los datos en el formato oficial SMTO.')
+      setAlerta('¡Excel generado correctamente! 📊\n\nReporte_Gastos_SMTO.xlsx descargado con todos los datos en el formato oficial SMTO.')
     } catch (err) {
       setAlerta('Error al generar Excel: ' + err.message)
     }
@@ -945,7 +955,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v4.2</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v4.1</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
