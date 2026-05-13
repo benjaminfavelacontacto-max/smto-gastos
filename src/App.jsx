@@ -325,7 +325,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   let   iva           = sumByTipo(trasladosBox,   'traslado',  '002')
   let   isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR from regular Traslados
   let   retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
-  const retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
+  let   retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
   let   retenciones   = retencionISR + retencionIVA
 
   // Per-RFC override: some providers' <Retencion Impuesto="001"> is actually
@@ -334,6 +334,15 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     isrTrasladado += retencionISR
     retencionISR   = 0
     retenciones    = retencionIVA
+  }
+
+  // Hoteles con complemento ISH que generan un artefacto de "retención mínima IVA"
+  // de $1.00 en cfdi:Retenciones aunque no procede. Se zeroan por RFC.
+  // Patrón: CFDI tiene TrasladosLocales ISH + retencionIVA <= 2.00 (claramente incorrecto).
+  const RFC_RETENCION_IVA_CERO = ['DBM121023M10']  // FIDEICOMISO IRREVOCABLE DB/1616 (Hampton Inn)
+  if (RFC_RETENCION_IVA_CERO.includes(rfc) && retencionIVA > 0 && retencionIVA <= 2) {
+    retenciones   -= retencionIVA
+    retencionIVA   = 0
   }
 
   // Local-tax complement (ISH/IEPS/etc) — flat scan, since nested scoped
