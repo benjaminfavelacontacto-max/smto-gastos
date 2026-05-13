@@ -146,7 +146,7 @@ def build_workbook(gastos, colaborador=''):
     # each column gets the width that fits its content, regardless of order.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 14, 'F': 11, 'G': 11,
-        'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 13, 'M': 15, 'N': 3
+        'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 18, 'M': 15, 'N': 3
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -158,10 +158,10 @@ def build_workbook(gastos, colaborador=''):
         fill_row_bg(ws, r, 1, 14, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
-    ws.row_dimensions[1].height = 32
-    ws.row_dimensions[2].height = 28
+    ws.row_dimensions[1].height = 44
+    ws.row_dimensions[2].height = 30
 
-    # Title — centered across D1:G2; pairs with the 32px logo at B1
+    # Title — centered across D1:G2; pairs with the 48px logo at B1
     ws.merge_cells('D1:G2')
     title = ws['D1']
     title.value = 'Reporte de Gastos'
@@ -244,7 +244,7 @@ def build_workbook(gastos, colaborador=''):
         v_cell.border = Border(
             left=Side(style='medium', color=EXCEL_GREEN),
             top=Side(style='medium', color=EXCEL_GREEN),
-            right=Side(style='thin', color=BORDER_LIGHT),
+            right=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='thin', color=BORDER_LIGHT),
         )
 
@@ -257,7 +257,8 @@ def build_workbook(gastos, colaborador=''):
         l_cell.fill = PatternFill('solid', start_color=WHITE)
         l_cell.border = Border(
             left=Side(style='medium', color=EXCEL_GREEN),
-            right=Side(style='thin', color=BORDER_LIGHT),
+            top=Side(style='thin', color=BORDER_LIGHT),
+            right=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
         )
 
@@ -318,10 +319,14 @@ def build_workbook(gastos, colaborador=''):
             (6,  fecha_fac,              'center', 'normal'),
             (7,  fecha_cobro,            'center', 'normal'),
             (8,  g.get('concepto', ''),  'left',   'normal'),
-            (9,  importe,                'center', 'currency'),
-            (10, iva,                    'center', 'currency'),
-            (11, ret,                    'center', 'currency'),
-            (12, total,                  'center', 'currency_bold'),
+            (9,  importe,                  'center', 'currency'),
+            (10, iva,                      'center', 'currency'),
+            (11, ret,                      'center', 'currency'),
+            # TOTAL is a true Excel formula so the column re-sums correctly
+            # if the user edits Importe/IVA/Retención manually — also kills
+            # the green "inconsistent formula" triangle Excel shows when a
+            # column has static derived values next to formula candidates.
+            (12, f'=I{row}+J{row}-K{row}', 'center', 'currency_bold'),
             (13, forma,                  'center', 'badge_pago'),
         ]
 
@@ -379,11 +384,17 @@ def build_workbook(gastos, colaborador=''):
     lbl.alignment = Alignment(horizontal='right', vertical='center', indent=2)
     lbl.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
+    # Use Excel SUM formulas so the totals re-compute if the user edits any
+    # data cell, and so Excel does not flag the column with the green
+    # "inconsistent formula" warning triangle. `data_last` is clamped to
+    # data_first so a zero-row report stays valid.
+    data_first = 10
+    data_last = max(data_first, row - 2)
     totals = [
-        (9,  round(sum(g.get('importe', 0)     for g in gastos), 2), False),
-        (10, round(sum(g.get('iva', 0)         for g in gastos), 2), False),
-        (11, round(sum(g.get('retenciones', 0) for g in gastos), 2), False),
-        (12, total_facturado,                                          True),
+        (9,  f'=SUM(I{data_first}:I{data_last})', False),
+        (10, f'=SUM(J{data_first}:J{data_last})', False),
+        (11, f'=SUM(K{data_first}:K{data_last})', False),
+        (12, f'=SUM(L{data_first}:L{data_last})', True),
     ]
     for col, val, is_main in totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -404,7 +415,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v5.4'
+    ft.value = 'SMTO Engineering · v5.5'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
@@ -415,7 +426,7 @@ def build_workbook(gastos, colaborador=''):
         try:
             pil = PILImage.open(logo_path)
             pil = crop_logo(pil)
-            target_h = 32
+            target_h = 48
             ratio = target_h / pil.height
             target_w = int(pil.width * ratio)
             pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
