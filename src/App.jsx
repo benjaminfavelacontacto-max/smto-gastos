@@ -4,8 +4,8 @@ import JSZip from 'jszip'
 /* Single source of truth for table columns.
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
 const COLUMNS = [
-  { key: 'check',             label: '',             width: 52,  sortable: false },
-  { key: 'status',            label: 'Estado',       width: 110, sortable: false },
+  { key: 'check',             label: '',             width: 52,  sortable: true,  type: 'string' },
+  { key: 'status',            label: 'Estado',       width: 110, sortable: true,  type: 'string' },
   { key: 'fechaFac',          label: 'Fecha',        width: 115, sortable: true,  type: 'date'   },
   { key: 'noFactura',         label: 'Factura',      width: 120, sortable: true,  type: 'string' },
   { key: 'proveedor',         label: 'Proveedor',    width: 260, sortable: true,  type: 'string' },
@@ -22,7 +22,7 @@ const COLUMNS = [
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
-  { key: 'fechaCobro',        label: 'Fecha Cobro',  width: 120, sortable: true,  type: 'string' },
+  { key: 'fechaCobro',        label: 'Fecha Cobro',  width: 120, sortable: true,  type: 'date'   },
 ]
 
 /* ═══════════════════════════════════════════════════
@@ -419,12 +419,21 @@ function GastoRow({ g, upd, openPDF }) {
         </span>
       </td>
 
-      {/* Fecha Cobro — populated by validarBanco, but editable */}
+      {/* Fecha Cobro — native date picker. Bank-matched dates come in as
+          DD/MM/YYYY; we convert to YYYY-MM-DD for the type="date" input,
+          which roundtrips its own value as YYYY-MM-DD on user edit. */}
       <td>
         <input
-          className={`cell-in is-cobro${g.fechaCobro ? ' is-filled' : ''}`}
-          value={g.fechaCobro || ''}
-          placeholder="Pendiente"
+          type="date"
+          className="cell-date-input"
+          value={(() => {
+            if (!g.fechaCobro) return ''
+            if (g.fechaCobro.includes('/')) {
+              const [d, m, y] = g.fechaCobro.split('/')
+              return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+            }
+            return g.fechaCobro
+          })()}
           onChange={e => upd('fechaCobro', e.target.value)}
         />
       </td>
@@ -467,24 +476,46 @@ export default function App() {
   }, [lista])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-  // ── Sort ──
+  // ── Sort — three-state cycle (asc → desc → unsorted), null-safe, with
+  //          date detection that accepts both YYYY-MM-DD and DD/MM/YYYY.
   const sortedLista = useMemo(() => {
     if (!sort.field) return lista
     const col = COLUMNS.find(c => c.key === sort.field)
     if (!col) return lista
     const get = col.getValue || (g => g[sort.field])
+    const toDate = s => {
+      if (typeof s !== 'string' || !s) return 0
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s).getTime()
+      if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) {
+        const [d, m, y] = s.split('/')
+        return new Date(`${y}-${m}-${d}`).getTime()
+      }
+      return 0
+    }
     return [...lista].sort((a, b) => {
       const va = get(a), vb = get(b)
+      // Null/undefined/empty → push to the end regardless of direction
+      const aEmpty = va == null || va === ''
+      const bEmpty = vb == null || vb === ''
+      if (aEmpty && bEmpty) return 0
+      if (aEmpty) return 1
+      if (bEmpty) return -1
       let cmp
-      if (col.type === 'number') cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0)
-      else                       cmp = String(va ?? '').toLowerCase().localeCompare(String(vb ?? '').toLowerCase())
+      if (col.type === 'number')      cmp = (parseFloat(va) || 0) - (parseFloat(vb) || 0)
+      else if (col.type === 'date')   cmp = toDate(va) - toDate(vb)
+      else                            cmp = String(va).localeCompare(String(vb), 'es')
       return sort.dir === 'asc' ? cmp : -cmp
     })
   }, [lista, sort])
 
-  const toggleSort = field => setSort(s =>
-    s.field === field ? { field, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' }
-  )
+  // Three-state cycle: first click → asc, second → desc, third → unsorted.
+  const toggleSort = field => setSort(s => {
+    if (s.field === field) {
+      if (s.dir === 'asc')  return { field, dir: 'desc' }
+      if (s.dir === 'desc') return { field: null, dir: null }
+    }
+    return { field, dir: 'asc' }
+  })
 
   // ── Column resize (drag right edge of th) ──
   const startResize = (colIndex, e) => {
@@ -873,7 +904,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v3.9</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v4.0</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -1000,8 +1031,8 @@ export default function App() {
                     onClick={col.sortable ? () => toggleSort(col.key) : undefined}
                   >
                     {col.label}
-                    {sort.field === col.key && (
-                      <span style={{ marginLeft: 4, fontSize: '0.85em' }}>{sort.dir === 'asc' ? '▲' : '▼'}</span>
+                    {sort.field === col.key && sort.dir && (
+                      <span className="sort-arrow">{sort.dir === 'asc' ? '▲' : '▼'}</span>
                     )}
                     <div
                       className="col-resizer"

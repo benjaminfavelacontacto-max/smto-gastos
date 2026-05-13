@@ -302,6 +302,15 @@ thead th {
   white-space: nowrap;
   text-align: left;
   user-select: none;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+thead th:hover { background: #1c1f26; }
+
+.sort-arrow {
+  opacity: 0.7;
+  font-size: 10px;
+  margin-left: 3px;
 }
 
 /* ═══════════════════════════════════════════
@@ -437,6 +446,27 @@ td {
 /* Fecha Cobro — green when filled (post bank match), muted placeholder otherwise */
 .cell-in.is-cobro::placeholder        { color: rgba(255, 255, 255, 0.2); }
 .cell-in.is-cobro.is-filled           { color: #30D158; font-weight: 600; }
+
+/* Native date picker for Fecha Cobro — inherits dark theme via color-scheme */
+.cell-date-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 5px;
+  width: 100%;
+  color-scheme: dark;
+}
+.cell-date-input:hover,
+.cell-date-input:focus { background: rgba(255, 255, 255, 0.05); }
+.cell-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.6);
+  cursor: pointer;
+}
 
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
