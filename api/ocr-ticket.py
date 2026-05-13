@@ -56,14 +56,12 @@ class handler(BaseHTTPRequestHandler):
   "iva": 0.00,
   "propina": 0.00,
   "total": 0.00,
-  "folio": "ticket / check / receipt / folio number if present",
-  "approval_code": "credit card authorization or approval code if present (separate from folio)",
+  "folio": "card authorization / approval code as plain digits",
   "formaPago": "04"
 }
 Rules:
 - proveedor: full business name as shown on receipt
-- folio: look for Check #, Ticket #, Receipt #, Folio — the merchant's own reference
-- approval_code: credit card authorization code, often labeled "Approval Code", "Auth Code", "Authorization", "Autorización" — typically a 6-digit number near the payment block. Return separately so the bank-statement match can use it.
+- folio: look for Approval Code, Authorization Code, Auth, Approval, Code — return ONLY the digits as a plain string. If multiple codes exist prefer the one labeled "Approval" or "Authorization". This number is critical for bank matching, so do not strip leading zeros or insert dashes. If no auth code is shown fall back to a visible Check #, Ticket # or Receipt # in the same plain-digits form.
 - formaPago: 04=card/mastercard/visa, 02=cash/efectivo
 - moneda: if prices are in USD or receipt is from USA use USD, otherwise MXN
 - subtotal: amount before tax and tip
