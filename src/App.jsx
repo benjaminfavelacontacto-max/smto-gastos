@@ -1666,7 +1666,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.4</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.5</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -1694,14 +1694,18 @@ export default function App() {
       <div className="action-bar">
         <div className="action-group">
           <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
-          <button className="btn-secondary" onClick={() => document.getElementById('import-xlsx-input').click()}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-            Importar Excel
-          </button>
+          <PremiumButton
+            title="Importar Excel"
+            variant="ghost"
+            onClick={() => document.getElementById('import-xlsx-input').click()}
+            icon={
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            }
+          />
           <input
             id="import-xlsx-input"
             type="file"

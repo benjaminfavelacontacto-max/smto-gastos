@@ -1298,27 +1298,6 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   stroke: #59D39B;
 }
 
-/* Compact secondary button — used by the "Importar Excel" action so it
-   reads as a quieter sibling to the primary PremiumButton variants. */
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
 /* ═══════════════════════════════════════════
    DRAG-OVER STATE on the main table container
    Dashed brand-green outline + floating bottom toast.
