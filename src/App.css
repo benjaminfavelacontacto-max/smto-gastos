@@ -1092,6 +1092,18 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   box-shadow: 0 0 16px -4px rgba(16, 185, 129, 0.55);
 }
 
+/* Optional muted footnote shown below the file card (e.g. ZIP "originals
+   intacts" reassurance). Quiet, never competes with the CTA. */
+.cm-note {
+  margin: -6px 0 14px;
+  padding: 0 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.48);
+  letter-spacing: 0.005em;
+  text-align: center;
+  line-height: 1.5;
+}
+
 /* Responsive — stack KPIs and shrink padding on narrow viewports. */
 @media (max-width: 520px) {
   .cm-modal       { padding: 28px 22px 22px; border-radius: 20px; }

@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import JSZip from 'jszip'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Check } from 'lucide-react'
+import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check } from 'lucide-react'
 
 const TIPOS_GASTO = [
   'Aduana','Avión','Avión Ventas','Casetas','Casetas Ventas','Celular','COGS',
@@ -716,10 +716,14 @@ function ConciliacionModal({ data, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════
-   COMPONENTE: MODAL DE ÉXITO AL EXPORTAR EXCEL
+   COMPONENTE: MODAL DE ÉXITO AL EXPORTAR (Excel / ZIP)
 ═══════════════════════════════════════════════════ */
 
+// Generic success modal — driven entirely by the `data` object so it can
+// represent any export flow. Caller passes a pre-formatted `meta` string
+// (e.g. "17 registros · 24.5 KB") and an optional muted `note` footer.
 function ExportSuccessModal({ data, onClose }) {
+  const { title, subtitle, filename, meta, Icon, note } = data
   return (
     <motion.div
       className="cm-overlay"
@@ -751,8 +755,8 @@ function ExportSuccessModal({ data, onClose }) {
           >
             <CheckCircle2 size={30} strokeWidth={2.2} />
           </motion.div>
-          <h2 className="cm-title">¡Excel Generado!</h2>
-          <p className="cm-subtitle">Reporte descargado en formato oficial SMTO</p>
+          <h2 className="cm-title">{title}</h2>
+          <p className="cm-subtitle">{subtitle}</p>
         </div>
 
         {/* File card */}
@@ -764,13 +768,11 @@ function ExportSuccessModal({ data, onClose }) {
           whileHover={{ y: -2 }}
         >
           <div className="cm-file-icon">
-            <FileSpreadsheet size={20} strokeWidth={2} />
+            <Icon size={20} strokeWidth={2} />
           </div>
           <div className="cm-file-info">
-            <div className="cm-file-name">{data.filename}</div>
-            <div className="cm-file-meta">
-              {data.registros} {data.registros === 1 ? 'registro' : 'registros'} · {formatBytes(data.sizeBytes)}
-            </div>
+            <div className="cm-file-name">{filename}</div>
+            <div className="cm-file-meta">{meta}</div>
           </div>
           <motion.div
             className="cm-file-check"
@@ -783,6 +785,18 @@ function ExportSuccessModal({ data, onClose }) {
           </motion.div>
         </motion.div>
 
+        {/* Optional footnote — used by ZIP export to reassure about originals. */}
+        {note && (
+          <motion.div
+            className="cm-note"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.42 }}
+          >
+            {note}
+          </motion.div>
+        )}
+
         {/* CTA */}
         <motion.button
           className="cm-cta"
@@ -791,7 +805,7 @@ function ExportSuccessModal({ data, onClose }) {
           whileTap={{ scale: 0.98 }}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
+          transition={{ delay: note ? 0.55 : 0.5 }}
         >
           Listo
         </motion.button>
@@ -1187,12 +1201,20 @@ export default function App() {
 
     folder.file('Reporte_Gastos_Final.csv', csv)
     const blob = await zip.generateAsync({ type: 'blob' })
+    const filename = 'Reporte_Gastos_Empaquetado.zip'
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(blob),
-      download: 'Reporte_Gastos_Empaquetado.zip',
+      download: filename,
     })
     a.click(); URL.revokeObjectURL(a.href)
-    setAlerta(`¡Éxito Total! 📦\n\nSe ha generado el archivo ZIP con tu CSV y ${r} facturas (PDF y XML) correctamente renombradas.\n\nNota: Tus archivos originales siguen intactos.`)
+    setExportExito({
+      title: '¡ZIP Generado!',
+      subtitle: 'Paquete descargado con CSV + facturas renombradas',
+      filename,
+      meta: `${r} ${r === 1 ? 'factura' : 'facturas'} · ${formatBytes(blob.size)}`,
+      Icon: Package,
+      note: 'Tus archivos originales siguen intactos.',
+    })
   }
 
   // ── Exportar a Excel ──
@@ -1223,7 +1245,13 @@ export default function App() {
       const a = Object.assign(document.createElement('a'), { href: url, download: filename })
       a.click()
       URL.revokeObjectURL(url)
-      setExportExito({ filename, sizeBytes: blob.size, registros: lista.length })
+      setExportExito({
+        title: '¡Excel Generado!',
+        subtitle: 'Reporte descargado en formato oficial SMTO',
+        filename,
+        meta: `${lista.length} ${lista.length === 1 ? 'registro' : 'registros'} · ${formatBytes(blob.size)}`,
+        Icon: FileSpreadsheet,
+      })
     } catch (err) {
       setAlerta('Error al generar Excel: ' + err.message)
     }
