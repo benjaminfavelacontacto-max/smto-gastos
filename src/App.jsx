@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check, Plus, Link2 } from 'lucide-react'
+import { autoDetectTipo } from './tipoRules'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -49,28 +50,6 @@ const getTiposForColaborador = (colaborador) => {
   const cat = colaborador.categoria
   if (cat === 'Ventas' || cat === 'Socio') return TIPOS_VENTAS
   return TIPOS_NORMALES  // Admin, Servicio
-}
-
-const autoDetectTipo = (descripcion, categoria) => {
-  const d = (descripcion || '').toLowerCase()
-  const isVentas = categoria === 'Ventas' || categoria === 'Socio'
-
-  if (d.includes('hotel') || d.includes('hospedaje')) return isVentas ? 'Hotel Ventas' : 'Hotel'
-  if (d.includes('vuelo') || d.includes('avion') || d.includes('tarifa aerea')) return isVentas ? 'Avión Ventas' : 'Avión'
-  if (d.includes('taxi') || d.includes('uber') || d.includes('didi')) return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
-  if (d.includes('gasolina') || d.includes('combustible')) return isVentas ? 'Gasolina Ventas' : 'Gasolina'
-  if (d.includes('caseta') || d.includes('autopista')) return isVentas ? 'Casetas Ventas' : 'Casetas'
-  if (d.includes('renta') && (d.includes('auto') || d.includes('veh'))) return 'Renta Auto'
-  if (d.includes('renta') && (d.includes('oficina') || d.includes('local'))) return 'Renta Oficina'
-  if (d.includes('estacionamiento') || d.includes('parking')) return isVentas ? 'Estacionamiento Ventas' : 'Estacionamiento'
-  if (d.includes('celular') || d.includes('telefon') || d.includes('telcel')) return 'Celular'
-  if (d.includes('herramienta') || d.includes('ferreteria')) return isVentas ? 'Herramientas Ventas' : 'Herramientas'
-  if (d.includes('software') || d.includes('licencia') || d.includes('suscripci')) return 'IT & SW (Software/Sistemas)'
-  if (d.includes('marketing') || d.includes('publicidad')) return 'Marketing'
-  if (d.includes('uniforme')) return 'Uniformes'
-  if (d.includes('envio') || d.includes('paquete') || d.includes('flete') || d.includes('dhl') || d.includes('fedex')) return 'Envíos'
-  if (d.includes('mantenimiento')) return 'Manto Auto (Mantenimiento)'
-  return isVentas ? 'Gastos Rep (Representación)' : 'Consumo'
 }
 
 /* Roster shown by the first-run collaborator selector modal.
@@ -426,7 +405,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
     fechaFac,
     concepto:   conceptoClasif,
-    tipo: autoDetectTipo(descripcionFirstLine, colaborador?.categoria),
+    tipo: autoDetectTipo(proveedor, descripcionFirstLine, colaborador?.categoria),
     importe,
     iva,
     isrTrasladado,
@@ -1648,7 +1627,7 @@ export default function App() {
         : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
       fechaFac: parsed.fecha || today,
       concepto: parsed.concepto || '',
-      tipo: autoDetectTipo(parsed.concepto || '', colaborador?.categoria),
+      tipo: autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', colaborador?.categoria),
       // For foreign-currency tickets leave the MXN side at 0 — Pass 0 of
       // validarBanco will fill it from the bank statement's "Monto en MXN"
       // column once the authorization code matches.
