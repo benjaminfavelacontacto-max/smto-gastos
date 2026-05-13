@@ -245,7 +245,11 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     id: genId(),
     rfc,
     proveedor,
-    noFactura:  ga(comp, 'Folio', 'folio') || 'SN',
+    noFactura:  (() => {
+      const serie = ga(comp, 'Serie', 'serie') || ''
+      const folio = ga(comp, 'Folio', 'folio') || 'SN'
+      return serie ? `${serie}${folio}` : folio
+    })(),
     fechaFac:  (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10),
     concepto:   conceptoClasif,
     importe,
