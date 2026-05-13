@@ -34,6 +34,60 @@ const autoDetectTipo = (descripcion) => {
   return 'Consumo'
 }
 
+/* Roster shown by the first-run collaborator selector modal.
+   Grouped into 4 categorías; the modal filters by name OR categoría. */
+const COLABORADORES = [
+  { categoria: 'Admin', nombre: 'Leticia Solis' },
+  { categoria: 'Admin', nombre: 'Victor Aceves' },
+  { categoria: 'Admin', nombre: 'José Luis Falcón' },
+  { categoria: 'Admin', nombre: 'Marco Valencia' },
+  { categoria: 'Admin', nombre: 'Daniel Covarrubias' },
+  { categoria: 'Socio', nombre: 'Edie Haro' },
+  { categoria: 'Socio', nombre: 'David Delgado' },
+  { categoria: 'Socio', nombre: 'Isaias Valencia' },
+  { categoria: 'Socio', nombre: 'Sigifredo Olivas' },
+  { categoria: 'Socio', nombre: 'Alejandro Olivar' },
+  { categoria: 'Socio', nombre: 'Rosy Corral' },
+  { categoria: 'Servicio', nombre: 'Heriberto Chacón' },
+  { categoria: 'Servicio', nombre: 'Eduardo Carranco' },
+  { categoria: 'Servicio', nombre: 'Daniel Gutierrez' },
+  { categoria: 'Servicio', nombre: 'James Tisoto' },
+  { categoria: 'Servicio', nombre: 'Misael Cruz' },
+  { categoria: 'Servicio', nombre: 'Benjamin Favela' },
+  { categoria: 'Servicio', nombre: 'Viviana Perez' },
+  { categoria: 'Servicio', nombre: 'Juan Francisco Cuellar' },
+  { categoria: 'Servicio', nombre: 'Juan Carlos Virgen' },
+  { categoria: 'Servicio', nombre: 'Paola Gutierrez' },
+  { categoria: 'Servicio', nombre: 'David de Jesus Delgado' },
+  { categoria: 'Servicio', nombre: 'Omar Monclova' },
+  { categoria: 'Servicio', nombre: 'Antonio Uribe' },
+  { categoria: 'Servicio', nombre: 'Natividad Garcia' },
+  { categoria: 'Servicio', nombre: 'Raydel Baltazar' },
+  { categoria: 'Servicio', nombre: 'Miguel Castillo' },
+  { categoria: 'Servicio', nombre: 'David Lopez' },
+  { categoria: 'Servicio', nombre: 'David Castillo' },
+  { categoria: 'Servicio', nombre: 'Dario Lopez' },
+  { categoria: 'Servicio', nombre: 'Moises Padilla' },
+  { categoria: 'Servicio', nombre: 'Emmanuel Haro' },
+  { categoria: 'Servicio', nombre: 'Ricardo Pacheco Glez.' },
+  { categoria: 'Ventas', nombre: 'Emmanuel Navarro' },
+  { categoria: 'Ventas', nombre: 'Carlos Ponce' },
+  { categoria: 'Ventas', nombre: 'Gemma Gonzalez' },
+  { categoria: 'Ventas', nombre: 'Armando Torres' },
+  { categoria: 'Ventas', nombre: 'Juan Carlos Santoyo' },
+  { categoria: 'Ventas', nombre: 'Ricardo Pacheco' },
+  { categoria: 'Ventas', nombre: 'Mariana Gonzalez' },
+  { categoria: 'Ventas', nombre: 'Cynthia Diaz' },
+  { categoria: 'Ventas', nombre: 'Julio Torres' },
+  { categoria: 'Ventas', nombre: 'Mauricio Rodriguez' },
+  { categoria: 'Ventas', nombre: 'Cindy Montaño' },
+  { categoria: 'Ventas', nombre: 'Hector Duarte' },
+  { categoria: 'Ventas', nombre: 'Juan Sotomayor' },
+  { categoria: 'Ventas', nombre: 'Marco Alvarado' },
+  { categoria: 'Ventas', nombre: 'Miranda Navarro' },
+  { categoria: 'Ventas', nombre: 'Marco Sanchez' },
+]
+
 /* Single source of truth for table columns.
    `getValue` overrides simple `g[key]` lookup (used by Total Final). */
 const COLUMNS = [
@@ -831,6 +885,71 @@ function ExportSuccessModal({ data, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: SELECTOR DE COLABORADOR (modal de bienvenida)
+═══════════════════════════════════════════════════ */
+
+function ColaboradorModal({ onSelect }) {
+  const [search, setSearch] = useState('')
+
+  const filtered = COLABORADORES.filter(c =>
+    c.nombre.toLowerCase().includes(search.toLowerCase()) ||
+    c.categoria.toLowerCase().includes(search.toLowerCase())
+  )
+
+  const categorias = ['Admin', 'Socio', 'Servicio', 'Ventas']
+
+  return (
+    <div className="colab-overlay">
+      <div className="colab-modal">
+        <div className="colab-modal-header">
+          <img src="/logo.png" alt="SMTO" style={{ height: 44, marginBottom: 12 }} />
+          <h2 className="colab-title">¿Quién realiza este reporte?</h2>
+          <p className="colab-subtitle">Selecciona tu nombre para continuar</p>
+        </div>
+
+        <div className="colab-search-wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="colab-search-icon">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input
+            className="colab-search"
+            placeholder="Buscar colaborador..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            autoFocus
+          />
+        </div>
+
+        <div className="colab-list">
+          {categorias.map(cat => {
+            const items = filtered.filter(c => c.categoria === cat)
+            if (items.length === 0) return null
+            return (
+              <div key={cat} className="colab-group">
+                <div className="colab-group-label">{cat}</div>
+                {items.map(c => (
+                  <button
+                    key={c.nombre}
+                    className="colab-item"
+                    onClick={() => onSelect(c)}
+                  >
+                    <span className="colab-avatar">{c.nombre.charAt(0)}</span>
+                    <span className="colab-nombre">{c.nombre}</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="colab-arrow">
+                      <path d="m9 18 6-6-6-6"/>
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    APP PRINCIPAL
 ═══════════════════════════════════════════════════ */
 
@@ -840,6 +959,9 @@ export default function App() {
   const [alerta,        setAlerta]        = useState(null)
   const [conciliacion,  setConciliacion]  = useState(null)
   const [exportExito,   setExportExito]   = useState(null)
+  const [colaborador,   setColaborador]   = useState(null)
+  const [showColabModal, setShowColabModal] = useState(true)
+  const [colabSearch,   setColabSearch]   = useState('')
   const [loading,       setLoading]       = useState(false)
   const [isDragging,    setIsDragging]    = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1244,7 +1366,7 @@ export default function App() {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(lista),
+        body: JSON.stringify({ gastos: lista, colaborador: colaborador?.nombre || '' }),
       })
       if (!response.ok) {
         try {
@@ -1289,13 +1411,21 @@ export default function App() {
   return (
     <div className="app">
 
+      {/* ─── MODAL DE BIENVENIDA: selección de colaborador ─── */}
+      {showColabModal && (
+        <ColaboradorModal onSelect={c => {
+          setColaborador(c)
+          setShowColabModal(false)
+        }} />
+      )}
+
       {/* ─── CABECERA ─── */}
       <div className="header">
         <div className="header-logo">
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v4.10</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v4.11</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -1307,6 +1437,13 @@ export default function App() {
               {lista.length} registros
             </span>
           </div>
+          {colaborador && (
+            <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
+              <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
+              <span>{colaborador.nombre}</span>
+              <span className="colab-chip-cat">{colaborador.categoria}</span>
+            </button>
+          )}
         </div>
       </div>
 

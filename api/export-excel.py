@@ -135,7 +135,7 @@ def fill_row_bg(ws, row, start_col, end_col, color):
     for c in range(start_col, end_col + 1):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=color)
 
-def build_workbook(gastos):
+def build_workbook(gastos, colaborador=''):
     wb = Workbook()
     ws = wb.active
     ws.title = 'Reporte SMTO'
@@ -184,7 +184,7 @@ def build_workbook(gastos):
     # Right-side form fields (cols J:M) — white fill, font 14
     ws.merge_cells('J1:M1')
     f1 = ws['J1']
-    f1.value = ''  # left blank for the user to fill in
+    f1.value = colaborador  # filled programmatically from the selected colaborador
     f1.font = Font(name='Aptos', size=14, color=TEXT_PRIMARY)
     f1.fill = PatternFill('solid', start_color=WHITE)
     f1.border = Border(bottom=Side(style='thin', color=BORDER_LIGHT))
@@ -385,7 +385,7 @@ def build_workbook(gastos):
     ws.row_dimensions[row].height = 24
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v4.10'
+    ft.value = 'SMTO Engineering · v4.11'
     ft.font = Font(name='Aptos', size=9, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
@@ -428,8 +428,16 @@ class handler(BaseHTTPRequestHandler):
                 raise RuntimeError(f'Import failed:\n{IMPORT_ERROR}')
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length)
-            gastos = json.loads(body)
-            wb = build_workbook(gastos)
+            data = json.loads(body)
+            # Backward compatible: old clients send a bare array, new clients
+            # send { gastos: [...], colaborador: '...' }.
+            if isinstance(data, dict):
+                gastos = data.get('gastos', [])
+                colaborador = data.get('colaborador', '')
+            else:
+                gastos = data
+                colaborador = ''
+            wb = build_workbook(gastos, colaborador)
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)
