@@ -44,7 +44,7 @@ const TIPOS_NORMALES = [
 ]
 
 const getTiposForColaborador = (colaborador) => {
-  if (!colaborador) return [...TIPOS_NORMALES, ...TIPOS_VENTAS].sort()
+  if (!colaborador) return TIPOS_NORMALES
   const cat = colaborador.categoria
   if (cat === 'Ventas' || cat === 'Socio') return TIPOS_VENTAS
   return TIPOS_NORMALES  // Admin, Servicio
@@ -68,7 +68,6 @@ const autoDetectTipo = (descripcion, categoria) => {
   if (d.includes('marketing') || d.includes('publicidad')) return 'Marketing'
   if (d.includes('uniforme')) return 'Uniformes'
   if (d.includes('envio') || d.includes('paquete') || d.includes('flete') || d.includes('dhl') || d.includes('fedex')) return 'Envíos'
-  if (d.includes('aduana')) return 'Aduana'
   if (d.includes('mantenimiento')) return 'Manto Auto (Mantenimiento)'
   return isVentas ? 'Gastos Rep (Representación)' : 'Consumo'
 }
