@@ -3,35 +3,74 @@ import JSZip from 'jszip'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check } from 'lucide-react'
 
-const TIPOS_GASTO = [
-  'Aduana','Avión','Avión Ventas','Casetas','Casetas Ventas','Celular','COGS',
-  'Consumo','Consumo Viáticos','Devolución','Envios','Estacionamiento',
-  'Estacionamiento Ventas','Gasolina','Gasolina Ventas','Gasolina Ventas Viáticos',
-  'Gasolina Viáticos','Gastos Rep','Gastos Rep Ventas','Gastos Rep Viáticos',
-  'Herramientas','Hotel','Hotel Ventas','IT & SW','Manto Auto','Marketing',
-  'No Comprobado','Papelería','PC','Rechazada','Renta Auto','Renta Oficina',
-  'Taxi','Taxi Ventas','Traspaso','Uniformes'
+/* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
+   sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
+   (Admin/Servicio) sees the operational list. */
+const TIPOS_VENTAS = [
+  'Avión Ventas',
+  'Casetas Ventas',
+  'Estacionamiento Ventas',
+  'Gasolina Ventas',
+  'Gasolina Viáticos',
+  'Gastos Rep (Representación)',
+  'Gastos Rep Viáticos',
+  'Herramientas Ventas',
+  'Hotel Ventas',
+  'Marketing',
 ]
 
-const autoDetectTipo = (descripcion) => {
+const TIPOS_NORMALES = [
+  'Avión',
+  'Casetas',
+  'Celular',
+  'Consumo',
+  'Consumo Viáticos',
+  'Envíos',
+  'Estacionamiento',
+  'Gasolina',
+  'Herramientas',
+  'Hotel',
+  'IT & SW (Software/Sistemas)',
+  'Manto Auto (Mantenimiento)',
+  'No Comprobado',
+  'Papelería',
+  'PC (Equipo)',
+  'Rechazada',
+  'Renta Auto',
+  'Renta Oficina',
+  'Taxi',
+  'Traspaso',
+  'Uniformes',
+]
+
+const getTiposForColaborador = (colaborador) => {
+  if (!colaborador) return [...TIPOS_NORMALES, ...TIPOS_VENTAS].sort()
+  const cat = colaborador.categoria
+  if (cat === 'Ventas' || cat === 'Socio') return TIPOS_VENTAS
+  return TIPOS_NORMALES  // Admin, Servicio
+}
+
+const autoDetectTipo = (descripcion, categoria) => {
   const d = (descripcion || '').toLowerCase()
-  if (d.includes('hotel') || d.includes('hospedaje')) return 'Hotel'
-  if (d.includes('vuelo') || d.includes('avion') || d.includes('tarifa aerea')) return 'Avión'
-  if (d.includes('taxi') || d.includes('uber') || d.includes('didi')) return 'Taxi'
-  if (d.includes('gasolina') || d.includes('combustible')) return 'Gasolina'
-  if (d.includes('caseta') || d.includes('autopista') || d.includes('peaje')) return 'Casetas'
+  const isVentas = categoria === 'Ventas' || categoria === 'Socio'
+
+  if (d.includes('hotel') || d.includes('hospedaje')) return isVentas ? 'Hotel Ventas' : 'Hotel'
+  if (d.includes('vuelo') || d.includes('avion') || d.includes('tarifa aerea')) return isVentas ? 'Avión Ventas' : 'Avión'
+  if (d.includes('taxi') || d.includes('uber') || d.includes('didi')) return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
+  if (d.includes('gasolina') || d.includes('combustible')) return isVentas ? 'Gasolina Ventas' : 'Gasolina'
+  if (d.includes('caseta') || d.includes('autopista')) return isVentas ? 'Casetas Ventas' : 'Casetas'
   if (d.includes('renta') && (d.includes('auto') || d.includes('veh'))) return 'Renta Auto'
   if (d.includes('renta') && (d.includes('oficina') || d.includes('local'))) return 'Renta Oficina'
-  if (d.includes('estacionamiento') || d.includes('parking')) return 'Estacionamiento'
+  if (d.includes('estacionamiento') || d.includes('parking')) return isVentas ? 'Estacionamiento Ventas' : 'Estacionamiento'
   if (d.includes('celular') || d.includes('telefon') || d.includes('telcel')) return 'Celular'
-  if (d.includes('herramienta') || d.includes('ferreteria')) return 'Herramientas'
-  if (d.includes('software') || d.includes('licencia') || d.includes('suscripci')) return 'IT & SW'
+  if (d.includes('herramienta') || d.includes('ferreteria')) return isVentas ? 'Herramientas Ventas' : 'Herramientas'
+  if (d.includes('software') || d.includes('licencia') || d.includes('suscripci')) return 'IT & SW (Software/Sistemas)'
   if (d.includes('marketing') || d.includes('publicidad')) return 'Marketing'
   if (d.includes('uniforme')) return 'Uniformes'
-  if (d.includes('envio') || d.includes('paquete') || d.includes('flete') || d.includes('dhl') || d.includes('fedex')) return 'Envios'
+  if (d.includes('envio') || d.includes('paquete') || d.includes('flete') || d.includes('dhl') || d.includes('fedex')) return 'Envíos'
   if (d.includes('aduana')) return 'Aduana'
-  if (d.includes('mantenimiento')) return 'Manto Auto'
-  return 'Consumo'
+  if (d.includes('mantenimiento')) return 'Manto Auto (Mantenimiento)'
+  return isVentas ? 'Gastos Rep (Representación)' : 'Consumo'
 }
 
 /* Roster shown by the first-run collaborator selector modal.
@@ -186,7 +225,7 @@ function parseCSVLine(line, sep) {
   return result
 }
 
-function parseCFDI(xmlText, xmlFile, pdfFiles) {
+function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // RFCs whose <Retencion Impuesto="001"> is actually an ISR trasladado
   // (their PDFs label it as a line-item tax, not a withholding).
   const RFC_ISR_COMO_TRASLADO = ['AUEJ040528DNA']
@@ -361,7 +400,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
     noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
     fechaFac,
     concepto:   conceptoClasif,
-    tipo: autoDetectTipo(descripcionFirstLine),
+    tipo: autoDetectTipo(descripcionFirstLine, colaborador?.categoria),
     importe,
     iva,
     isrTrasladado,
@@ -403,7 +442,7 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-function GastoRow({ g, upd, openPDF, onDelete }) {
+function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
   // Display ↔ storage: app-wide formatDateDisplay/parseDateDisplay handle
   // the MM-DD-YY ↔ YYYY-MM-DD round-trip.
   const dateDisplay  = formatDateDisplay(g.fechaFac)
@@ -537,7 +576,7 @@ function GastoRow({ g, upd, openPDF, onDelete }) {
           onChange={e => upd('tipo', e.target.value)}
         >
           <option value="">— Tipo —</option>
-          {TIPOS_GASTO.map(t => (
+          {tiposList.map(t => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
@@ -1020,6 +1059,12 @@ export default function App() {
     })
   }, [lista, sort])
 
+  // TIPO dropdown list — depends on the selected colaborador's categoría.
+  // Ventas/Socio get the sales-flavored list; Admin/Servicio get the
+  // operational list; null (modal still open) falls back to a merged
+  // sorted union so existing rows can still render their saved tipo.
+  const tiposList = useMemo(() => getTiposForColaborador(colaborador), [colaborador])
+
   // Three-state cycle: first click → asc, second → desc, third → unsorted.
   const toggleSort = field => setSort(s => {
     if (s.field === field) {
@@ -1079,7 +1124,7 @@ export default function App() {
     for (const f of xmls) {
       try {
         const text = await f.text()
-        const g = parseCFDI(text, f, pdfs)
+        const g = parseCFDI(text, f, pdfs, colaborador)
         if (g) nueva.push(g)
       } catch {}
     }
@@ -1425,7 +1470,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v5.7</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v5.8</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -1581,6 +1626,7 @@ export default function App() {
                   upd={(field, val) => update(g.id, field, val)}
                   onDelete={() => setLista(prev => prev.filter(x => x.id !== g.id))}
                   openPDF={openPDF}
+                  tiposList={tiposList}
                 />
               ))}
             </tbody>
