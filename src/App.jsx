@@ -1002,7 +1002,7 @@ export default function App() {
   const [showColabModal, setShowColabModal] = useState(true)
   const [colabSearch,   setColabSearch]   = useState('')
   const [loading,       setLoading]       = useState(false)
-  const [isDragging,    setIsDragging]    = useState(false)
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
   // [0] checkbox, [1] estado, [2] fecha factura, [3] fecha cobro,
   // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
@@ -1139,12 +1139,92 @@ export default function App() {
     e.target.value = ''
   }
 
-  const onDropFiles = async e => {
+  // ── Drag/drop XML+PDF onto the table to merge into the current report ──
+  // Differs from processFiles (folder picker) in that it MERGES instead of
+  // replacing: existing rows matched by RFC+noFactura are refreshed with
+  // the new XML/PDF attachment; truly new rows are appended.
+  const handleDragOver = (e) => {
     e.preventDefault()
-    setIsDragging(false)
+    e.stopPropagation()
+    setIsDraggingOver(true)
+  }
+
+  const handleDragLeave = (e) => {
+    e.stopPropagation()
+    // Only clear when the cursor leaves the container entirely, not when
+    // it crosses into a child element.
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setIsDraggingOver(false)
+    }
+  }
+
+  const handleDrop = async (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+
     const files = Array.from(e.dataTransfer.files)
-    const folder = files[0]?.webkitRelativePath?.split('/')[0] || 'Archivos arrastrados'
-    await processFiles(files, folder)
+    const xmlFiles = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
+    const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
+
+    if (xmlFiles.length === 0 && pdfFiles.length === 0) {
+      setAlerta('Solo se aceptan archivos XML y PDF.')
+      return
+    }
+
+    // Parse every XML through the existing CFDI pipeline so each gasto has
+    // the full row shape (id, xmlFile, auto-detected tipo, etc).
+    const newGastos = []
+    for (const file of xmlFiles) {
+      try {
+        const text = await file.text()
+        const gasto = parseCFDI(text, file, pdfFiles, colaborador)
+        if (gasto) newGastos.push(gasto)
+      } catch (err) {
+        console.warn('Error parsing', file.name, err)
+      }
+    }
+
+    // Merge: refresh existing rows (matched by RFC + noFactura) with the
+    // new XML/PDF, append the rest. Reporting happens inside setLista so it
+    // reads the merge counts under the same closure.
+    setLista(prev => {
+      const merged = [...prev]
+      const existingKeys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
+
+      let added = 0
+      let updated = 0
+
+      for (const newG of newGastos) {
+        const key = `${newG.rfc}|${newG.noFactura}`
+        if (existingKeys.has(key)) {
+          const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
+          if (idx !== -1) {
+            merged[idx] = {
+              ...merged[idx],
+              xmlFile: newG.xmlFile,
+              ...(newG.pdfFile ? { tienePDF: true, pdfFile: newG.pdfFile } : {}),
+            }
+            updated++
+          }
+        } else {
+          merged.push(newG)
+          existingKeys.add(key)
+          added++
+        }
+      }
+
+      const parts = []
+      if (added > 0)         parts.push(`➕ ${added} nuevas facturas agregadas`)
+      if (updated > 0)       parts.push(`🔗 ${updated} facturas actualizadas`)
+      if (pdfFiles.length)   parts.push(`📄 ${pdfFiles.length} PDFs recibidos`)
+      if (parts.length > 0) {
+        // setTimeout so the modal renders after the lista update commits.
+        setTimeout(() => setAlerta('✓ Archivos procesados:\n' + parts.join('\n')), 100)
+      }
+
+      return merged
+    })
   }
 
   // ── Validar estado de cuenta bancario ──
@@ -1586,7 +1666,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.2</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.4</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -1695,7 +1775,12 @@ export default function App() {
       <div className="divider" />
 
       {/* ─── TABLA ─── */}
-      <div className="table-wrap">
+      <div
+        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         {loading ? (
           <div className="loading-msg">
             <div className="loading-spinner" />
@@ -1703,15 +1788,15 @@ export default function App() {
           </div>
         ) : lista.length === 0 ? (
           <div
-            className={`onboarding ${isDragging ? 'is-dragging' : ''}`}
-            onDragOver={e => { e.preventDefault(); if (!isDragging) setIsDragging(true) }}
-            onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragging(false) }}
-            onDrop={onDropFiles}
+            className={`onboarding ${isDraggingOver ? 'is-dragging' : ''}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
           >
             <div className="onboarding-glow" />
             <div className="onboarding-card">
               <div className="onboarding-icon">
-                {isDragging ? (
+                {isDraggingOver ? (
                   <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                     <polyline points="17 8 12 3 7 8"/>
@@ -1725,7 +1810,7 @@ export default function App() {
               </div>
               <div className="onboarding-title">Carga tus facturas XML</div>
               <div className="onboarding-sub">
-                {isDragging
+                {isDraggingOver
                   ? 'Suelta aquí tus archivos'
                   : 'Arrastra una carpeta o selecciónala para comenzar'}
               </div>

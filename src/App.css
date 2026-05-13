@@ -1319,3 +1319,31 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* ═══════════════════════════════════════════
+   DRAG-OVER STATE on the main table container
+   Dashed brand-green outline + floating bottom toast.
+═══════════════════════════════════════════ */
+.table-container.drag-over {
+  outline: 2px dashed rgba(89, 211, 155, 0.6);
+  outline-offset: -3px;
+  background: rgba(89, 211, 155, 0.03);
+}
+.table-container.drag-over::after {
+  content: 'Suelta aquí los archivos XML o PDF';
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(89, 211, 155, 0.15);
+  border: 1px solid rgba(89, 211, 155, 0.4);
+  color: #59D39B;
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 100;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
