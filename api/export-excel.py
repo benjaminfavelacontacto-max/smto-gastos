@@ -158,10 +158,10 @@ def build_workbook(gastos, colaborador=''):
         fill_row_bg(ws, r, 1, 14, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
-    ws.row_dimensions[1].height = 44
-    ws.row_dimensions[2].height = 30
+    ws.row_dimensions[1].height = 50
+    ws.row_dimensions[2].height = 36
 
-    # Title — centered across D1:G2; pairs with the 48px logo at B1
+    # Title — centered across D1:G2; pairs with the 64px logo at B1
     ws.merge_cells('D1:G2')
     title = ws['D1']
     title.value = 'Reporte de Gastos'
@@ -223,21 +223,26 @@ def build_workbook(gastos, colaborador=''):
     total_ret = round(sum(g.get('retenciones', 0) for g in gastos), 2)
     num_facturas = len(gastos)
 
-    # (col_start, col_end, label, value, value_color)
-    # All four KPIs share a thick SMTO_GREEN left border per the reference;
-    # only the first value is colored green, the rest stay SMTO_BLACK.
+    # (col_start, col_end, label, value, number_format, value_color)
+    # KPI values are now stored as raw numerics with number_format so Excel
+    # does not flag the cells with "Number Stored as Text" warning triangles.
+    # All four cards share a medium EXCEL_GREEN frame; only the first value
+    # is colored brand-green, the rest stay SMTO_BLACK.
     kpis = [
-        ('B', 'D', 'TOTAL FACTURADO', f'${total_facturado:,.2f}', SMTO_GREEN),
-        ('E', 'G', 'IVA TOTAL',       f'${total_iva:,.2f}',       SMTO_BLACK),
-        ('H', 'J', 'RETENCIONES',     f'${total_ret:,.2f}',       SMTO_BLACK),
-        ('K', 'M', 'REGISTROS',       str(num_facturas),          SMTO_BLACK),
+        ('B', 'D', 'TOTAL FACTURADO', total_facturado, '"$"#,##0.00', SMTO_GREEN),
+        ('E', 'G', 'IVA TOTAL',       total_iva,       '"$"#,##0.00', SMTO_BLACK),
+        ('H', 'J', 'RETENCIONES',     total_ret,       '"$"#,##0.00', SMTO_BLACK),
+        ('K', 'M', 'REGISTROS',       num_facturas,    '0',           SMTO_BLACK),
     ]
 
-    for col_start, col_end, label, value, value_color in kpis:
-        # Value row (row 5)
+    for col_start, col_end, label, value, fmt, value_color in kpis:
+        # Value row (row 5) — anchor cell carries the value/font/fill; the
+        # right-edge border has to also be applied to the LAST cell of the
+        # merge because openpyxl renders borders per cell, not per merge.
         ws.merge_cells(f'{col_start}5:{col_end}5')
         v_cell = ws[f'{col_start}5']
         v_cell.value = value
+        v_cell.number_format = fmt
         v_cell.font = Font(name='Aptos', size=20, bold=True, color=value_color)
         v_cell.alignment = Alignment(horizontal='left', vertical='center', indent=2)
         v_cell.fill = PatternFill('solid', start_color=WHITE)
@@ -247,8 +252,13 @@ def build_workbook(gastos, colaborador=''):
             right=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='thin', color=BORDER_LIGHT),
         )
+        ws[f'{col_end}5'].border = Border(
+            right=Side(style='medium', color=EXCEL_GREEN),
+            top=Side(style='medium', color=EXCEL_GREEN),
+            bottom=Side(style='thin', color=BORDER_LIGHT),
+        )
 
-        # Label row (row 6)
+        # Label row (row 6) — same trick: border the merge end-cell too.
         ws.merge_cells(f'{col_start}6:{col_end}6')
         l_cell = ws[f'{col_start}6']
         l_cell.value = label
@@ -259,6 +269,11 @@ def build_workbook(gastos, colaborador=''):
             left=Side(style='medium', color=EXCEL_GREEN),
             top=Side(style='thin', color=BORDER_LIGHT),
             right=Side(style='medium', color=EXCEL_GREEN),
+            bottom=Side(style='medium', color=EXCEL_GREEN),
+        )
+        ws[f'{col_end}6'].border = Border(
+            right=Side(style='medium', color=EXCEL_GREEN),
+            top=Side(style='thin', color=BORDER_LIGHT),
             bottom=Side(style='medium', color=EXCEL_GREEN),
         )
 
@@ -415,7 +430,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v5.5'
+    ft.value = 'SMTO Engineering · v5.6'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
@@ -426,7 +441,7 @@ def build_workbook(gastos, colaborador=''):
         try:
             pil = PILImage.open(logo_path)
             pil = crop_logo(pil)
-            target_h = 48
+            target_h = 64
             ratio = target_h / pil.height
             target_w = int(pil.width * ratio)
             pil = pil.resize((target_w, target_h), PILImage.LANCZOS)
