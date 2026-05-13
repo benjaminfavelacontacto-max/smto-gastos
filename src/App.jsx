@@ -1498,83 +1498,111 @@ export default function App() {
     setIsDraggingOver(false)
 
     const files = Array.from(e.dataTransfer.files)
-    const xmlFiles = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
-    const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
-    const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.name))
+    if (!files.length) return
 
-    if (xmlFiles.length === 0 && pdfFiles.length === 0 && imageFiles.length === 0) {
-      setAlerta('Solo se aceptan archivos XML, PDF, JPG, PNG o WEBP.')
-      return
-    }
+    const xmlFiles   = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
+    const pdfFiles   = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
+    const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.name.toLowerCase()))
 
-    // Step 1 — parse XMLs through the existing CFDI pipeline (PDF auto-link
-    // happens inside parseCFDI when given the candidate set).
     const allNewGastos = []
+
+    // STEP 1 — parse XMLs locally (always free). parseCFDI takes the full
+    // signature so xmlFile + auto-PDF-link + auto-tipo all work.
     for (const file of xmlFiles) {
       try {
         const text = await file.text()
         const gasto = parseCFDI(text, file, pdfFiles, colaborador)
-        if (gasto) allNewGastos.push(gasto)
+        if (gasto) {
+          gasto.isNew = true
+          allNewGastos.push(gasto)
+        }
       } catch (err) {
-        console.warn('XML error:', file.name, err)
+        console.warn('XML parse error:', file.name, err)
       }
     }
 
-    // Step 2 — figure out which dropped PDFs got picked up by parseCFDI's
-    // built-in matcher (exact basename / UUID / fuzzy). Anything else is a
-    // candidate for OCR.
-    const matchedPdfBases = new Set(
-      allNewGastos
-        .filter(g => g.pdfFile)
-        .map(g => g.pdfFile.name.replace(/\.pdf$/i, '').toLowerCase()),
-    )
-    const unmatchedPDFs = pdfFiles.filter(
-      p => !matchedPdfBases.has(p.name.replace(/\.pdf$/i, '').toLowerCase()),
-    )
+    // STEP 2 — figure out which dropped PDFs are still loose. parseCFDI's
+    // built-in matcher already attached the obvious ones (g.pdfFile is set);
+    // try a second pass against folio/RFC for the rest.
+    const unmatchedPDFs = []
+    for (const pdfFile of pdfFiles) {
+      const pdfBase = pdfFile.name.replace(/\.pdf$/i, '').toLowerCase()
 
-    // Step 3 — OCR pass for unmatched PDFs and any dropped images. Asks the
-    // user first because every call costs money.
+      // Already attached by parseCFDI?
+      if (allNewGastos.some(g => g.pdfFile && g.pdfFile.name.toLowerCase() === pdfFile.name.toLowerCase())) {
+        continue
+      }
+
+      const matched = allNewGastos.find(g => {
+        const xmlBase = (g.xmlFile?.name || '').replace(/\.xml$/i, '').toLowerCase()
+        const folio   = (g.noFactura || '').toLowerCase()
+        const rfc     = (g.rfc || '').toLowerCase()
+        return (
+          pdfBase === xmlBase ||
+          (folio   && pdfBase.includes(folio)) ||
+          (rfc     && pdfBase.includes(rfc))   ||
+          (xmlBase && xmlBase.includes(pdfBase))
+        )
+      })
+      if (matched) {
+        matched.pdfFile  = pdfFile
+        matched.tienePDF = true
+      } else {
+        unmatchedPDFs.push(pdfFile)
+      }
+    }
+
+    // STEP 3 — OCR pass for unmatched PDFs + dropped images. Asks before
+    // spending money. Errors per file route through the plain alerta modal.
     const ocrFiles = [...unmatchedPDFs, ...imageFiles]
-    let ocrAdded = 0
     if (ocrFiles.length > 0) {
-      const confirmed = window.confirm(
-        `Se encontraron ${ocrFiles.length} archivo(s) sin XML:\n\n` +
+      const userConfirmed = window.confirm(
+        `Se detectaron ${ocrFiles.length} archivo(s) sin XML:\n\n` +
         ocrFiles.map(f => `• ${f.name}`).join('\n') +
-        `\n\n⚡ ¿Procesarlos con OCR?\nCosto estimado: ~$${(ocrFiles.length * 0.01).toFixed(2)} USD`
+        `\n\n⚡ ¿Procesarlos con OCR (IA)?\n` +
+        `Costo estimado: ~$${(ocrFiles.length * 0.01).toFixed(2)} USD`
       )
-      if (confirmed) {
+
+      if (userConfirmed) {
         setOcrLoading(true)
         for (const file of ocrFiles) {
           try {
             const base64 = await fileToBase64(file)
             const ext = file.name.split('.').pop().toLowerCase()
-            const mediaType = ext === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
+            const mediaType = ext === 'pdf'
+              ? 'application/pdf'
+              : `image/${ext === 'jpg' ? 'jpeg' : ext}`
+
             const gasto = await extractReceiptData(base64, mediaType, file.name)
             if (gasto) {
-              // Keep the source PDF attached so it can ride the ZIP export.
+              // Keep the source PDF attached so it rides the ZIP export.
               if (mediaType === 'application/pdf') {
                 gasto.pdfFile = file
                 gasto.tienePDF = true
               }
+              gasto.isNew = true
               allNewGastos.push(gasto)
-              ocrAdded++
             }
           } catch (err) {
             console.warn('OCR error:', file.name, err)
+            setAlerta(`Error procesando ${file.name}: ${err.message}`)
           }
         }
         setOcrLoading(false)
       }
     }
 
+    // STEP 4 — bail with the right message. If nothing parseable was dropped
+    // at all, show "Solo se aceptan...". If OCR was declined or every file
+    // failed, exit silently (the user already knows).
     if (allNewGastos.length === 0) {
-      setAlerta('No se encontraron registros válidos en los archivos.')
+      if (xmlFiles.length === 0 && ocrFiles.length === 0) {
+        setAlerta('Solo se aceptan archivos XML, PDF, JPG, PNG o WEBP.')
+      }
       return
     }
 
-    // Step 4 — single setLista at the end so async timing can't leave OCR
-    // results out of the table. Existing keys (RFC|noFactura) trigger an
-    // in-place refresh; new keys append.
+    // STEP 5 — single setLista commit, then surface the premium drop modal.
     setLista(prev => {
       const merged = [...prev]
       const existingKeys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
@@ -1586,22 +1614,19 @@ export default function App() {
         if (existingKeys.has(key)) {
           const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
           if (idx !== -1) {
-            merged[idx] = {
-              ...merged[idx],
-              xmlFile: newG.xmlFile || merged[idx].xmlFile,
-              ...(newG.pdfFile ? { tienePDF: true, pdfFile: newG.pdfFile } : {}),
-              isNew: true,
-            }
+            // Refresh existing row with whatever the new payload carries
+            // (xmlFile, pdfFile, fresher fields), keep isNew for the flash.
+            merged[idx] = { ...merged[idx], ...newG, isNew: true }
             updated++
           }
         } else {
-          merged.push({ ...newG, isNew: true })
+          merged.push(newG)
           existingKeys.add(key)
           added++
         }
       }
 
-      // Premium glass result modal — only opens if any counter is non-zero.
+      // Premium glass result modal — only opens when something actually changed.
       if (added > 0 || updated > 0 || pdfFiles.length > 0) {
         setTimeout(() => setDropSummary({
           added,
@@ -1609,14 +1634,15 @@ export default function App() {
           pdfs: pdfFiles.length,
         }), 100)
       }
-      // Clear isNew flags after the row entrance animation has played out
-      // so subsequent renders don't replay it.
-      setTimeout(() => {
-        setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
-      }, 1000)
 
       return merged
     })
+
+    // Clear isNew flags after the row entrance animation finishes so
+    // subsequent renders don't replay it.
+    setTimeout(() => {
+      setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+    }, 1500)
   }
 
   // ── Validar estado de cuenta bancario ──
