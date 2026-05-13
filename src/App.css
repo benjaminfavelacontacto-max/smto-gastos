@@ -314,49 +314,74 @@ thead th:hover { background: #1c1f26; }
 }
 
 /* ═══════════════════════════════════════════
-   STICKY COLUMNS — Estado / Fecha / Proveedor
-   Left offsets come from CSS vars set on <table> so resizing works.
+   STICKY COLUMNS — Estado (left:0) + Proveedor (left:status-width)
+   Plus a sticky-right action column for the delete button.
+   Left offset comes from --sl-proveedor on <table> so resizing works.
 ═══════════════════════════════════════════ */
 thead th.th-status,
-thead th.th-fecha,
-thead th.th-proveedor {
+thead th.th-proveedor,
+thead th.th-delete {
   /* Override the regular z-index:30 of sticky-vertical header so the pinned
-     trio sits above scrolling header cells when they slide underneath. */
+     cells sit above scrolling header cells when they slide underneath. */
   z-index: 40;
 }
 thead th.th-status,
-tbody td.td-status   { left: 0;                position: sticky; }
-thead th.th-fecha,
-tbody td.td-fecha    { left: var(--sl-fecha);     position: sticky; }
+tbody td.td-status    { left: 0;                  position: sticky; }
 thead th.th-proveedor,
 tbody td.td-proveedor { left: var(--sl-proveedor); position: sticky; }
 
-/* Corner cell: Proveedor header sits above BOTH sticky-row and sticky-col. */
-thead th.th-proveedor { z-index: 50; }
+thead th.th-delete,
+tbody td.td-delete    { right: 0;                 position: sticky; }
 
 /* tbody cells need opaque backgrounds — sticky cells overlap others on scroll. */
 tbody td.td-status,
-tbody td.td-fecha,
-tbody td.td-proveedor { z-index: 10; background: #1a1d23; }
+tbody td.td-proveedor,
+tbody td.td-delete { z-index: 10; background: #1a1d23; }
 
 tbody tr:nth-child(even) td.td-status,
-tbody tr:nth-child(even) td.td-fecha,
-tbody tr:nth-child(even) td.td-proveedor { background: #1c1f26; }
+tbody tr:nth-child(even) td.td-proveedor,
+tbody tr:nth-child(even) td.td-delete { background: #1c1f26; }
 
 tbody tr:hover td.td-status,
-tbody tr:hover td.td-fecha,
-tbody tr:hover td.td-proveedor { background: #222530; }
+tbody tr:hover td.td-proveedor,
+tbody tr:hover td.td-delete { background: #222530; }
 
 /* Match wins over hover — listed last so source-order tie goes to match. */
 tbody tr.row-match td.td-status,
-tbody tr.row-match td.td-fecha,
-tbody tr.row-match td.td-proveedor { background: #0f1a2e; }
+tbody tr.row-match td.td-proveedor,
+tbody tr.row-match td.td-delete { background: #0f1a2e; }
 
-/* Right-edge shadow only on Proveedor — marks the boundary of the pinned zone. */
+/* Right-edge separator on Proveedor — marks the boundary of the pinned zone. */
 thead th.th-proveedor,
 tbody td.td-proveedor {
-  box-shadow: 4px 0 8px rgba(0, 0, 0, 0.3);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
+
+/* Sticky-right delete column — fixed 40px and a faint left divider. */
+thead th.th-delete,
+tbody td.td-delete {
+  width: 40px;
+  padding: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Per-row trash button: hidden by default, reveals on row hover. */
+.btn-delete-row {
+  opacity: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #ef4444;
+  padding: 4px;
+  border-radius: 4px;
+  transition: opacity 0.15s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+}
+tbody tr:hover .btn-delete-row { opacity: 1; }
+.btn-delete-row:hover { background: rgba(239, 68, 68, 0.12); }
 
 .col-resizer {
   position: absolute;

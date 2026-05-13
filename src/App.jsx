@@ -349,7 +349,7 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-function GastoRow({ g, upd, openPDF }) {
+function GastoRow({ g, upd, openPDF, onDelete }) {
   // Display ↔ storage: app-wide formatDateDisplay/parseDateDisplay handle
   // the MM-DD-YY ↔ YYYY-MM-DD round-trip.
   const dateDisplay  = formatDateDisplay(g.fechaFac)
@@ -427,7 +427,7 @@ function GastoRow({ g, upd, openPDF }) {
       </td>
 
       {/* Fecha Factura */}
-      <td className="td-fecha">
+      <td>
         <input className="cell-in" value={dateDisplay} onChange={e => onDateChange(e.target.value)} />
       </td>
 
@@ -465,8 +465,8 @@ function GastoRow({ g, upd, openPDF }) {
         </div>
       </td>
 
-      {/* Proveedor */}
-      <td>
+      {/* Proveedor — sticky column (pinned left so it stays visible when scrolling) */}
+      <td className="td-proveedor">
         <input className="cell-in is-bold" value={g.proveedor} onChange={e => upd('proveedor', e.target.value)} />
       </td>
 
@@ -535,6 +535,22 @@ function GastoRow({ g, upd, openPDF }) {
         <span className={`total-val${g.hizoMatch ? ' is-blue' : ''}`}>
           ${(g.totalCFDI + g.montoPropina).toFixed(2)}
         </span>
+      </td>
+
+      {/* Eliminar — sticky-right action column; button only visible on row hover */}
+      <td className="td-delete">
+        <button
+          className="btn-delete-row"
+          onClick={onDelete}
+          title="Eliminar registro"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+            <path d="M10 11v6M14 11v6"/>
+            <path d="M9 6V4h6v2"/>
+          </svg>
+        </button>
       </td>
     </tr>
   )
@@ -1391,16 +1407,17 @@ export default function App() {
           </div>
         ) : (
           <table style={{
-            // Sticky-column left offsets — derived from indices 1 (Estado) and
-            // 2 (Fecha) so resizing them shifts the pinned cells correctly.
-            '--sl-fecha':     `${colWidths[1]}px`,
+            // Sticky-column left offsets — Proveedor pins right after the
+            // Estado column. Resizing Estado shifts the pinned Proveedor cell
+            // correctly because we read its width from colWidths.
+            '--sl-proveedor': `${colWidths[1]}px`,
           }}>
             <thead>
               <tr>
                 {COLUMNS.map((col, idx) => (
                   <th
                     key={col.key}
-                    className={col.key === 'status' ? 'th-status' : col.key === 'fechaFac' ? 'th-fecha' : undefined}
+                    className={col.key === 'status' ? 'th-status' : col.key === 'proveedor' ? 'th-proveedor' : undefined}
                     style={{ width: colWidths[idx], cursor: col.sortable ? 'pointer' : undefined }}
                     onClick={col.sortable ? () => toggleSort(col.key) : undefined}
                   >
@@ -1415,6 +1432,8 @@ export default function App() {
                     />
                   </th>
                 ))}
+                {/* Eliminar — sticky-right action column, no label, fixed 40px width */}
+                <th className="th-delete" style={{ width: 40 }} />
               </tr>
             </thead>
             <tbody>
@@ -1423,6 +1442,7 @@ export default function App() {
                   key={g.id}
                   g={g}
                   upd={(field, val) => update(g.id, field, val)}
+                  onDelete={() => setLista(prev => prev.filter(x => x.id !== g.id))}
                   openPDF={openPDF}
                 />
               ))}
