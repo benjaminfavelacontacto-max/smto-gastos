@@ -784,6 +784,14 @@ function ConciliacionModal({ data, onClose }) {
           <p className="cm-subtitle">
             Procesamos {data.bancoRows} {data.bancoRows === 1 ? 'cargo' : 'cargos'} del estado de cuenta
           </p>
+          {(data.ticketsMatched > 0 || data.usdMatched > 0) && (
+            <p className="cm-subtitle cm-subtitle-extra">
+              {[
+                data.ticketsMatched > 0 && `🎯 ${data.ticketsMatched} ticket${data.ticketsMatched === 1 ? '' : 's'} por código de autorización`,
+                data.usdMatched > 0 && `💵 ${data.usdMatched} USD con T/C automático`,
+              ].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
 
         {/* KPI grid */}
@@ -1465,7 +1473,12 @@ export default function App() {
       id: genId(),
       rfc: '',
       proveedor: parsed.proveedor || '',
-      noFactura: parsed.folio ? String(parsed.folio) : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
+      // Prefer the merchant's own folio when present, fall back to the card
+      // approval code so it lines up with the bank statement's "Código de
+      // autorización" column in Pass 0 of validarBanco.
+      noFactura: (parsed.folio || parsed.approval_code)
+        ? String(parsed.folio || parsed.approval_code)
+        : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
       fechaFac: parsed.fecha || today,
       concepto: parsed.concepto || '',
       tipo: autoDetectTipo(parsed.concepto || '', colaborador?.categoria),
@@ -1489,6 +1502,9 @@ export default function App() {
       montoUSD: isUSD ? total : 0,
       tipoCambio: 0,
       moneda: isUSD ? 'USD' : 'MXN',
+      // Flag OCR-derived rows so validarBanco's Pass 0 can match them by
+      // authorization code against the Clara bank statement.
+      esTicket: true,
     }
   }
 
@@ -1648,19 +1664,32 @@ export default function App() {
   // ── Validar estado de cuenta bancario ──
   const validarBanco = async e => {
     const file = e.target.files[0]; if (!file) return
-    const raw = await file.text()
+    // Read as bytes and pick the encoding: try strict UTF-8 first, fall back
+    // to ISO-8859-1 (latin-1) which is what Clara USA exports. Without this,
+    // accented chars (Código, Autorización, etc.) come back as mojibake.
+    const buffer = await file.arrayBuffer()
+    let raw
+    try {
+      raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+    } catch {
+      raw = new TextDecoder('iso-8859-1').decode(buffer)
+    }
     const content = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
     const lines = content.split('\n')
     const sample = content.slice(0, 500)
     let sep = ','
     if (!sample.includes(',')) sep = sample.includes(';') ? ';' : '\t'
 
-    // Clara-platform CSVs have a fixed column layout (date col 0, MXN amount
-    // col 5, merchant col 2). Detecting by header so we can use fixed indices
-    // instead of the generic scanner that mistakes card numbers and billing
-    // periods for amounts. "Transacci" intentionally drops the accented ó so
-    // we survive encoding mishaps.
-    const isClara = (lines[0] || '').includes('Fecha de Transacci')
+    // Clara-platform CSVs have a fixed column layout. Detect by any of the
+    // header markers we know about — the MX and USA variants share most
+    // columns, plus the USA file carries "Código de autorización" (col 12)
+    // and "Moneda original" (col 4) which power the ticket Pass 0 match.
+    // "Transacci"/"autorizaci" intentionally drop the accented chars so we
+    // survive encoding mishaps regardless of UTF-8 vs latin-1.
+    const headerLine = lines[0] || ''
+    const isClara = headerLine.includes('Fecha de Transacci')
+                 || headerLine.includes('digo de autorizaci')
+                 || headerLine.includes('Moneda original')
 
     let matches = 0, propinas = 0
     const sinFactura = []
@@ -1687,11 +1716,19 @@ export default function App() {
       let amounts = []
       let descripcion = null
 
+      // Will be filled for Clara rows (used by Pass 0 + USD auto-fill).
+      let autorizacion = ''
+      let moneda = 'MXN'
+      let montoUSD = 0
+      let montoMXN = 0
+
       if (isClara) {
         dCSV = parseDateRobusto(cols[0] || '')
-        const mxn  = cleanNum(cols[5])
-        const orig = cleanNum(cols[3])
-        const amount = (!isNaN(mxn) && mxn) || (!isNaN(orig) && orig) || 0
+        montoMXN = cleanNum(cols[5]) || 0
+        montoUSD = cleanNum(cols[3]) || 0
+        moneda = (cols[4] || 'MXN').trim().toUpperCase() || 'MXN'
+        autorizacion = String(cols[12] || '').trim()
+        const amount = montoMXN || montoUSD || 0
         if (!dCSV || !amount) continue
         amounts = [Math.abs(amount)]
         descripcion = (cols[2] || '').trim().slice(0, 60)
@@ -1712,7 +1749,7 @@ export default function App() {
         if (!dCSV || !amounts.length) continue
         descripcion = line.trim().slice(0, 60)
       }
-      csvRows.push({ dCSV, amounts, descripcion, matched: false })
+      csvRows.push({ dCSV, amounts, descripcion, matched: false, autorizacion, moneda, montoUSD, montoMXN })
     }
     const bancoRows = csvRows.length
 
@@ -1749,6 +1786,45 @@ export default function App() {
           break
         }
       }
+    }
+
+    // Pass 0 — TICKET (OCR-derived) rows match the bank statement's
+    // "Código de autorización" against their noFactura. When the bank
+    // currency is USD we auto-fill montoUSD + tipoCambio from the MXN side,
+    // because Clara already charged the user in MXN at its own rate. Other
+    // ticket cases (MXN cards) just stamp totalCFDI/importe from the bank
+    // row so the user doesn't have to retype it.
+    let ticketsMatched = 0
+    let usdMatched = 0
+    for (const row of csvRows) {
+      if (row.matched) continue
+      if (!row.autorizacion) continue
+      const idx = nl.findIndex(g =>
+        !g.hizoMatch &&
+        g.esTicket &&
+        String(g.noFactura || '').trim() === row.autorizacion
+      )
+      if (idx === -1) continue
+
+      nl[idx].hizoMatch  = true
+      nl[idx].fechaCobro = formatCobro(row.dCSV)
+      nl[idx].formaPago  = '04'
+      if (row.moneda === 'USD' && row.montoUSD > 0) {
+        nl[idx].montoUSD    = row.montoUSD
+        nl[idx].totalCFDI   = row.montoMXN
+        nl[idx].importe     = row.montoMXN
+        nl[idx].tipoCambio  = row.montoMXN > 0
+          ? +(row.montoMXN / row.montoUSD).toFixed(2)
+          : 0
+        nl[idx].moneda      = 'USD'
+        usdMatched++
+      } else if (row.montoMXN > 0) {
+        nl[idx].totalCFDI = row.montoMXN
+        nl[idx].importe   = row.montoMXN
+      }
+      row.matched = true
+      ticketsMatched++
+      matches++
     }
 
     // Pass 1 — exact match (±$5) against totalCFDI + montoPropina.
@@ -1822,6 +1898,8 @@ export default function App() {
       propinas,
       sinFactura,
       facturasSinCargo: nl.length - matches,
+      ticketsMatched,
+      usdMatched,
     })
     e.target.value = ''
   }
@@ -2108,7 +2186,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.7</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.8</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

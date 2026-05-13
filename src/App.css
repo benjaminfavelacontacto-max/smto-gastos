@@ -924,6 +924,15 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   color: rgba(255, 255, 255, 0.55);
   margin: 0;
 }
+/* Follow-up line below the main subtitle — used by the conciliacion modal
+   to show the ticket/USD pass counts when non-zero. Smaller + brand-green
+   tinted so it reads as a positive callout, not a generic caption. */
+.cm-subtitle-extra {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(89, 211, 155, 0.85);
+  font-weight: 500;
+}
 
 /* KPI grid — 3 cards above, labels in a single row below for tighter rhythm. */
 .cm-kpi-grid {
