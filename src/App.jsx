@@ -192,6 +192,19 @@ const parseDateDisplay = (s) => {
   return s
 }
 
+// Read a File/Blob as raw base64 (no data-URL prefix). Used to ship
+// images and PDFs to the /api/ocr-ticket endpoint.
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = reader.result || ''
+    const idx = String(result).indexOf(',')
+    resolve(idx >= 0 ? String(result).slice(idx + 1) : String(result))
+  }
+  reader.onerror = reject
+  reader.readAsDataURL(file)
+})
+
 // Human-readable file size for the export-success card.
 const formatBytes = (b) => {
   if (b < 1024) return `${b} B`
@@ -1266,6 +1279,7 @@ export default function App() {
   const [importSuccess, setImportSuccess] = useState(false)
   const [importSummary, setImportSummary] = useState(null)
   const [dropSummary,   setDropSummary]   = useState(null)
+  const [ocrLoading,    setOcrLoading]    = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   // Index-based fixed pixel widths — order matches COLUMNS positions:
@@ -1423,6 +1437,61 @@ export default function App() {
     }
   }
 
+  // Posts a base64 image/PDF to /api/ocr-ticket and shapes the parsed
+  // receipt into a full gasto row. Reads `colaborador` from closure so
+  // autoDetectTipo gets routed to the right category list. USD receipts
+  // land montoUSD with importe/totalCFDI = 0 (the user fills the MXN side
+  // from their card statement later).
+  const extractReceiptData = async (base64, mediaType, fileName) => {
+    const response = await fetch('/api/ocr-ticket', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64, mediaType }),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.error || `OCR ${response.status}`)
+    }
+    const parsed = await response.json()
+    const uuid = crypto.randomUUID()
+    const isUSD = parsed.moneda === 'USD'
+    const today = new Date().toISOString().slice(0, 10)
+    const subtotal = Number(parsed.subtotal) || 0
+    const iva = Number(parsed.iva) || 0
+    const total = Number(parsed.total) || 0
+    const propina = Number(parsed.propina) || 0
+
+    return {
+      id: genId(),
+      rfc: '',
+      proveedor: parsed.proveedor || '',
+      noFactura: parsed.folio ? String(parsed.folio) : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
+      fechaFac: parsed.fecha || today,
+      concepto: parsed.concepto || '',
+      tipo: autoDetectTipo(parsed.concepto || '', colaborador?.categoria),
+      importe: isUSD ? 0 : subtotal,
+      iva: isUSD ? 0 : iva,
+      isrTrasladado: 0,
+      retencionISR: 0,
+      retencionIVA: 0,
+      retenciones: 0,
+      totalCFDI: isUSD ? 0 : total,
+      propinaPorcentaje: 0,
+      montoPropina: isUSD ? 0 : propina,
+      fechaCobro: parsed.fecha || today,
+      formaPago: parsed.formaPago || '04',
+      uuid,
+      tienePDF: false,
+      pdfFile: null,
+      xmlFile: null,
+      hizoMatch: false,
+      validado: false,
+      montoUSD: isUSD ? total : 0,
+      tipoCambio: 0,
+      moneda: isUSD ? 'USD' : 'MXN',
+    }
+  }
+
   const handleDrop = async (e) => {
     e.preventDefault()
     e.stopPropagation()
@@ -1431,57 +1500,108 @@ export default function App() {
     const files = Array.from(e.dataTransfer.files)
     const xmlFiles = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
     const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
+    const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.name))
 
-    if (xmlFiles.length === 0 && pdfFiles.length === 0) {
-      setAlerta('Solo se aceptan archivos XML y PDF.')
+    if (xmlFiles.length === 0 && pdfFiles.length === 0 && imageFiles.length === 0) {
+      setAlerta('Solo se aceptan archivos XML, PDF, JPG, PNG o WEBP.')
       return
     }
 
-    // Parse every XML through the existing CFDI pipeline so each gasto has
-    // the full row shape (id, xmlFile, auto-detected tipo, etc).
-    const newGastos = []
+    // Step 1 — parse XMLs through the existing CFDI pipeline (PDF auto-link
+    // happens inside parseCFDI when given the candidate set).
+    const allNewGastos = []
     for (const file of xmlFiles) {
       try {
         const text = await file.text()
         const gasto = parseCFDI(text, file, pdfFiles, colaborador)
-        if (gasto) newGastos.push(gasto)
+        if (gasto) allNewGastos.push(gasto)
       } catch (err) {
-        console.warn('Error parsing', file.name, err)
+        console.warn('XML error:', file.name, err)
       }
     }
 
-    // Merge: refresh existing rows (matched by RFC + noFactura) with the
-    // new XML/PDF, append the rest. Reporting happens inside setLista so it
-    // reads the merge counts under the same closure.
+    // Step 2 — figure out which dropped PDFs got picked up by parseCFDI's
+    // built-in matcher (exact basename / UUID / fuzzy). Anything else is a
+    // candidate for OCR.
+    const matchedPdfBases = new Set(
+      allNewGastos
+        .filter(g => g.pdfFile)
+        .map(g => g.pdfFile.name.replace(/\.pdf$/i, '').toLowerCase()),
+    )
+    const unmatchedPDFs = pdfFiles.filter(
+      p => !matchedPdfBases.has(p.name.replace(/\.pdf$/i, '').toLowerCase()),
+    )
+
+    // Step 3 — OCR pass for unmatched PDFs and any dropped images. Asks the
+    // user first because every call costs money.
+    const ocrFiles = [...unmatchedPDFs, ...imageFiles]
+    let ocrAdded = 0
+    if (ocrFiles.length > 0) {
+      const confirmed = window.confirm(
+        `Se encontraron ${ocrFiles.length} archivo(s) sin XML:\n\n` +
+        ocrFiles.map(f => `• ${f.name}`).join('\n') +
+        `\n\n⚡ ¿Procesarlos con OCR?\nCosto estimado: ~$${(ocrFiles.length * 0.01).toFixed(2)} USD`
+      )
+      if (confirmed) {
+        setOcrLoading(true)
+        for (const file of ocrFiles) {
+          try {
+            const base64 = await fileToBase64(file)
+            const ext = file.name.split('.').pop().toLowerCase()
+            const mediaType = ext === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
+            const gasto = await extractReceiptData(base64, mediaType, file.name)
+            if (gasto) {
+              // Keep the source PDF attached so it can ride the ZIP export.
+              if (mediaType === 'application/pdf') {
+                gasto.pdfFile = file
+                gasto.tienePDF = true
+              }
+              allNewGastos.push(gasto)
+              ocrAdded++
+            }
+          } catch (err) {
+            console.warn('OCR error:', file.name, err)
+          }
+        }
+        setOcrLoading(false)
+      }
+    }
+
+    if (allNewGastos.length === 0) {
+      setAlerta('No se encontraron registros válidos en los archivos.')
+      return
+    }
+
+    // Step 4 — single setLista at the end so async timing can't leave OCR
+    // results out of the table. Existing keys (RFC|noFactura) trigger an
+    // in-place refresh; new keys append.
     setLista(prev => {
       const merged = [...prev]
       const existingKeys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
-
       let added = 0
       let updated = 0
 
-      for (const newG of newGastos) {
+      for (const newG of allNewGastos) {
         const key = `${newG.rfc}|${newG.noFactura}`
         if (existingKeys.has(key)) {
           const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
           if (idx !== -1) {
             merged[idx] = {
               ...merged[idx],
-              xmlFile: newG.xmlFile,
+              xmlFile: newG.xmlFile || merged[idx].xmlFile,
               ...(newG.pdfFile ? { tienePDF: true, pdfFile: newG.pdfFile } : {}),
+              isNew: true,
             }
             updated++
           }
         } else {
-          merged.push(newG)
+          merged.push({ ...newG, isNew: true })
           existingKeys.add(key)
           added++
         }
       }
 
-      // Premium glass modal replaces the plain-text alerta. Only opens if at
-      // least one of the three counters is non-zero — silently no-op for
-      // drops that produced nothing actionable (e.g. all duplicates).
+      // Premium glass result modal — only opens if any counter is non-zero.
       if (added > 0 || updated > 0 || pdfFiles.length > 0) {
         setTimeout(() => setDropSummary({
           added,
@@ -1489,6 +1609,11 @@ export default function App() {
           pdfs: pdfFiles.length,
         }), 100)
       }
+      // Clear isNew flags after the row entrance animation has played out
+      // so subsequent renders don't replay it.
+      setTimeout(() => {
+        setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+      }, 1000)
 
       return merged
     })
@@ -2204,6 +2329,16 @@ export default function App() {
           <DropSuccessModal data={dropSummary} onClose={() => setDropSummary(null)} />
         )}
       </AnimatePresence>
+
+      {/* ─── OCR LOADING OVERLAY ─── */}
+      {ocrLoading && (
+        <div className="cm-overlay" style={{ pointerEvents: 'auto' }}>
+          <div className="loading-msg">
+            <div className="loading-spinner" />
+            <div className="loading-text">Procesando con OCR…</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
