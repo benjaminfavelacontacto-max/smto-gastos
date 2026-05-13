@@ -90,7 +90,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles) {
   // chars. Replaces the old keyword-based categorizer (Vuelo/Hotel/etc.) so
   // each row shows the actual product description from the XML.
   const descripcionRaw = conceptoEl ? (ga(conceptoEl, 'Descripcion', 'descripcion') || '') : ''
-  const concepto = descripcionRaw.split(/[\n\r]/)[0].trim().slice(0, 80) || 'Consumo'
+  // Title-case so ALL-CAPS or all-lowercase descriptions render naturally.
+  const toTitleCase = str => str.toLowerCase().replace(/(?:^|\s|\/|-)\S/g, c => c.toUpperCase())
+  const concepto = toTitleCase(descripcionRaw.split(/[\n\r]/)[0].trim().slice(0, 80) || 'Consumo')
 
   const proveedor = ga(emisor, 'Nombre', 'NOMBRE') || 'Proveedor'
   const uuid = ga(timbre, 'UUID', 'uuid') || ''
