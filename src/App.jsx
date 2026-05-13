@@ -150,6 +150,8 @@ const COLUMNS = [
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
+  { key: 'montoUSD',          label: 'Monto USD',    width: 110, sortable: true,  type: 'number' },
+  { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
 
 /* ═══════════════════════════════════════════════════
@@ -418,6 +420,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     xmlFile,
     hizoMatch: false,
     validado: false,
+    montoUSD: 0,
+    tipoCambio: 0,
+    moneda: 'MXN',
   }
 }
 
@@ -561,6 +566,7 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
       {/* Proveedor — sticky column (pinned left so it stays visible when scrolling) */}
       <td className="td-proveedor">
         <input className="cell-in is-bold" value={g.proveedor} onChange={e => upd('proveedor', e.target.value)} />
+        {g.montoUSD > 0 && <span className="badge-usd">USD</span>}
       </td>
 
       {/* Concepto */}
@@ -628,6 +634,37 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
         <span className={`total-val${g.hizoMatch ? ' is-blue' : ''}`}>
           ${(g.totalCFDI + g.montoPropina).toFixed(2)}
         </span>
+      </td>
+
+      {/* Monto USD — editing it auto-derives Tipo de Cambio from totalCFDI. */}
+      <td>
+        <input
+          type="number"
+          className="cell-in"
+          value={g.montoUSD || ''}
+          placeholder="0.00"
+          step="0.01"
+          onChange={e => {
+            const usd = parseFloat(e.target.value) || 0
+            const tc = usd > 0 && g.totalCFDI > 0
+              ? +(g.totalCFDI / usd).toFixed(2)
+              : g.tipoCambio
+            upd('montoUSD', usd)
+            upd('tipoCambio', tc)
+          }}
+        />
+      </td>
+
+      {/* Tipo de Cambio — manual override (or auto-set when Monto USD changes). */}
+      <td>
+        <input
+          type="number"
+          className="cell-in"
+          value={g.tipoCambio || ''}
+          placeholder="0.00"
+          step="0.01"
+          onChange={e => upd('tipoCambio', parseFloat(e.target.value) || 0)}
+        />
       </td>
 
       {/* Eliminar — sticky-right action column; button only visible on row hover */}
@@ -1009,7 +1046,7 @@ export default function App() {
   // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
   // [9] iva, [10] isr/ish/ieps, [11] ret.isr, [12] ret.iva, [13] reten,
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130])
+  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
 
   const folderRef = useRef(null)
@@ -1419,6 +1456,7 @@ export default function App() {
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, validado: false,
+      montoUSD: 0, tipoCambio: 0, moneda: 'MXN',
     }])
   }
 
@@ -1428,7 +1466,7 @@ export default function App() {
     const rows = lista.flatMap(g => {
       const fac   = formatDateDisplay(g.fechaFac)
       const cobro = formatDateDisplay(g.fechaCobro) || 'Pendiente'
-      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${fac}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
+      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${fac}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t${(g.montoUSD||0).toFixed(2)}\t${(g.tipoCambio||0).toFixed(2)}\t\t${g.formaPago}\t${cobro}\n`
       const p  = g.montoPropina > 0
         ? `\t${g.proveedor} - PROPINA\t\t${fac}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
         : ''
@@ -1450,7 +1488,7 @@ export default function App() {
       const fac   = formatDateDisplay(g.fechaFac)          // MM-DD-YY for CSV cells
       const fa    = fac                                    // also used for ZIP filename
       const cobro = formatDateDisplay(g.fechaCobro) || 'Pendiente'
-      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${fac},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},${cobro}\n`
+      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${fac},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},${(g.montoUSD||0).toFixed(2)},${(g.tipoCambio||0).toFixed(2)},,${g.formaPago},${cobro}\n`
       if (g.montoPropina > 0)
         csv += `,${g.proveedor} - PROPINA,,${fac},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},${cobro}\n`
 
@@ -1568,6 +1606,11 @@ export default function App() {
           xmlFile: null,
           hizoMatch: false,
           validado: false,
+          // New USD columns sit at N (idx 13) + O (idx 14) in the exported
+          // xlsx; round-trip them here so re-importing keeps the values.
+          montoUSD: Number(getVal(13)) || 0,
+          tipoCambio: Number(getVal(14)) || 0,
+          moneda: (Number(getVal(13)) || 0) > 0 ? 'USD' : 'MXN',
         })
         row++
       }
@@ -1679,7 +1722,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.6</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v6.9</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

@@ -148,9 +148,11 @@ def build_workbook(gastos, colaborador=''):
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates) so
     # each column gets the width that fits its content, regardless of order.
+    # N = MONTO USD, O = T/C, P = right spacer (was N).
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 14, 'F': 11, 'G': 11,
-        'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 18, 'M': 15, 'N': 3
+        'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 18, 'M': 15,
+        'N': 15, 'O': 10, 'P': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -159,7 +161,7 @@ def build_workbook(gastos, colaborador=''):
     # outer spacer cols past the totals/footer still inherit BG_PAGE.
     nrows_painted = max(80, 40 + len(gastos))
     for r in range(1, nrows_painted):
-        fill_row_bg(ws, r, 1, 14, BG_PAGE)
+        fill_row_bg(ws, r, 1, 16, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
     ws.row_dimensions[1].height = 50
@@ -213,7 +215,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
-    for c in range(2, 14):
+    for c in range(2, 16):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(
@@ -304,7 +306,7 @@ def build_workbook(gastos, colaborador=''):
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
     ws.row_dimensions[9].height = 28
 
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO']
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'MONTO USD', 'T/C']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -325,7 +327,7 @@ def build_workbook(gastos, colaborador=''):
             top=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
             left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
-            right=Side(style='medium', color=EXCEL_GREEN) if col == 13 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 15 else None,
         )
 
     # ═══ DATA ROWS (row 10+) ═══
@@ -343,6 +345,8 @@ def build_workbook(gastos, colaborador=''):
         ret = round(g.get('retenciones', 0), 2)
         total = round(g.get('totalCFDI', 0) + g.get('montoPropina', 0), 2)
         tipo = g.get('tipo', 'Consumo')
+        monto_usd = round(g.get('montoUSD', 0) or 0, 2)
+        tipo_cambio = round(g.get('tipoCambio', 0) or 0, 2)
 
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
@@ -363,6 +367,8 @@ def build_workbook(gastos, colaborador=''):
             # column has static derived values next to formula candidates.
             (12, f'=I{row}+J{row}-K{row}', 'center', 'currency_bold'),
             (13, forma,                  'center', 'badge_pago'),
+            (14, monto_usd,              'center', 'currency'),
+            (15, tipo_cambio,            'center', 'tipocambio'),
         ]
 
         for col, val, align, style_type in cells:
@@ -394,12 +400,15 @@ def build_workbook(gastos, colaborador=''):
             elif style_type == 'badge_pago':
                 cell.fill = PatternFill('solid', start_color=BADGE_GRAY_BG)
                 cell.font = Font(name='Aptos', size=9, bold=True, color=BADGE_GRAY_FG)
+            elif style_type == 'tipocambio':
+                cell.number_format = '#,##0.00'
+                cell.font = Font(name='Aptos', size=10, color=TEXT_PRIMARY)
             else:  # 'normal'
                 cell.font = Font(name='Aptos', size=10, color=TEXT_PRIMARY)
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-        ws.cell(row=row, column=14).fill = PatternFill('solid', start_color=BG_PAGE)
+        ws.cell(row=row, column=16).fill = PatternFill('solid', start_color=BG_PAGE)
 
         row += 1
 
@@ -408,7 +417,7 @@ def build_workbook(gastos, colaborador=''):
     row += 1
 
     ws.row_dimensions[row].height = 32
-    for c in range(2, 14):
+    for c in range(2, 16):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
         cell.border = Border()
@@ -422,7 +431,8 @@ def build_workbook(gastos, colaborador=''):
     # Use Excel SUM formulas so the totals re-compute if the user edits any
     # data cell, and so Excel does not flag the column with the green
     # "inconsistent formula" warning triangle. `data_last` is clamped to
-    # data_first so a zero-row report stays valid.
+    # data_first so a zero-row report stays valid. T/C (col O) intentionally
+    # has no total — a sum of exchange rates is not meaningful.
     data_first = 10
     data_last = max(data_first, row - 2)
     totals = [
@@ -430,6 +440,7 @@ def build_workbook(gastos, colaborador=''):
         (10, f'=SUM(J{data_first}:J{data_last})', False),
         (11, f'=SUM(K{data_first}:K{data_last})', False),
         (12, f'=SUM(L{data_first}:L{data_last})', True),
+        (14, f'=SUM(N{data_first}:N{data_last})', False),
     ]
     for col, val, is_main in totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -443,14 +454,17 @@ def build_workbook(gastos, colaborador=''):
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
+    # FORMA PAGO (M) and T/C (O) inside the totals band get the black fill
+    # but no value (FORMA is non-aggregatable text; T/C is per-row).
     ws.cell(row=row, column=13).fill = PatternFill('solid', start_color=SMTO_BLACK)
+    ws.cell(row=row, column=15).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
-    ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=13)
+    ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=15)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v5.7'
+    ft.value = 'SMTO Engineering · v6.9'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)

@@ -1342,6 +1342,21 @@ tr.row-new {
   animation: rowFadeIn 0.4s ease forwards;
 }
 
+/* Small "USD" chip — appears next to the supplier name on rows whose
+   Monto USD column has a non-zero value. */
+.badge-usd {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 .table-container.drag-over::after {
   content: 'Suelta aquí los archivos XML o PDF';
   position: fixed;
