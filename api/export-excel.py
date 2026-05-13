@@ -148,11 +148,12 @@ def build_workbook(gastos, colaborador=''):
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates) so
     # each column gets the width that fits its content, regardless of order.
-    # N = MONTO USD, O = T/C, P = right spacer (was N).
+    # N = MONTO USD, O = T/C, P = right spacer. N + O sized equal so the
+    # new "USD" KPI card (N5:O5) reads as a tidy 2-column tile above them.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 14, 'F': 11, 'G': 11,
         'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 18, 'M': 15,
-        'N': 15, 'O': 10, 'P': 3,
+        'N': 13, 'O': 13, 'P': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -230,18 +231,20 @@ def build_workbook(gastos, colaborador=''):
     total_facturado = round(sum(g.get('totalCFDI', 0) + g.get('montoPropina', 0) for g in gastos), 2)
     total_iva = round(sum(g.get('iva', 0) for g in gastos), 2)
     total_ret = round(sum(g.get('retenciones', 0) for g in gastos), 2)
+    total_usd = round(sum(g.get('montoUSD', 0) for g in gastos), 2)
     num_facturas = len(gastos)
 
     # (col_start, col_end, label, value, number_format, value_color)
     # KPI values are now stored as raw numerics with number_format so Excel
     # does not flag the cells with "Number Stored as Text" warning triangles.
-    # All four cards share a medium EXCEL_GREEN frame; only the first value
-    # is colored brand-green, the rest stay SMTO_BLACK.
+    # All five cards share a medium EXCEL_GREEN frame; TOTAL FACTURADO and
+    # USD are tinted brand-green, the rest stay SMTO_BLACK.
     kpis = [
         ('B', 'D', 'TOTAL FACTURADO', total_facturado, '"$"#,##0.00', SMTO_GREEN),
         ('E', 'G', 'IVA TOTAL',       total_iva,       '"$"#,##0.00', SMTO_BLACK),
         ('H', 'J', 'RETENCIONES',     total_ret,       '"$"#,##0.00', SMTO_BLACK),
         ('K', 'M', 'REGISTROS',       num_facturas,    '0',           SMTO_BLACK),
+        ('N', 'O', 'USD',             total_usd,       '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -464,7 +467,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=15)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v6.9'
+    ft.value = 'SMTO Engineering · v7.8'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
