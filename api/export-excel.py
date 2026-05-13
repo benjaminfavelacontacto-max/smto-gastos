@@ -27,6 +27,23 @@ def forma_pago_label(code):
     return FORMA_PAGO_MAP.get(code, code or '')
 
 
+def format_date(date_str):
+    """Normalize any of {YYYY-MM-DD, DD/MM/YYYY, MM-DD-YY} → MM-DD-YY.
+    Empty/missing → ''. Anything we can't parse passes through unchanged."""
+    if not date_str:
+        return ''
+    if '-' in date_str and len(date_str) == 10:
+        # YYYY-MM-DD
+        parts = date_str.split('-')
+        return f'{parts[1]}-{parts[2]}-{parts[0][2:]}'
+    if '/' in date_str:
+        # DD/MM/YYYY
+        parts = date_str.split('/')
+        yy = parts[2][2:] if len(parts[2]) > 2 else parts[2]
+        return f'{parts[1]}-{parts[0]}-{yy}'
+    return date_str
+
+
 # ── Cell styles ─────────────────────────────────────────────────────────────
 # xlutils.copy preserves styles for cells that already had content in the
 # template, but doesn't auto-apply formatting to cells we write into for the
@@ -149,12 +166,12 @@ class handler(BaseHTTPRequestHandler):
 
             row_idx = 5
             for g in gastos:
-                f = g.get('fechaFac', '').split('-')
-                fecha_mx = f'{f[2]}/{f[1]}/{f[0]}' if len(f) == 3 else g.get('fechaFac', '')
+                fac_disp   = format_date(g.get('fechaFac', ''))
+                cobro_disp = format_date(g.get('fechaCobro', '')) or 'Pendiente'
                 ws.write(row_idx, 0, g.get('rfc', ''),         STYLE_CENTER)
                 ws.write(row_idx, 1, g.get('proveedor', ''),   STYLE_LEFT)
                 ws.write(row_idx, 2, g.get('noFactura', ''),   STYLE_CENTER)
-                ws.write(row_idx, 3, fecha_mx,                 STYLE_CENTER)
+                ws.write(row_idx, 3, fac_disp,                 STYLE_CENTER)
                 ws.write(row_idx, 4, g.get('concepto', ''),    STYLE_CENTER)
                 ws.write(row_idx, 5, round(g.get('importe', 0), 2),     STYLE_CURRENCY)
                 ws.write(row_idx, 6, round(g.get('iva', 0), 2),         STYLE_CURRENCY)
@@ -163,21 +180,21 @@ class handler(BaseHTTPRequestHandler):
                 # Excel recomputes Total if the user later edits importe/IVA/ret.
                 ws.write(row_idx, 8, xlwt.Formula(f'F{row_idx+1}+G{row_idx+1}-H{row_idx+1}'), STYLE_CURRENCY)
                 ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')),               STYLE_CENTER)
-                ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'),                      STYLE_CENTER)
+                ws.write(row_idx, 10, cobro_disp,                                            STYLE_CENTER)
                 row_idx += 1
                 propina = round(g.get('montoPropina', 0), 2)
                 if propina > 0:
                     ws.write(row_idx, 0, '',                                           STYLE_CENTER)
                     ws.write(row_idx, 1, g.get('proveedor', '') + ' - PROPINA',        STYLE_LEFT)
                     ws.write(row_idx, 2, '',                                           STYLE_CENTER)
-                    ws.write(row_idx, 3, fecha_mx,                                     STYLE_CENTER)
+                    ws.write(row_idx, 3, fac_disp,                                     STYLE_CENTER)
                     ws.write(row_idx, 4, 'PROPINA',                                    STYLE_CENTER)
                     ws.write(row_idx, 5, propina,                                      STYLE_CURRENCY)
                     ws.write(row_idx, 6, 0,                                            STYLE_CURRENCY)
                     ws.write(row_idx, 7, 0,                                            STYLE_CURRENCY)
                     ws.write(row_idx, 8, xlwt.Formula(f'F{row_idx+1}+G{row_idx+1}-H{row_idx+1}'), STYLE_CURRENCY)
                     ws.write(row_idx, 9, forma_pago_label(g.get('formaPago', '')),     STYLE_CENTER)
-                    ws.write(row_idx, 10, g.get('fechaCobro', 'Pendiente'),            STYLE_CENTER)
+                    ws.write(row_idx, 10, cobro_disp,                                  STYLE_CENTER)
                     row_idx += 1
 
             # ── Clear leftover template pre-fills (zeros in cols 5,6,7,8,11,12)

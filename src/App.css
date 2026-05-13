@@ -468,6 +468,19 @@ td {
   cursor: pointer;
 }
 
+/* Fecha Cobro read view — click to swap to native date picker */
+.cell-cobro-display {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  transition: background 0.12s;
+}
+.cell-cobro-display:hover { background: rgba(255, 255, 255, 0.05); }
+.cell-cobro-empty         { color: rgba(255, 255, 255, 0.25); }
+
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }

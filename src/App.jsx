@@ -31,6 +31,38 @@ const COLUMNS = [
 
 const genId = () => Math.random().toString(36).slice(2, 11)
 
+/* Display dates as MM-DD-YY app-wide. Internal storage stays YYYY-MM-DD
+   (HTML5 date input requirement). parseDateDisplay reverses for storage. */
+const formatDateDisplay = (dateStr) => {
+  if (!dateStr) return ''
+  let d, m, y
+  if (dateStr.includes('-') && dateStr.length === 10) {
+    // YYYY-MM-DD
+    const [yyyy, mm, dd] = dateStr.split('-')
+    d = dd; m = mm; y = yyyy.slice(-2)
+  } else if (dateStr.includes('/')) {
+    // DD/MM/YYYY
+    const parts = dateStr.split('/')
+    d = parts[0]; m = parts[1]; y = (parts[2] || '').slice(-2)
+  } else if (dateStr.includes('-') && dateStr.length <= 8) {
+    // Already MM-DD-YY
+    return dateStr
+  } else {
+    return dateStr
+  }
+  return `${m.padStart(2, '0')}-${d.padStart(2, '0')}-${y}`
+}
+
+const parseDateDisplay = (s) => {
+  if (!s) return ''
+  const parts = s.split('-')
+  if (parts.length !== 3) return s
+  const [mm, dd, y] = parts
+  if (y.length === 2) return `20${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+  if (y.length === 4) return `${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+  return s
+}
+
 function parseDateRobusto(text) {
   if (!text) return null
   const chars = text.trim().replace(/[^0-9/\-]/g, '')
@@ -275,20 +307,24 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
 ═══════════════════════════════════════════════════ */
 
 function GastoRow({ g, upd, openPDF }) {
-  // Máscara visual: YYYY-MM-DD ↔ MM-DD-YYYY
-  const dateDisplay = (() => {
-    const p = g.fechaFac.split('-')
-    return p.length === 3 && p[0].length === 4
-      ? `${p[1]}-${p[2]}-${p[0]}`
-      : g.fechaFac
-  })()
+  // Display ↔ storage: app-wide formatDateDisplay/parseDateDisplay handle
+  // the MM-DD-YY ↔ YYYY-MM-DD round-trip.
+  const dateDisplay  = formatDateDisplay(g.fechaFac)
+  const onDateChange = v => upd('fechaFac', parseDateDisplay(v))
 
-  const onDateChange = v => {
-    const p = v.split('-')
-    upd('fechaFac', p.length === 3 && p[2].length === 4
-      ? `${p[2]}-${p[0]}-${p[1]}`
-      : v)
-  }
+  // Per-row toggle for the Fecha Cobro cell: span (MM-DD-YY) when blurred,
+  // native date picker (YYYY-MM-DD) when focused.
+  const [editingCobro, setEditingCobro] = useState(false)
+  // type="date" needs YYYY-MM-DD on its value attr. Bank-matched DD/MM/YYYY
+  // from legacy in-memory data still parses correctly via this guard.
+  const cobroIso = (() => {
+    if (!g.fechaCobro) return ''
+    if (g.fechaCobro.includes('/')) {
+      const [d, m, y] = g.fechaCobro.split('/')
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+    }
+    return g.fechaCobro
+  })()
 
   const NumCell = ({ field, prefix, suffix, format = true, compact = false }) => {
     const v = g[field]
@@ -352,23 +388,26 @@ function GastoRow({ g, upd, openPDF }) {
         <input className="cell-in" value={dateDisplay} onChange={e => onDateChange(e.target.value)} />
       </td>
 
-      {/* Fecha Cobro — native date picker. Bank-matched dates come in as
-          DD/MM/YYYY; we convert to YYYY-MM-DD for the type="date" input,
-          which roundtrips its own value as YYYY-MM-DD on user edit. */}
+      {/* Fecha Cobro — span shows MM-DD-YY; click swaps to date picker
+          (which uses YYYY-MM-DD natively). Blur returns to display mode. */}
       <td>
-        <input
-          type="date"
-          className="cell-date-input"
-          value={(() => {
-            if (!g.fechaCobro) return ''
-            if (g.fechaCobro.includes('/')) {
-              const [d, m, y] = g.fechaCobro.split('/')
-              return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
-            }
-            return g.fechaCobro
-          })()}
-          onChange={e => upd('fechaCobro', e.target.value)}
-        />
+        {editingCobro ? (
+          <input
+            type="date"
+            className="cell-date-input"
+            autoFocus
+            value={cobroIso}
+            onChange={e => upd('fechaCobro', e.target.value)}
+            onBlur={() => setEditingCobro(false)}
+          />
+        ) : (
+          <span
+            className="cell-cobro-display"
+            onClick={() => setEditingCobro(true)}
+          >
+            {formatDateDisplay(g.fechaCobro) || <span className="cell-cobro-empty">—</span>}
+          </span>
+        )}
       </td>
 
       {/* Factura */}
@@ -613,10 +652,12 @@ export default function App() {
     const sinFactura = []
     const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: '' }))
     const formatCobro = d => {
+      // Store as YYYY-MM-DD so the native date picker on the row accepts it
+      // directly and formatDateDisplay produces MM-DD-YY for the read view.
       const dd   = String(d.getDate()).padStart(2, '0')
       const mm   = String(d.getMonth() + 1).padStart(2, '0')
       const yyyy = d.getFullYear()
-      return `${dd}/${mm}/${yyyy}`
+      return `${yyyy}-${mm}-${dd}`
     }
     const cleanNum = s => parseFloat(String(s || '').replace(/[$,\s]/g, ''))
 
@@ -763,7 +804,7 @@ export default function App() {
     setLista(nl)
     const divider = '──────────────────────'
     const sinFacturaList = sinFactura.slice(0, 20)
-      .map(s => `  • ${s.fecha} — ${fmtMoney(s.monto)}${s.descripcion ? ' — ' + s.descripcion : ''}`)
+      .map(s => `  • ${formatDateDisplay(s.fecha)} — ${fmtMoney(s.monto)}${s.descripcion ? ' — ' + s.descripcion : ''}`)
       .join('\n')
     const extra = sinFactura.length > 20
       ? `\n  ...y ${sinFactura.length - 20} más`
@@ -799,12 +840,11 @@ export default function App() {
   const copiar = () => {
     const hdr = 'RFC PROVEEDOR\tPROVEEDOR\tNO. DE FACTURA\tFECHA FAC.\tCONCEPTO\tIMPORTE (MXP)\tIVA\tISR\tRET. ISR\tRET. IVA\tRET/ ISR IVA\tTOTAL CFDI\tGastos en USD\tTipo de Cambio\tTotal Checking\tFORMA DE PAGO\tFECHA DE COBRO\n'
     const rows = lista.flatMap(g => {
-      const f  = g.fechaFac.split('-')
-      const mx = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
-      const cobro = g.fechaCobro || 'Pendiente'
-      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${mx}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
+      const fac   = formatDateDisplay(g.fechaFac)
+      const cobro = formatDateDisplay(g.fechaCobro) || 'Pendiente'
+      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${fac}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
       const p  = g.montoPropina > 0
-        ? `\t${g.proveedor} - PROPINA\t\t${mx}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
+        ? `\t${g.proveedor} - PROPINA\t\t${fac}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
         : ''
       return [r, p]
     })
@@ -821,13 +861,12 @@ export default function App() {
     let r = 0
 
     for (const g of lista) {
-      const f   = g.fechaFac.split('-')
-      const mx  = f.length === 3 ? `${f[2]}/${f[1]}/${f[0]}` : g.fechaFac
-      const fa  = f.length === 3 ? `${f[1]}-${f[2]}-${f[0].slice(-2)}` : g.fechaFac.replace(/\//g, '-')
-      const cobro = g.fechaCobro || 'Pendiente'
-      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${mx},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},${cobro}\n`
+      const fac   = formatDateDisplay(g.fechaFac)          // MM-DD-YY for CSV cells
+      const fa    = fac                                    // also used for ZIP filename
+      const cobro = formatDateDisplay(g.fechaCobro) || 'Pendiente'
+      csv += `${g.rfc},${g.proveedor.replace(/,/g,' ')},${g.noFactura},${fac},${g.concepto.replace(/,/g,' ')},${g.importe.toFixed(2)},${g.iva.toFixed(2)},${(g.isrTrasladado||0).toFixed(2)},${(g.retencionISR||0).toFixed(2)},${(g.retencionIVA||0).toFixed(2)},${g.retenciones.toFixed(2)},${g.totalCFDI.toFixed(2)},,,,${g.formaPago},${cobro}\n`
       if (g.montoPropina > 0)
-        csv += `,${g.proveedor} - PROPINA,,${mx},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},${cobro}\n`
+        csv += `,${g.proveedor} - PROPINA,,${fac},PROPINA,${g.montoPropina.toFixed(2)},0.00,0.00,0.00,0.00,0.00,${g.montoPropina.toFixed(2)},,,,${g.formaPago},${cobro}\n`
 
       if (g.xmlFile) {
         const titleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase())
