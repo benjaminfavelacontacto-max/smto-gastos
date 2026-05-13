@@ -37,6 +37,13 @@ BADGE_GREEN_BG = SMTO_GREEN_SOFT
 BADGE_GREEN_FG = '047857'
 BADGE_GRAY_BG = 'F1F5F9'
 BADGE_GRAY_FG = '475569'
+
+# Currency-symbol lookup for the propina sub-row label when the parent
+# gasto is in a foreign currency.
+CURRENCY_SYMBOLS = {
+    'USD': '$', 'EUR': '€', 'GBP': '£', 'JPY': '¥', 'CNY': '¥',
+    'MXN': '$', 'CAD': 'C$', 'MYR': 'RM', 'CHF': 'Fr', 'AUD': 'A$',
+}
 BADGE_AMBER_BG = 'FEF3C7'
 BADGE_AMBER_FG = '92400E'
 BADGE_PURPLE_BG = 'F3E8FF'
@@ -343,13 +350,30 @@ def build_workbook(gastos, colaborador=''):
         fecha_fac = format_date(g.get('fechaFac', ''))
         fecha_cobro = format_date(g.get('fechaCobro', ''))
         forma = FORMA_PAGO_MAP.get(g.get('formaPago', '04'), g.get('formaPago', ''))
-        importe = round(g.get('importe', 0), 2)
+        importe_raw = round(g.get('importe', 0), 2)
         iva = round(g.get('iva', 0), 2)
         ret = round(g.get('retenciones', 0), 2)
         total = round(g.get('totalCFDI', 0) + g.get('montoPropina', 0), 2)
         tipo = g.get('tipo', 'Consumo')
-        monto_usd = round(g.get('montoUSD', 0) or 0, 2)
+        monto_usd_raw = round(g.get('montoUSD', 0) or 0, 2)
         tipo_cambio = round(g.get('tipoCambio', 0) or 0, 2)
+
+        # Propina-row fields. OCR tickets matched by validarBanco Pass 0 have
+        # importe/montoUSD that already INCLUDE the tip — so for those rows
+        # we subtract the propina from the main-row display so the new
+        # propina sub-row does not double-count the tip in SUM(I) / SUM(N).
+        # CFDI rows with manual propina keep importe as the pre-tip subtotal
+        # (the SAT XML stores SubTotal pre-tip), so no adjustment is needed.
+        propina_mxn = round(g.get('montoPropina', 0) or 0, 2)
+        propina_ext = round(g.get('propinaExtranjero', 0) or 0, 2)
+        moneda_code = g.get('monedaCodigo') or g.get('moneda') or 'MXN'
+        es_ticket = bool(g.get('esTicket'))
+        if es_ticket and propina_mxn > 0:
+            importe = max(0, round(importe_raw - propina_mxn, 2))
+            monto_usd = max(0, round(monto_usd_raw - propina_ext, 2))
+        else:
+            importe = importe_raw
+            monto_usd = monto_usd_raw
 
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
@@ -415,6 +439,73 @@ def build_workbook(gastos, colaborador=''):
 
         row += 1
 
+        # ── Optional propina sub-row ──
+        # When the parent gasto has any propina, append a slim italic sub-row
+        # immediately below it so the tip reads as a separate ledger line.
+        # SUM(I) / SUM(L) / SUM(N) at the totals row include it automatically.
+        if propina_mxn > 0 or propina_ext > 0:
+            ws.row_dimensions[row].height = 20
+            propina_bg = 'F0FDF4'  # very subtle green tint
+
+            # Paint the whole band first so per-cell font/border calls below
+            # only need to touch the cells that carry content.
+            for c in range(1, 16):
+                pcell = ws.cell(row=row, column=c)
+                pcell.fill = PatternFill('solid', start_color=propina_bg)
+                pcell.border = Border(bottom=Side(style='hair', color=BORDER_LIGHT))
+
+            # Col C — "↳ Propina" label, italic SMTO_GREEN.
+            label = ws.cell(row=row, column=3)
+            label.value = '  ↳  Propina'
+            label.font = Font(name='Aptos', size=9, italic=True, color=SMTO_GREEN)
+            label.alignment = Alignment(horizontal='left', vertical='center', indent=2)
+
+            # Col H — concepto detail. For foreign currency, include the
+            # native symbol + amount so the row reads as the original tip.
+            concepto_p = ws.cell(row=row, column=8)
+            if propina_ext > 0 and moneda_code != 'MXN':
+                symbol = CURRENCY_SYMBOLS.get(moneda_code, moneda_code + ' ')
+                concepto_p.value = f'Propina {symbol}{propina_ext:,.2f} {moneda_code}'
+            else:
+                concepto_p.value = 'Propina'
+            concepto_p.font = Font(name='Aptos', size=9, italic=True, color=TEXT_SECONDARY)
+            concepto_p.alignment = Alignment(horizontal='left', vertical='center', indent=2)
+
+            # Col I (IMPORTE), col L (TOTAL) — the tip in MXN, brand-green
+            # italic. Col J / K stay at 0 so the TOTAL formula on adjacent
+            # rows isn't affected (this row writes a literal, not a formula).
+            for col, val, bold in [(9, propina_mxn, False), (12, propina_mxn, True)]:
+                c = ws.cell(row=row, column=col, value=val)
+                c.number_format = '"$"#,##0.00'
+                c.font = Font(name='Aptos', size=9, italic=True, bold=bold, color=SMTO_GREEN)
+                c.alignment = Alignment(horizontal='right', vertical='center', indent=1)
+
+            for col in (10, 11):  # IVA / RETENCIÓN — explicit 0 so SUM works
+                c = ws.cell(row=row, column=col, value=0)
+                c.number_format = '"$"#,##0.00'
+                c.font = Font(name='Aptos', size=9, italic=True, color=TEXT_SECONDARY)
+                c.alignment = Alignment(horizontal='right', vertical='center', indent=1)
+
+            # Col M — FORMA PAGO mirror from the parent, lighter style.
+            forma_p = ws.cell(row=row, column=13)
+            forma_p.value = forma
+            forma_p.font = Font(name='Aptos', size=9, italic=True, color=BADGE_GRAY_FG)
+            forma_p.alignment = Alignment(horizontal='center', vertical='center')
+
+            # Col N — foreign tip amount (only when the parent is foreign).
+            if propina_ext > 0 and moneda_code != 'MXN':
+                ext_c = ws.cell(row=row, column=14, value=propina_ext)
+                ext_c.number_format = '#,##0.00'
+                ext_c.font = Font(name='Aptos', size=9, italic=True, color=SMTO_GREEN)
+                ext_c.alignment = Alignment(horizontal='right', vertical='center', indent=1)
+
+            # Outer spacers stay on page bg so the propina band fits inside
+            # the table boundary like every other data row.
+            ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
+            ws.cell(row=row, column=16).fill = PatternFill('solid', start_color=BG_PAGE)
+
+            row += 1
+
     # ═══ ADAPTIVE TOTALS — placed right after the last data row ═══
     ws.row_dimensions[row].height = 14  # spacer
     row += 1
@@ -467,7 +558,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=15)
     ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v7.8'
+    ft.value = 'SMTO Engineering · v7.15'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
