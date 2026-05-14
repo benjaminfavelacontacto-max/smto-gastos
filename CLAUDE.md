@@ -1,55 +1,129 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository. Read it AND `CONVENTIONS.md` at the start of every session.
+
+## What this is
+
+SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineering. Parses CFDI invoices (XML+PDF) and tickets (PDF/image via OCR), reconciles against bank statements (Clara MXN / Clara USA), exports premium Excel + ZIP with renamed files. UI is in Spanish; domain is Mexican tax/accounting.
+
+Production: https://smto-app.vercel.app
+Repo: github.com/benjaminfavelacontacto-max/smto-gastos
+Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
+Current version: v7.16
+
+## Stack
+
+- Frontend: React 18, Vite, JSZip, SheetJS (XLSX)
+- Backend: Python serverless functions on Vercel (api/*.py)
+- Python: pinned to 3.11 via .python-version
+- Deps: openpyxl, Pillow, numpy, anthropic
+- No tests, linter, or TypeScript configured
 
 ## Commands
 
 ```bash
-npm install        # install deps (React 18, Vite 5, JSZip — that's it)
-npm run dev        # Vite dev server at http://localhost:5173
+npm install        # frontend deps
+npm run dev        # Vite at http://localhost:5173
 npm run build      # production build → /dist
-npm run preview    # serve the built /dist locally
+npm run preview    # serve /dist locally
 ```
 
-No tests, linter, formatter, or TypeScript are configured. Deployment is via Vercel (a `.vercel/` link exists); Vercel auto-detects Vite — no extra config.
+Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy commands.
 
-## Architecture
+## File layout
 
-This is a **single-page, fully client-side** React app for reconciling Mexican **CFDI invoice XMLs** against a **bank statement CSV**. No backend, no API, no persistence — everything runs in the browser. Files never leave the user's machine.
+- `src/App.jsx` — main frontend logic (CFDI parser, matching, UI)
+- `src/components/` — PremiumModal, PremiumButton, and other small UI pieces
+- `src/App.css` — full stylesheet
+- `api/export-excel.py` — generates the premium .xlsx via openpyxl
+- `api/ocr-ticket.py` — receipt OCR via Anthropic API
+- `api/requirements.txt` — Python deps
+- `api/TEMPLATE.xls`, `api/logo.png` — Excel template assets
+- `public/logo.png` — frontend logo
+- `CONVENTIONS.md` — immutable formatting + matching rules (MUST read)
+- `.python-version` — pins Python 3.11
+- `vercel.json` — Vercel config (no explicit runtime; auto-detected)
 
-**The entire app is one file: `src/App.jsx` (~580 lines).** `src/main.jsx` just mounts it; `src/App.css` is the entire stylesheet. When making changes, expect to edit App.jsx; resist the urge to split it up unless a feature genuinely requires it.
+## Environment
 
-The UI is in **Spanish** and the domain is **Mexican tax/accounting** (CFDI, RFC, propina, IVA, retenciones). Preserve Spanish strings in user-facing text.
+- `ANTHROPIC_API_KEY` — set in Vercel env vars; used by api/ocr-ticket.py
 
-### Data flow (one pass through App.jsx tells the story)
+## Features in production
 
-1. **`cargar`** — user picks a folder via `<input webkitdirectory>`. Files are split into `.xml` (CFDI invoices) and `.pdf` (visual copies). Each XML is parsed with `parseCFDI`.
+1. CFDI XML parser: IVA, ISR, ISH, IEPS, retenciones, EDC combustible (GasNGo), Volare RFC exception
+2. Bank reconciliation:
+   - Clara MXN CSV: exact-only matching (smartAmountMatch ±$0.01)
+   - Clara USA CSV: match by authorization code
+3. OCR for PDF/image tickets via Claude API — only fires for PDFs without a matching XML
+4. Multi-currency: USD, EUR, JPY, etc. with per-line exchange rate
+5. Propina (tip) split into its own sub-row in Excel
+6. Collaborator selector: 50 people across 4 categories (Admin, Socio, Servicio, Ventas)
+7. Expense types filtered by category (TIPOS_VENTAS vs TIPOS_NORMALES)
+8. Drag & drop XMLs/PDFs/images onto the table
+9. Import previous Excel to continue a report
+10. Export ZIP: Excel + renamed XMLs/PDFs (see CONVENTIONS.md → buildFileName)
+11. PremiumModal replaces all native alert/confirm
+12. Validation counter per checkbox
+13. fechaCobro editable with date picker
+14. Sortable, resizable columns; sticky PROVEEDOR
 
-2. **`parseCFDI`** — CFDI XMLs use SAT namespaces (`cfdi:`, `tfd:`). Parsing is **namespace-agnostic**: it walks all elements and matches on `localName` (`comprobante`, `emisor`, `impuestos`, `timbrefiscaldigital`, `concepto`). Attribute reads use `ga(el, 'Pascal', 'lower')` to tolerate both casings. PDFs are matched to XMLs by **identical base filename** OR **UUID substring** — keep both paths when changing matcher logic.
+## Excel output design
 
-3. **`clasificarGasto`** — keyword classifier that returns one of `Vuelo | Hotel | Transporte | Herramienta | Consumo`. Pure string matching against `proveedor + concepto`; add new keywords here, don't refactor into a config object unless asked.
+- Colors: SMTO black #050505 + green #59D39B, EXCEL_GREEN borders #00B050
+- 5 KPI cards with green borders
+- Embedded logo
+- Zebra-striped table, propina as sub-row beneath parent
+- Native datetime objects (no date warnings)
+- SUM formulas in totals row
+- Columns: RFC, PROVEEDOR, TIPO, FACTURA, F.FACTURA, F.COBRO, CONCEPTO, IMPORTE, IVA, RETENCIÓN, TOTAL, FORMA PAGO, MONTO EXT, T/C
 
-4. **`validarBanco`** — two-pass reconciliation against a bank CSV (auto-detects `,` / `;` / `\t` separator):
-   - **Pass 1**: exact total match (±$5) within ±30 days.
-   - **Pass 2**: propina (tip) detection — bank charge is greater than invoice total by up to 25%; the difference is auto-filled as `montoPropina`.
-   - Matches set `hizoMatch=true`, which colors the row blue. The two passes run **per bank line**, not globally — order matters; don't reorder them.
+## Architecture notes
 
-5. **`update`** has implicit coupling: editing `totalCFDI`, `propinaPorcentaje`, or `montoPropina` recomputes the other propina fields. If you add a new derived field, add its recompute branch here.
+The app is fully client-side except for two Python serverless functions (Excel export, OCR). Files never leave the user's machine except when OCR is explicitly invoked.
 
-6. **`copiar`** writes TSV to clipboard (for Excel paste). **`exportar`** uses JSZip to bundle a CSV report plus the original XML/PDF files **renamed** to `Proveedor-Factura-Concepto-MM-DD-YY`. The CSV starts with a BOM (`﻿`) so Excel reads UTF-8 correctly — don't drop it.
+**State model:** a single `lista` array of "gasto" objects. No normalization, reducer, or context. Mutations go through `setLista(prev => prev.map(...))`. IDs are random base36 from `genId()`. Manual rows use `uuid: 'MANUAL'`.
 
-### Date handling — read before touching
+**CFDI parsing is namespace-agnostic:** walks all elements and matches on `localName` (`comprobante`, `emisor`, `impuestos`, `timbrefiscaldigital`, `concepto`). Attribute reads tolerate both casings via `ga(el, 'Pascal', 'lower')`. PDFs match XMLs by identical base filename OR UUID substring — keep both paths.
 
-Dates are stored internally as `YYYY-MM-DD` but **displayed and edited as `MM-DD-YYYY`** in the table (see `GastoRow`'s `dateDisplay` / `onDateChange`). Exports use `DD/MM/YYYY` (Mexican). `parseDateRobusto` accepts all three plus `YY` shorthand. Any new date field should round-trip through these helpers.
+**Date handling:** stored internally as `YYYY-MM-DD`, displayed/edited as `MM-DD-YYYY`, exported as `DD/MM/YYYY`. `parseDateRobusto` accepts all three plus `YY` shorthand. Any new date field round-trips through these helpers.
 
-### State model
+**fechaCobro behavior is asymmetric:**
+- Before reconciliation: equals fechaFac
+- After reconciliation: equals dCSV (bank charge date)
 
-A single `lista` array of "gasto" objects holds everything; there's no normalization, no reducer, no context. Every mutation goes through `setLista(prev => prev.map(...))`. IDs are random base36 from `genId()`. Rows added via `agregarManual` use `uuid: 'MANUAL'` and `xmlFile: null` — `exportar` skips file-renaming for these, which is intentional.
+## Cost control (Anthropic API)
 
-### Browser API dependencies
+- XML alone → parsed locally, NO API call
+- XML + PDF → PDF linked to XML, NO OCR, NO cost
+- PDF without matching XML → user confirmation modal BEFORE calling OCR
+- Image (jpg/png) → OCR with user confirmation
 
-- `webkitdirectory` attribute — set imperatively via `ref` because React doesn't recognize the lowercase variant.
-- `navigator.clipboard.writeText` — requires HTTPS or localhost.
-- `URL.createObjectURL` for opening PDFs in a new tab.
+## Deploy workflow
 
-These are not polyfilled. The README lists Chrome/Edge/Firefox/Safari 14+ as the support matrix.
+1. Claude Code edits files
+2. `git commit -m "describe change"`
+3. `git push`
+4. Vercel auto-deploys (~30s)
+5. Verify at production URL
+
+## Versioning
+
+- Increment minor version on every meaningful change
+- Update the version badge in the UI header
+- Current: v7.16
+
+## Things to be careful about
+
+- `buildFileName()` in App.jsx is the SINGLE source of truth for renaming. Never duplicate or inline it elsewhere.
+- Folio must be preserved EXACTLY as it comes from CFDI (no upper/lower-case): DB1616, CUUMXA110440, FAC102026491.
+- Never call OCR for PDFs that already have an XML match.
+- Tip variants only apply to food/restaurant/bar categories.
+- Pass order in validarBanco is load-bearing — see CONVENTIONS.md.
+- Preserve all Spanish strings in user-facing text.
+
+## Browser support
+
+- `webkitdirectory` attribute set imperatively via ref
+- `navigator.clipboard.writeText` requires HTTPS or localhost
+- `URL.createObjectURL` for opening PDFs in new tabs
+- No polyfills. Target: Chrome/Edge/Firefox/Safari 14+
