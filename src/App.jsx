@@ -2640,40 +2640,43 @@ export default function App() {
   }
 
   // Canonical filename builder used by the ZIP export. Output shape:
-  //   PROVEEDOR_FOLIO_Concepto_MM-DD-YY   e.g. GASNGO_EDC904627_Gasolina_05-11-26
+  //   PROVEEDOR FOLIO Concepto MM-DD-YY
+  //   e.g. GASNGO MEXICO EDC904627 Gasolina 05-11-26
+  //        FIDEICOMISO IRREVOCABLE DB1616 CUUMXA110440 Habitacion-Sencilla 03-19-26
   // Strips accents (NFD + combining marks), keeps only alphanumerics +
-  // intra-word spaces (later collapsed to _), and clamps lengths so the
-  // overall filename stays well under filesystem limits.
+  // intra-word spaces. Segments are space-separated; multi-word concepto
+  // tokens are hyphenated so each segment remains visually distinct.
   const buildFileName = (g) => {
     const prov = (g.proveedor || 'PROVEEDOR')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-zA-Z0-9\s]/g, '')
-      .trim().replace(/\s+/g, '_')
-      .toUpperCase().slice(0, 30)
+      .trim().replace(/\s+/g, ' ')
+      .toUpperCase()
+      .slice(0, 30)
 
     const folio = (g.noFactura || 'SN')
       .replace(/[^a-zA-Z0-9]/g, '')
-      .toUpperCase()
 
     const concepto = (g.concepto || 'Gasto')
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .split(/\s+/).slice(0, 2)
       .map(p => p.replace(/[^a-zA-Z0-9]/g, ''))
-      .filter(Boolean).join('-')
-      .slice(0, 20) || 'Gasto'
+      .filter(Boolean)
+      .map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+      .join('-') || 'Gasto'
 
     const f = (g.fechaFac || '').split('-')
     const fecha = f.length === 3
       ? `${f[1].padStart(2,'0')}-${f[2].padStart(2,'0')}-${f[0].slice(-2)}`
       : 'SN'
 
-    return `${prov}_${folio}_${concepto}_${fecha}`
+    return `${prov} ${folio} ${concepto} ${fecha}`
   }
 
   // ── Exportar ZIP con Excel + carpeta Facturas/ ──
   // Output: SMTO_Gastos_<Colab>_<YYYYMMDD>.zip containing
   //   • Reporte_<Colab>_<YYYYMMDD>.xlsx  (fetched from /api/export-excel)
-  //   • Facturas/PROVEEDOR_FOLIO_Concepto_MM-DD-YY .xml + .pdf for every row
+  //   • Facturas/PROVEEDOR FOLIO Concepto MM-DD-YY .xml + .pdf for every row
   // PDFs are read from gasto.pdfDataURL (intake-time data URL) so the
   // export doesn't depend on the original File handle, which can be
   // unreliable later. Falls back to pdfFile.arrayBuffer() for any gasto
@@ -3016,7 +3019,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.11</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.13</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
