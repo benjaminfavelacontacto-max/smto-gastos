@@ -2645,26 +2645,42 @@ export default function App() {
 
   // Canonical filename builder used by the ZIP export. Output shape:
   //   Proveedor Folio Concepto MM-DD-YY
-  //   e.g. Restaurantes Ga del Bajio Z43696 Servicio 03-19-26
+  //   e.g. Aerocomidas 66901114763782 Consumo 03-20-26
   //        Fideicomiso Irrevocable DB1616 CUUMXA110440 Habitacion-Sencilla 03-19-26
-  // Preserves the original casing and accents from the CFDI / OCR data \u2014
-  // only strips characters that are unsafe on common filesystems (/ \ : * ? " < > |).
-  // Segments are space-separated; multi-word concepto tokens are hyphenated.
+  //        Grupo Ferreteria Calzada FAC102026491 Hc168243-Urrea 03-20-26
+  // Proveedor + concepto are Title-Cased so all-caps OCR captures don't
+  // shout in filenames; folio keeps its raw casing (it's an identifier).
+  // Strips filesystem-unsafe chars + brackets/parens/braces (which some
+  // tooling escapes awkwardly) and collapses runs of - / _ to spaces in
+  // the proveedor so hyphenated company names read naturally.
+  const toTitleCase = (str) => str
+    .toLowerCase()
+    .split(/\s+/)
+    .map(w => w ? w.charAt(0).toUpperCase() + w.slice(1) : '')
+    .join(' ')
+    .trim()
+
   const buildFileName = (g) => {
-    // Proveedor \u2014 preserve original casing, just remove invalid filename chars
-    const prov = (g.proveedor || 'Proveedor')
-      .replace(/[\/\\:*?"<>|]/g, '')
-      .trim()
-      .slice(0, 40)
+    // Proveedor \u2014 Title Case, strip invalid filename chars and brackets
+    const prov = toTitleCase(
+      (g.proveedor || 'Proveedor')
+        .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    ).slice(0, 40)
 
-    // Folio \u2014 preserve as-is, only remove truly invalid chars
+    // Folio \u2014 preserve exactly as detected
     const folio = (g.noFactura || 'SN')
-      .replace(/[\/\\:*?"<>|]/g, '')
+      .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
       .trim()
 
-    // Concepto \u2014 preserve original casing, join first 2 words with hyphen
-    const concepto = (g.concepto || 'Gasto')
-      .replace(/[\/\\:*?"<>|]/g, '')
+    // Concepto \u2014 Title Case, first 2 words, hyphen-joined
+    const cleanConcepto = (g.concepto || 'Gasto')
+      .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
+      .replace(/-{2,}/g, '-')
+      .trim()
+    const concepto = toTitleCase(cleanConcepto)
       .split(/\s+/).slice(0, 2)
       .filter(Boolean)
       .join('-') || 'Gasto'
@@ -3024,7 +3040,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.15</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.16</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
