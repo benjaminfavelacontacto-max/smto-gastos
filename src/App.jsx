@@ -790,11 +790,22 @@ function ConciliacionModal({ data, onClose, onAgregarManual }) {
     return (txt || '').toLowerCase().includes(q)
   }
 
-  const visibleMatches  = matchedRows.filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
+  const visibleMatches = matchedRows
+    .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
+    .sort((a, b) => b.confidence - a.confidence)
   const visibleSin      = data.sinFactura.filter(s => sinFactPassesFilter(s) && matchesQuery(s.descripcion))
-  const visibleRevision = revisionRows.filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
+  const visibleRevision = revisionRows
+    .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
+    .sort((a, b) => b.confidence - a.confidence)
 
-  const confidenceClass = c => c >= 90 ? 'cm-conf-green' : c >= 70 ? 'cm-conf-yellow' : 'cm-conf-orange'
+  // Confidence tier → chip class + human label. Anything < 50 shouldn't
+  // surface here (Pass 2 rejects below 50, Pass 3 floors at 60), but we
+  // still bucket it as 'Revisar' defensively.
+  const confidenceTier = c => {
+    if (c >= 95) return { cls: 'cm-conf-green',  label: 'Alta confianza' }
+    if (c >= 75) return { cls: 'cm-conf-blue',   label: 'Confianza media' }
+    return            { cls: 'cm-conf-yellow', label: 'Revisar' }
+  }
 
   return (
     <motion.div
@@ -988,7 +999,17 @@ function ConciliacionModal({ data, onClose, onAgregarManual }) {
                             </div>
                           </div>
                           <div className="cm-fs-match-right">
-                            <span className={`cm-fs-conf ${confidenceClass(m.confidence)}`}>{m.confidence}%</span>
+                            {(() => {
+                              const tier = confidenceTier(m.confidence)
+                              return (
+                                <span
+                                  className={`cm-fs-conf ${tier.cls}`}
+                                  title={`${m.confidence}%`}
+                                >
+                                  {tier.label}
+                                </span>
+                              )
+                            })()}
                             <div className="cm-fs-match-amount">
                               {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
                               {m.csvAmountUSD > 0 && <span>{fmtMoney(m.csvAmountUSD, 'USD')} USD</span>}
@@ -1088,7 +1109,14 @@ function ConciliacionModal({ data, onClose, onAgregarManual }) {
                           </div>
                         </div>
                         <div className="cm-fs-match-right">
-                          <span className={`cm-fs-conf ${confidenceClass(m.confidence)}`}>{m.confidence}%</span>
+                          {(() => {
+                            const tier = confidenceTier(m.confidence)
+                            return (
+                              <span className={`cm-fs-conf ${tier.cls}`} title={`${m.confidence}%`}>
+                                {tier.label}
+                              </span>
+                            )
+                          })()}
                           <div className="cm-fs-match-amount">
                             {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
                             {m.csvAmountUSD > 0 && <span>{fmtMoney(m.csvAmountUSD, 'USD')} USD</span>}
@@ -2354,6 +2382,56 @@ export default function App() {
       propinaSugerida20: inv.propinaSugerida20,
       propinaSugerida22: inv.propinaSugerida22,
     });
+    // Score-based propina helpers used by Pass 2. Tips that land on a common
+    // percentage (10/12/13/15/18/20/22/25/30) or a rounded peso increment
+    // (10/20/50/100/500) score high; weird tips like 8.83% or 21.51% score
+    // near zero so we don't bind a coincidental amount delta to a real
+    // invoice.
+    const COMMON_TIPS_PCT = [10, 12, 13, 15, 18, 20, 22, 25, 30]
+    const ROUNDED_INCREMENTS = [10, 20, 50, 100, 500]
+    const scoreTipPct = (base, diff) => {
+      if (diff <= 0 || base <= 0) return 0
+      const pct = (diff / base) * 100
+      const closest = COMMON_TIPS_PCT.reduce((b, t) => Math.abs(t - pct) < Math.abs(b - pct) ? t : b)
+      const dev = Math.abs(closest - pct)
+      if (dev > 3) return 0
+      return Math.max(0, 100 - dev * 25)
+    }
+    const scoreRoundedAmount = (diff) => {
+      if (diff <= 0) return 0
+      for (const inc of ROUNDED_INCREMENTS) {
+        if (Math.abs(diff - Math.round(diff / inc) * inc) < 0.5) {
+          return 60 + inc / 10
+        }
+      }
+      return 0
+    }
+    const scoreTipMatch = (inv, bankAmount) => {
+      const base = inv.totalCFDI || inv.importe || 0
+      const diff = bankAmount - base
+      if (diff <= 0) return { score: 0, propina: 0, pct: 0 }
+
+      // PRIORITY 1: receipt has OCR'd suggested tips — tight (±$0.50) match
+      // against any of them wins outright at 98.
+      const suggestedTips = [
+        { amt: inv.propinaSugerida18, pct: 18 },
+        { amt: inv.propinaSugerida20, pct: 20 },
+        { amt: inv.propinaSugerida22, pct: 22 },
+      ].filter(s => s.amt > 0)
+      for (const sug of suggestedTips) {
+        if (Math.abs(diff - sug.amt) <= 0.50) {
+          return { score: 98, propina: diff, pct: sug.pct }
+        }
+      }
+
+      // PRIORITY 2: common-percentage proximity or rounded peso amount.
+      const pctScore = scoreTipPct(base, diff)
+      const roundScore = scoreRoundedAmount(diff)
+      const finalScore = Math.max(pctScore, roundScore)
+      if (finalScore < 50) return { score: 0, propina: 0, pct: 0 }
+      return { score: finalScore, propina: diff, pct: (diff / base) * 100 }
+    }
+
     // Helper to label a Pass 1 hit by *which* candidate triggered, so the
     // results modal can distinguish a clean total/subtotal match (high
     // confidence) from a subtotal + suggested-gratuity match (lower).
@@ -2398,50 +2476,70 @@ export default function App() {
       }
     )
 
-    // Pass 2 — propina: bank charge = invoice base + tip.
-    //   Standard invoices (≥$100): tip is 5–25% of base, with a $5 absolute
-    //     floor so a sub-$5 nick doesn't masquerade as a 5% "propina" on a
-    //     small invoice (Pass 1's ±$5 already absorbs those).
-    //   Small invoices (<$100): the percentage window collapses, so allow
-    //     any positive tip up to $30 absolute.
-    tryPass(
-      (inv, m) => {
-        const base = inv.totalCFDI
-        if (base <= 0) return false
-        const diff = m - base
-        if (diff <= 0) return false
-        if (base < 100) return diff <= 30
-        const minPropina = Math.max(base * 0.05, 5.0)
-        const maxPropina = base * 0.25
-        return diff >= minPropina && diff <= maxPropina
-      },
-      (idx, m, dCSV, row) => {
-        const base = nl[idx].totalCFDI
-        const prop = Math.round((m - base) * 100) / 100
-        const pct  = base > 0 ? Math.round((prop / base) * 10000) / 100 : 0
-        nl[idx].hizoMatch = true
-        nl[idx].fechaCobro = formatCobro(dCSV)
-        nl[idx].formaPago = '04'  // bank-matched → card transaction
-        nl[idx].montoPropina = prop
-        nl[idx].propinaPorcentaje = pct
-        snapshotMatch(idx, row, 2, `Propina inferida (${pct}%)`, 75)
+    // Pass 2 — SCORED propina inference. For each unmatched CSV row we
+    // score every (unmatched invoice, monto) combination via scoreTipMatch
+    // and commit only the single best candidate, and only if its score
+    // clears the 50 threshold. Rows where a candidate scored above zero
+    // (even rejected ones) are remembered so Pass 3 won't bind a different
+    // invoice to them — once we've seen and dismissed a plausible tip
+    // explanation, the relaxed ±$1 sweep would just paper over it.
+    const pass2SawCandidate = new Set()
+    for (const row of csvRows) {
+      if (row.matched) continue
+      let bestScore = 0
+      let bestIdx = -1
+      let bestTip = null
+      for (const monto of row.amounts) {
+        for (let i = 0; i < nl.length; i++) {
+          if (nl[i].hizoMatch) continue
+          const tipResult = scoreTipMatch(nl[i], monto)
+          if (tipResult.score > 0) pass2SawCandidate.add(row)
+          if (tipResult.score > bestScore) {
+            bestScore = tipResult.score
+            bestIdx = i
+            bestTip = tipResult
+          }
+        }
+      }
+      if (bestScore >= 50 && bestIdx !== -1 && bestTip) {
+        const pctRounded = +bestTip.pct.toFixed(1)
+        nl[bestIdx].hizoMatch = true
+        nl[bestIdx].fechaCobro = formatCobro(row.dCSV)
+        nl[bestIdx].formaPago = '04'
+        nl[bestIdx].montoPropina = Math.round(bestTip.propina * 100) / 100
+        nl[bestIdx].propinaPorcentaje = pctRounded
+        nl[bestIdx].matchConfidence = Math.round(bestScore)
+        snapshotMatch(bestIdx, row, 2, `Propina ${pctRounded}%`, Math.round(bestScore))
+        row.matched = true
         matches++; propinas++
       }
-    )
+    }
 
-    // Pass 3 — relaxed amount (±$1) against totalCFDI only (no propina).
-    // Catches rounding nicks (e.g. 5851.38 vs 5851.25) on invoices without
-    // a propina already recorded.
-    tryPass(
-      (inv, m) => Math.abs(inv.totalCFDI - m) <= 1.0,
-      (idx, _m, dCSV, row) => {
+    // Pass 3 — relaxed amount (±$1) against totalCFDI. Only sweeps rows
+    // where Pass 2 saw *no* scored candidate at all — if Pass 2 considered
+    // and rejected a tip explanation for a row, falling back to a different
+    // invoice's totalCFDI here would mask the real signal.
+    for (const row of csvRows) {
+      if (row.matched) continue
+      if (pass2SawCandidate.has(row)) continue
+      for (const monto of row.amounts) {
+        const candidates = []
+        for (let i = 0; i < nl.length; i++) {
+          if (nl[i].hizoMatch) continue
+          if (Math.abs(nl[i].totalCFDI - monto) <= 1.0) candidates.push(i)
+        }
+        if (!candidates.length) continue
+        const idx = closestByDate(candidates, row.dCSV)
         nl[idx].hizoMatch = true
-        nl[idx].fechaCobro = formatCobro(dCSV)
-        nl[idx].formaPago = '04'  // bank-matched → card transaction
-        snapshotMatch(idx, row, 3, 'Monto relajado (±$1)', 65)
+        nl[idx].fechaCobro = formatCobro(row.dCSV)
+        nl[idx].formaPago = '04'
+        nl[idx].matchConfidence = 60
+        snapshotMatch(idx, row, 3, 'Monto relajado (±$1)', 60)
+        row.matched = true
         matches++
+        break
       }
-    )
+    }
 
     // Collect unmatched rows for the result modal, attaching the top-2
     // fuzzy-name suggestions from existing gastos for the "¿Quisiste decir...?"
@@ -2892,7 +2990,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.4</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.5</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
