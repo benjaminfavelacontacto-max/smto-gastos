@@ -745,7 +745,7 @@ function KpiCard({ variants, accent, Icon, value }) {
   )
 }
 
-function ConciliacionModal({ data, onClose, onAgregarManual }) {
+function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual }) {
   const total = Math.max(1, data.bancoRows || 0)
   const pct = Math.min(100, Math.round((data.matches / total) * 100))
   const cBanco    = useCountUp(data.bancoRows)
@@ -756,6 +756,11 @@ function ConciliacionModal({ data, onClose, onAgregarManual }) {
 
   const matchedRows = data.matchedRows || []
   const revisionRows = matchedRows.filter(m => m.confidence < 80)
+  const matchCount = data.matches || 0
+
+  // Normalize close/cancel: an explicit Cancel is the same as closing the
+  // modal without confirming — matches don't get applied either way.
+  const handleCancel = onCancel || onClose
 
   const [tab, setTab] = useState('matches')
   const [query, setQuery] = useState('')
@@ -766,6 +771,24 @@ function ConciliacionModal({ data, onClose, onAgregarManual }) {
     const t = setTimeout(() => setLoading(false), 800)
     return () => clearTimeout(t)
   }, [])
+
+  // Esc → cancel, Enter → confirm. Skip Enter when the user is typing in a
+  // form control (the search input is right there).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleCancel && handleCancel()
+      } else if (e.key === 'Enter') {
+        const tag = e.target && e.target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        e.preventDefault()
+        onConfirm && onConfirm()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [handleCancel, onConfirm])
 
   const fmtMoney = (n, currency = 'MXN') => {
     const num = Number(n) || 0
@@ -1133,6 +1156,24 @@ function ConciliacionModal({ data, onClose, onAgregarManual }) {
             </AnimatePresence>
           )}
         </div>
+
+        {/* ───── STICKY FOOTER ───── */}
+        <footer className="cm-fs-footer">
+          <button
+            type="button"
+            className="cm-fs-btn cm-fs-btn-secondary"
+            onClick={handleCancel}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            className="cm-fs-btn cm-fs-btn-primary"
+            onClick={onConfirm}
+          >
+            Aceptar conciliación · {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+          </button>
+        </footer>
       </motion.div>
     </motion.div>
   )
@@ -1645,6 +1686,14 @@ export default function App() {
   const [carpetaSuccess, setCarpetaSuccess] = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
+  const [toast, setToast] = useState(null)
+  // Auto-dismiss the inline toast after 2.5s. Re-arm if a new toast arrives
+  // before the previous one finishes (clearTimeout in the cleanup).
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 2500)
+    return () => clearTimeout(t)
+  }, [toast])
   // Index-based fixed pixel widths — order matches COLUMNS positions:
   // [0] checkbox, [1] estado, [2] fecha factura, [3] fecha cobro,
   // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
@@ -2529,7 +2578,10 @@ export default function App() {
       return acc
     }, { mxn: 0, usd: 0 })
 
-    setLista(nl)
+    // Defer setLista — the modal now confirms/cancels the apply step.
+    // pendingLista travels with the result object; onConfirm flushes it,
+    // onCancel discards it. matchedRows/sinFactura are pre-snapshotted so
+    // the modal renders correctly regardless of whether lista was applied.
     setConciliacion({
       bancoRows,
       matches,
@@ -2541,6 +2593,7 @@ export default function App() {
       facturasSinCargo: nl.length - matches,
       ticketsMatched,
       foreignMatched: foreignMatchesTotal,
+      pendingLista: nl,
     })
     e.target.value = ''
   }
@@ -2936,7 +2989,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.9</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.10</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -3185,7 +3238,20 @@ export default function App() {
           <ConciliacionModal
             data={conciliacion}
             onClose={() => setConciliacion(null)}
-            onAgregarManual={() => { setConciliacion(null); agregarManual() }}
+            onConfirm={() => {
+              const count = conciliacion.matches || 0
+              if (conciliacion.pendingLista) setLista(conciliacion.pendingLista)
+              setConciliacion(null)
+              setToast(`✓ Conciliación aplicada · ${count} ${count === 1 ? 'cargo vinculado' : 'cargos vinculados'}`)
+            }}
+            onCancel={() => setConciliacion(null)}
+            onAgregarManual={() => {
+              // Apply pending matches first so they aren't wiped when
+              // agregarManual mutates lista. Then close + add a manual row.
+              if (conciliacion.pendingLista) setLista(conciliacion.pendingLista)
+              setConciliacion(null)
+              agregarManual()
+            }}
           />
         )}
       </AnimatePresence>
@@ -3220,6 +3286,21 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ─── INLINE TOAST ─── */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            className="smto-toast"
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 280, damping: 24 }}
+          >
+            {toast}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

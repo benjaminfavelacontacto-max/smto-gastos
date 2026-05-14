@@ -1982,3 +1982,70 @@ tr.row-new {
   .cm-fs-match-head { grid-template-columns: 1fr; gap: 8px; }
   .cm-fs-match-right { justify-content: flex-start; }
 }
+
+/* ═══════════════════════════════════════════
+   CONCILIACION — sticky footer + toast (v7.10)
+═══════════════════════════════════════════ */
+
+.cm-fs-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(8, 12, 20, 0.55);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+}
+
+.cm-fs-btn {
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cm-fs-btn:hover     { transform: translateY(-1px); filter: brightness(1.08); }
+.cm-fs-btn:active    { transform: translateY(0); filter: brightness(0.96); }
+
+.cm-fs-btn-secondary {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.cm-fs-btn-secondary:hover { border-color: rgba(255, 255, 255, 0.28); }
+
+.cm-fs-btn-primary {
+  background: #22c55e;
+  color: #fff;
+  border: 1px solid rgba(34, 197, 94, 0.55);
+  box-shadow: 0 6px 22px rgba(34, 197, 94, 0.30);
+}
+.cm-fs-btn-primary:hover {
+  box-shadow: 0 10px 28px rgba(34, 197, 94, 0.42);
+}
+
+/* Inline toast — corner snackbar, auto-dismiss handled by App. */
+.smto-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 280;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: rgba(8, 14, 24, 0.85);
+  color: #fff;
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.40), 0 0 24px rgba(34, 197, 94, 0.25);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  max-width: 360px;
+}
