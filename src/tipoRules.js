@@ -332,6 +332,13 @@ export function autoDetectTipo(proveedor, descripcion, categoria) {
   const texto = `${proveedor || ''} ${descripcion || ''}`.toUpperCase()
   const isVentas = categoria === 'Ventas' || categoria === 'Socio'
 
+  // FACTURIFY es plataforma de facturación usada por choferes/taxistas.
+  // Cuando el concepto es "TARIFA" es la tarifa del viaje, no suscripción de software.
+  if ((proveedor || '').toUpperCase().includes('FACTURIFY') &&
+      (descripcion || '').toUpperCase().trim() === 'TARIFA') {
+    return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
+  }
+
   // 1. Primero: buscar en reglas conocidas (marcas, razones sociales, conceptos específicos)
   for (const [kw, tipoBase] of TIPO_RULES) {
     if (texto.includes(kw)) {
