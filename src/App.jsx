@@ -2359,29 +2359,53 @@ export default function App() {
       matches++
     }
 
-    // Pass 1 — smart match: probes the bank charge against the receipt's
-    // total, subtotal, and subtotal + Suggested Gratuity (18/20/22%). Falls
-    // back to subtotal × 18/20/22% when the OCR didn't pick up the gratuity
-    // table, and to the CFDI's importe/totalCFDI for non-ticket rows.
+    // Pass 1 — smart match: branches by data source.
+    //   OCR tickets carry a real subtotal + Suggested Gratuity table from the
+    //     receipt; we probe subtotal alone and subtotal + each suggested-tip
+    //     (with 18/20/22% fallback if the OCR missed those fields).
+    //   CFDI invoices only have totalCFDI/importe; we probe totalCFDI alone
+    //     plus the common Mexican tip ladder (10..25%) applied to totalCFDI,
+    //     and — when subtotal sin IVA (importe) differs from total — a few
+    //     pre-tax tip variants too.
+    const asReceipt = inv => {
+      const subtotalOCR = inv.subtotal || 0
+      const hasOCRtips = (inv.propinaSugerida18 || 0) > 0
+                      || (inv.propinaSugerida20 || 0) > 0
+                      || (inv.propinaSugerida22 || 0) > 0
+      return {
+        isOCR: subtotalOCR > 0 || hasOCRtips,
+        subtotalOCR,
+        totalCFDI: inv.totalCFDI || 0,
+        importe: inv.importe || 0,
+        propinaSugerida18: inv.propinaSugerida18 || 0,
+        propinaSugerida20: inv.propinaSugerida20 || 0,
+        propinaSugerida22: inv.propinaSugerida22 || 0,
+        montoPropina: inv.montoPropina || 0,
+      }
+    }
     const smartAmountMatch = (receipt, csvAmount, tolerance = 0.10) => {
-      const subtotal = receipt.subtotal || 0;
-      const candidates = [
-        receipt.total,
-        subtotal,
-        subtotal + (receipt.propinaSugerida18 || subtotal * 0.18),
-        subtotal + (receipt.propinaSugerida20 || subtotal * 0.20),
-        subtotal + (receipt.propinaSugerida22 || subtotal * 0.22),
-      ].filter(v => v > 0);
-
-      return candidates.some(candidate => Math.abs(candidate - csvAmount) <= tolerance);
-    };
-    const asReceipt = inv => ({
-      subtotal: inv.subtotal || inv.importe || 0,
-      total: (inv.totalCFDI || 0) + (inv.montoPropina || 0),
-      propinaSugerida18: inv.propinaSugerida18,
-      propinaSugerida20: inv.propinaSugerida20,
-      propinaSugerida22: inv.propinaSugerida22,
-    });
+      const candidates = []
+      if (receipt.isOCR) {
+        const sub = receipt.subtotalOCR
+        candidates.push(sub)
+        candidates.push(sub + (receipt.propinaSugerida18 || sub * 0.18))
+        candidates.push(sub + (receipt.propinaSugerida20 || sub * 0.20))
+        candidates.push(sub + (receipt.propinaSugerida22 || sub * 0.22))
+        if (receipt.montoPropina > 0) candidates.push(sub + receipt.montoPropina)
+      } else {
+        const total = receipt.totalCFDI
+        candidates.push(total)
+        ;[0.10, 0.12, 0.13, 0.15, 0.18, 0.20, 0.22, 0.25].forEach(p => {
+          candidates.push(total * (1 + p))
+        })
+        if (receipt.importe > 0 && receipt.importe !== total) {
+          ;[0.10, 0.15, 0.20].forEach(p => {
+            candidates.push(total + receipt.importe * p)
+          })
+        }
+      }
+      return candidates.filter(v => v > 0).some(c => Math.abs(c - csvAmount) <= tolerance)
+    }
     // Score-based propina helpers used by Pass 2. Tips that land on a common
     // percentage (10/12/13/15/18/20/22/25/30) or a rounded peso increment
     // (10/20/50/100/500) score high; weird tips like 8.83% or 21.51% score
@@ -2434,18 +2458,36 @@ export default function App() {
 
     // Helper to label a Pass 1 hit by *which* candidate triggered, so the
     // results modal can distinguish a clean total/subtotal match (high
-    // confidence) from a subtotal + suggested-gratuity match (lower).
+    // confidence) from a tip-based match (lower). Mirrors smartAmountMatch's
+    // OCR vs CFDI branching.
     const classifyPass1 = (inv, csvAmount) => {
       const r = asReceipt(inv)
-      const sub = r.subtotal || 0
       const tol = 0.10
-      if (r.total > 0 && Math.abs(r.total - csvAmount) <= tol) return { method: 'Smart Amount (total)', confidence: 92 }
-      if (sub > 0 && Math.abs(sub - csvAmount) <= tol) return { method: 'Smart Amount (subtotal)', confidence: 92 }
-      for (const pct of [18, 20, 22]) {
-        const sugg = inv[`propinaSugerida${pct}`]
-        const tip = sugg || sub * (pct / 100)
-        if (sub + tip > 0 && Math.abs(sub + tip - csvAmount) <= tol) {
-          return { method: `Smart Amount (+${pct}% tip)`, confidence: 85 }
+      if (r.isOCR) {
+        const sub = r.subtotalOCR
+        if (sub > 0 && Math.abs(sub - csvAmount) <= tol) return { method: 'Smart Amount (subtotal OCR)', confidence: 92 }
+        if (r.montoPropina > 0 && Math.abs(sub + r.montoPropina - csvAmount) <= tol) return { method: 'Smart Amount (propina OCR)', confidence: 90 }
+        for (const pct of [18, 20, 22]) {
+          const sugg = r[`propinaSugerida${pct}`]
+          const tip = sugg || sub * (pct / 100)
+          if (sub + tip > 0 && Math.abs(sub + tip - csvAmount) <= tol) {
+            return { method: `Smart Amount (+${pct}% tip)`, confidence: 85 }
+          }
+        }
+      } else {
+        const total = r.totalCFDI
+        if (total > 0 && Math.abs(total - csvAmount) <= tol) return { method: 'Smart Amount (total CFDI)', confidence: 92 }
+        for (const pct of [10, 12, 13, 15, 18, 20, 22, 25]) {
+          if (total > 0 && Math.abs(total * (1 + pct / 100) - csvAmount) <= tol) {
+            return { method: `Smart Amount CFDI (+${pct}% tip)`, confidence: 85 }
+          }
+        }
+        if (r.importe > 0 && r.importe !== total) {
+          for (const pct of [10, 15, 20]) {
+            if (Math.abs(total + r.importe * (pct / 100) - csvAmount) <= tol) {
+              return { method: `Smart Amount CFDI (+${pct}% sobre importe)`, confidence: 82 }
+            }
+          }
         }
       }
       return { method: 'Smart Amount', confidence: 88 }
@@ -2471,6 +2513,15 @@ export default function App() {
         const usingUSD = !smartAmountMatch(asReceipt(inv), m) && row.montoUSD > 0
         const classifyAmount = usingUSD ? row.montoUSD : m
         const { method, confidence } = classifyPass1(inv, classifyAmount)
+        // CFDI tip inference: when a non-OCR invoice binds to a bank charge
+        // that exceeds its totalCFDI, the delta IS the propina — store it on
+        // the gasto so the table cells (Prop $ / Prop %) light up too.
+        const receipt = asReceipt(inv)
+        if (!receipt.isOCR && inv.totalCFDI > 0 && classifyAmount > inv.totalCFDI) {
+          const diff = classifyAmount - inv.totalCFDI
+          inv.montoPropina = +diff.toFixed(2)
+          inv.propinaPorcentaje = +((diff / inv.totalCFDI) * 100).toFixed(2)
+        }
         snapshotMatch(idx, row, 1, method, confidence)
         matches++
       }
@@ -2990,7 +3041,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.5</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.6</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
