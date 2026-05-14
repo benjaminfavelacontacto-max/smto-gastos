@@ -2197,7 +2197,11 @@ export default function App() {
     let matches = 0, propinas = 0
     const sinFactura = []
     const matchedRows = []
-    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: '' }))
+    // Reset hizoMatch for the new run, but seed fechaCobro from fechaFac
+    // (the new default). Matched rows will overwrite this with the CSV's
+    // dCSV; unmatched rows keep the invoice date so the FECHA DE COBRO
+    // column never shows a blank.
+    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '' }))
 
     // Normalize for fuzzy-suggestion comparison: strip accents, lowercase,
     // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
@@ -2617,7 +2621,7 @@ export default function App() {
     const hdr = 'RFC PROVEEDOR\tPROVEEDOR\tNO. DE FACTURA\tFECHA FAC.\tCONCEPTO\tIMPORTE (MXP)\tIVA\tISR\tRET. ISR\tRET. IVA\tRET/ ISR IVA\tTOTAL CFDI\tGastos en USD\tTipo de Cambio\tTotal Checking\tFORMA DE PAGO\tFECHA DE COBRO\n'
     const rows = lista.flatMap(g => {
       const fac   = formatDateDisplay(g.fechaFac)
-      const cobro = formatDateDisplay(g.fechaCobro) || 'Pendiente'
+      const cobro = formatDateDisplay(g.fechaCobro)
       const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${fac}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t${(g.montoUSD||0).toFixed(2)}\t${(g.tipoCambio||0).toFixed(2)}\t\t${g.formaPago}\t${cobro}\n`
       const p  = g.montoPropina > 0
         ? `\t${g.proveedor} - PROPINA\t\t${fac}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
@@ -3020,7 +3024,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.14</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.15</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
