@@ -1938,7 +1938,10 @@ export default function App() {
         autorizacion = String(cols[12] || '').trim()
         const amount = montoMXN || montoUSD || 0
         if (!dCSV || !amount) continue
-        amounts = [Math.abs(amount)]
+        // Carry BOTH the MXN and USD figures into the amount candidates so
+        // smartAmountMatch can find ticket receipts whose OCR was captured in
+        // either currency without depending on which column is non-zero.
+        amounts = [montoMXN, montoUSD].filter(v => v > 0)
         descripcion = (cols[2] || '').trim().slice(0, 60)
       } else {
         for (const cell of cols) {
@@ -1985,7 +1988,7 @@ export default function App() {
           const candidates = []
           for (let i = 0; i < nl.length; i++) {
             if (nl[i].hizoMatch) continue
-            if (predicate(nl[i], monto)) candidates.push(i)
+            if (predicate(nl[i], monto, row)) candidates.push(i)
           }
           if (!candidates.length) continue
           const idx = closestByDate(candidates, row.dCSV)
@@ -2008,11 +2011,14 @@ export default function App() {
     for (const row of csvRows) {
       if (row.matched) continue
       if (!row.autorizacion) continue
-      const idx = nl.findIndex(g =>
-        !g.hizoMatch &&
-        g.esTicket &&
-        String(g.noFactura || '').trim() === row.autorizacion
-      )
+      const idx = nl.findIndex(g => {
+        if (g.esTicket && !g.hizoMatch) {
+          console.log('Pass0 checking auth:', row.autorizacion, 'vs ticket noFactura:', g.noFactura)
+        }
+        return !g.hizoMatch &&
+          g.esTicket &&
+          String(g.noFactura || '').trim() === row.autorizacion
+      })
       if (idx === -1) continue
 
       nl[idx].hizoMatch  = true
@@ -2085,7 +2091,16 @@ export default function App() {
       propinaSugerida22: inv.propinaSugerida22,
     });
     tryPass(
-      (inv, m) => smartAmountMatch(asReceipt(inv), m),
+      (inv, m, row) => {
+        if (smartAmountMatch(asReceipt(inv), m)) return true
+        // USD secondary: for invoices flagged as USD / foreign currency, also
+        // probe the bank row's montoUSD directly so a Clara USA line whose
+        // MXN figure missed (FX drift, rounding) still binds via its USD
+        // figure.
+        const isUSDInv = inv.moneda === 'USD' || inv.esMonedaExtranjera
+        if (isUSDInv && row.montoUSD > 0 && smartAmountMatch(asReceipt(inv), row.montoUSD)) return true
+        return false
+      },
       (idx, _m, dCSV) => {
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
@@ -2556,7 +2571,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.25</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.31</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
