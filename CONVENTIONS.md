@@ -33,6 +33,13 @@ Examples:
 - Tip variants tested ONLY for gastos in food/restaurant/bar categories.
 - Common tip percentages: 10, 12, 13, 15, 18, 20, 22, 25.
 
+## Cost control (Anthropic API)
+
+- XML alone → parsed locally, NO API call
+- XML + PDF → PDF linked to XML, NO OCR, NO cost
+- PDF without matching XML → user confirmation modal BEFORE calling OCR
+- Image (jpg/png/heic/webp) → compressed client-side to max 2000px width @ 85% quality, then OCR with user confirmation
+
 ## Versionado
 
 Increment minor version on every change. Update the version badge in the UI.

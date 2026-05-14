@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v7.16
+Current version: v7.18
 
 ## Stack
 
@@ -96,7 +96,7 @@ The app is fully client-side except for two Python serverless functions (Excel e
 - XML alone → parsed locally, NO API call
 - XML + PDF → PDF linked to XML, NO OCR, NO cost
 - PDF without matching XML → user confirmation modal BEFORE calling OCR
-- Image (jpg/png) → OCR with user confirmation
+- Image (jpg/png/heic/webp) → compressed client-side to max 2000px width @ 85% quality, then OCR with user confirmation
 
 ## Deploy workflow
 
@@ -110,7 +110,7 @@ The app is fully client-side except for two Python serverless functions (Excel e
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v7.16
+- Current: v7.18
 
 ## Things to be careful about
 

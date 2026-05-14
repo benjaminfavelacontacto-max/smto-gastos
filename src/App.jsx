@@ -171,6 +171,49 @@ const parseDateDisplay = (s) => {
   return s
 }
 
+// Re-encode an image File at most `maxWidth` px wide, JPEG `quality`,
+// before shipping to OCR. Phone photos arrive at 5–10 MB which routinely
+// breaks the 4.5 MB Vercel serverless body limit (HTTP 413). This brings
+// them under the cap with negligible quality loss for OCR. Non-image
+// files pass through untouched.
+const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
+  if (!file.type.startsWith('image/')) return file
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      img.onload = () => {
+        let { width, height } = img
+        if (width > maxWidth) {
+          height = Math.round(height * (maxWidth / width))
+          width = maxWidth
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        canvas.toBlob(
+          (blob) => {
+            const compressed = new File(
+              [blob],
+              file.name.replace(/\.(heic|heif|webp|png)$/i, '.jpg'),
+              { type: 'image/jpeg' }
+            )
+            resolve(compressed)
+          },
+          'image/jpeg',
+          quality
+        )
+      }
+      img.onerror = reject
+      img.src = e.target.result
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
 // Read a File/Blob as raw base64 (no data-URL prefix). Used to ship
 // images and PDFs to the /api/ocr-ticket endpoint.
 const fileToBase64 = (file) => new Promise((resolve, reject) => {
@@ -1704,6 +1747,7 @@ export default function App() {
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
+  const photoRef  = useRef(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -1978,6 +2022,49 @@ export default function App() {
       propinaSugerida20,
       propinaSugerida22,
     }
+  }
+
+  // First-class photo upload for foreign expenses. Mobile-camera-aware
+  // (capture="environment" on the <input>) and compresses to ≤2000px wide
+  // JPEG before sending to OCR so 5–10 MB phone shots don't blow Vercel's
+  // 4.5 MB serverless body cap.
+  const cargarFoto = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (!files.length) return
+
+    const confirmed = await askConfirm({
+      type: 'confirm',
+      title: 'Procesar con OCR',
+      subtitle: `Se procesarán ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} con IA. Esto consume créditos de Claude API. ¿Continuar?`,
+      primaryLabel: 'Continuar',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!confirmed) { e.target.value = ''; return }
+
+    setOcrLoading(true)
+    const newGastos = []
+    for (const file of files) {
+      try {
+        const fileForOCR = await compressImage(file)
+        const base64 = await fileToBase64(fileForOCR)
+        const mediaType = fileForOCR.type || 'image/jpeg'
+        const gasto = await extractReceiptData(base64, mediaType, file.name)
+        if (gasto) {
+          gasto.esMonedaExtranjera = !!(gasto.moneda && gasto.moneda !== 'MXN')
+          newGastos.push(gasto)
+        }
+      } catch (err) {
+        console.warn('OCR error for', file.name, err)
+      }
+    }
+    setOcrLoading(false)
+    if (newGastos.length) {
+      setLista(prev => [...prev, ...newGastos])
+      setToast(`✓ ${newGastos.length} ${newGastos.length === 1 ? 'foto procesada' : 'fotos procesadas'} con OCR`)
+    } else {
+      setToast('No se pudo extraer información de las fotos')
+    }
+    e.target.value = ''
   }
 
   const handleDrop = async (e) => {
@@ -3038,7 +3125,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.17</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.18</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -3103,6 +3190,7 @@ export default function App() {
               </svg>
             )}
           />
+          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => photoRef.current?.click()} />
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {(() => {
             const total = lista.length
@@ -3163,6 +3251,15 @@ export default function App() {
         ref={bancoRef}
         type="file" accept=".csv,.txt,.tsv" style={{ display: 'none' }}
         onChange={validarBanco}
+      />
+      <input
+        ref={photoRef}
+        type="file"
+        accept="image/*,application/pdf"
+        capture="environment"
+        multiple
+        style={{ display: 'none' }}
+        onChange={cargarFoto}
       />
 
       <div className="divider" />
