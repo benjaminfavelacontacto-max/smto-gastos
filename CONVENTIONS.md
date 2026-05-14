@@ -6,20 +6,19 @@ Claude Code MUST follow these rules in every modification. Never deviate.
 
 The single source of truth is `buildFileName()` in `src/App.jsx`. NEVER duplicate or inline rename logic elsewhere.
 
-**Format:** `Proveedor Folio Concepto-Segundo MM-DD-YY`
+**Format:** `Proveedor Folio Tipo MM-DD-YY`
 
-Rules:
 - Proveedor → Title Case, max 40 chars, brackets stripped, no double dashes
 - Folio → preserved EXACTLY as-is from CFDI (DB1616, CUUMXA110440, FAC102026491). Never upper/lower-case.
-- Concepto → Title Case, first 2 words, joined by `-` (e.g. `Habitacion-Sencilla`)
+- Tipo → gasto type (Vuelo, Hotel, Transporte, Herramienta, Consumo, etc.) from `g.tipo`, Title Case. Falls back to concepto if tipo missing.
 - Fecha → `MM-DD-YY` derived from `fechaFac`
-- Separator between blocks: single space (NOT underscore)
+- Separator between blocks: single space
 - Forbidden chars: `/ \ : * ? " < > | ( ) [ ] { }`
 
 Examples:
 - `Aerocomidas 66901114763782 Consumo 03-20-26.pdf`
-- `Fideicomiso Irrevocable DB1616 CUUMXA110440 Habitacion-Sencilla 03-19-26.pdf`
-- `Grupo Ferreteria Calzada FAC102026491 Hc168243-Urrea 03-20-26.pdf`
+- `Fideicomiso Irrevocable DB1616 CUUMXA110440 Hotel 03-19-26.pdf`
+- `Grupo Ferreteria Calzada FAC102026491 Herramienta 03-20-26.pdf`
 
 ## fechaCobro
 

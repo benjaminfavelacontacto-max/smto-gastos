@@ -2644,15 +2644,13 @@ export default function App() {
   }
 
   // Canonical filename builder used by the ZIP export. Output shape:
-  //   Proveedor Folio Concepto MM-DD-YY
+  //   Proveedor Folio Tipo MM-DD-YY
   //   e.g. Aerocomidas 66901114763782 Consumo 03-20-26
-  //        Fideicomiso Irrevocable DB1616 CUUMXA110440 Habitacion-Sencilla 03-19-26
-  //        Grupo Ferreteria Calzada FAC102026491 Hc168243-Urrea 03-20-26
-  // Proveedor + concepto are Title-Cased so all-caps OCR captures don't
-  // shout in filenames; folio keeps its raw casing (it's an identifier).
-  // Strips filesystem-unsafe chars + brackets/parens/braces (which some
-  // tooling escapes awkwardly) and collapses runs of - / _ to spaces in
-  // the proveedor so hyphenated company names read naturally.
+  //        Fideicomiso Irrevocable DB1616 CUUMXA110440 Hotel 03-19-26
+  //        Grupo Ferreteria Calzada FAC102026491 Herramienta 03-20-26
+  // Tipo is the gasto category (Vuelo / Hotel / Transporte / Herramienta /
+  // Consumo / \u2026) \u2014 a stable taxonomy that reads better than the raw CFDI
+  // concepto string. Falls back to g.concepto if tipo is missing.
   const toTitleCase = (str) => str
     .toLowerCase()
     .split(/\s+/)
@@ -2661,7 +2659,7 @@ export default function App() {
     .trim()
 
   const buildFileName = (g) => {
-    // Proveedor \u2014 Title Case, strip invalid filename chars and brackets
+    // Proveedor \u2014 Title Case, max 40 chars, brackets stripped
     const prov = toTitleCase(
       (g.proveedor || 'Proveedor')
         .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
@@ -2670,20 +2668,20 @@ export default function App() {
         .trim()
     ).slice(0, 40)
 
-    // Folio \u2014 preserve exactly as detected
+    // Folio \u2014 preserved exactly as detected
     const folio = (g.noFactura || 'SN')
       .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
       .trim()
 
-    // Concepto \u2014 Title Case, first 2 words, hyphen-joined
-    const cleanConcepto = (g.concepto || 'Gasto')
-      .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
-      .replace(/-{2,}/g, '-')
-      .trim()
-    const concepto = toTitleCase(cleanConcepto)
-      .split(/\s+/).slice(0, 2)
-      .filter(Boolean)
-      .join('-') || 'Gasto'
+    // Tipo \u2014 gasto category (Vuelo, Hotel, Transporte, Herramienta, Consumo,
+    // etc.). Falls back to concepto if tipo not set.
+    const rawTipo = g.tipo || g.concepto || 'Gasto'
+    const tipo = toTitleCase(
+      rawTipo
+        .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    ) || 'Gasto'
 
     // Fecha \u2014 MM-DD-YY
     const f = (g.fechaFac || '').split('-')
@@ -2691,13 +2689,13 @@ export default function App() {
       ? `${f[1].padStart(2,'0')}-${f[2].padStart(2,'0')}-${f[0].slice(-2)}`
       : 'SN'
 
-    return `${prov} ${folio} ${concepto} ${fecha}`
+    return `${prov} ${folio} ${tipo} ${fecha}`
   }
 
   // ── Exportar ZIP con Excel + carpeta Facturas/ ──
   // Output: SMTO_Gastos_<Colab>_<YYYYMMDD>.zip containing
   //   • Reporte_<Colab>_<YYYYMMDD>.xlsx  (fetched from /api/export-excel)
-  //   • Facturas/Proveedor Folio Concepto MM-DD-YY .xml + .pdf for every row
+  //   • Facturas/Proveedor Folio Tipo MM-DD-YY .xml + .pdf for every row
   // PDFs are read from gasto.pdfDataURL (intake-time data URL) so the
   // export doesn't depend on the original File handle, which can be
   // unreliable later. Falls back to pdfFile.arrayBuffer() for any gasto
@@ -3040,7 +3038,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.16</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.17</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
