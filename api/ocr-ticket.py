@@ -56,6 +56,9 @@ class handler(BaseHTTPRequestHandler):
   "iva": 0.00,
   "propina": 0.00,
   "total": 0.00,
+  "propinaSugerida18": 0.00,
+  "propinaSugerida20": 0.00,
+  "propinaSugerida22": 0.00,
   "folio": "card authorization / approval code as plain digits",
   "formaPago": "04"
 }
@@ -68,6 +71,7 @@ Rules:
 - iva: tax amount (Tax, IVA, Impuesto)
 - propina: tip amount (Tip, Gratuity, Propina) — 0 if not present
 - total: final total including tax but before tip, or grand total if tip included
+- propinaSugerida18/20/22: look for "Suggested Gratuity" table on the receipt and extract the tip amounts for 18%, 20%, 22% — use 0 if not present
 - If any field not found use null for strings and 0 for numbers'''
                         }
                     ]

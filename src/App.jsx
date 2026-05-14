@@ -1623,6 +1623,9 @@ export default function App() {
     const iva = Number(parsed.iva) || 0
     const total = Number(parsed.total) || 0
     const propina = Number(parsed.propina) || 0
+    const propinaSugerida18 = Number(parsed.propinaSugerida18) || 0
+    const propinaSugerida20 = Number(parsed.propinaSugerida20) || 0
+    const propinaSugerida22 = Number(parsed.propinaSugerida22) || 0
 
     return {
       id: genId(),
@@ -1671,6 +1674,14 @@ export default function App() {
       // Flag OCR-derived rows so validarBanco's Pass 0 can match them by
       // authorization code against the Clara bank statement.
       esTicket: true,
+      // Subtotal + Suggested Gratuity amounts from the OCR — fuel
+      // smartAmountMatch so the bank charge (which usually equals subtotal +
+      // tip) lines up against the right ticket even when no propina row was
+      // OCR'd separately.
+      subtotal,
+      propinaSugerida18,
+      propinaSugerida20,
+      propinaSugerida22,
     }
   }
 
@@ -2050,9 +2061,31 @@ export default function App() {
       matches++
     }
 
-    // Pass 1 — exact match (±$5) against totalCFDI + montoPropina.
+    // Pass 1 — smart match: probes the bank charge against the receipt's
+    // total, subtotal, and subtotal + Suggested Gratuity (18/20/22%). Falls
+    // back to subtotal × 18/20/22% when the OCR didn't pick up the gratuity
+    // table, and to the CFDI's importe/totalCFDI for non-ticket rows.
+    const smartAmountMatch = (receipt, csvAmount, tolerance = 0.10) => {
+      const subtotal = receipt.subtotal || 0;
+      const candidates = [
+        receipt.total,
+        subtotal,
+        subtotal + (receipt.propinaSugerida18 || subtotal * 0.18),
+        subtotal + (receipt.propinaSugerida20 || subtotal * 0.20),
+        subtotal + (receipt.propinaSugerida22 || subtotal * 0.22),
+      ].filter(v => v > 0);
+
+      return candidates.some(candidate => Math.abs(candidate - csvAmount) <= tolerance);
+    };
+    const asReceipt = inv => ({
+      subtotal: inv.subtotal || inv.importe || 0,
+      total: (inv.totalCFDI || 0) + (inv.montoPropina || 0),
+      propinaSugerida18: inv.propinaSugerida18,
+      propinaSugerida20: inv.propinaSugerida20,
+      propinaSugerida22: inv.propinaSugerida22,
+    });
     tryPass(
-      (inv, m) => Math.abs(inv.totalCFDI + inv.montoPropina - m) <= 5,
+      (inv, m) => smartAmountMatch(asReceipt(inv), m),
       (idx, _m, dCSV) => {
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
@@ -2523,7 +2556,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.24</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.25</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
