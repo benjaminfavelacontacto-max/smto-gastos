@@ -592,7 +592,7 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
         />
       </td>
 
-      {/* Estado: PDF + Banco — pill badges */}
+      {/* Estado: PDF + IMG (image OCR) + Banco — pill badges */}
       <td className="td-status">
         <div className="status-row">
           <button
@@ -603,6 +603,36 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
           >
             PDF
           </button>
+          {g.imageDataURL && (
+            <button
+              type="button"
+              className="badge-img"
+              title="Ver imagen original"
+              onClick={(e) => {
+                e.stopPropagation()
+                const w = window.open('', '_blank')
+                if (w) {
+                  w.document.write(`
+                    <html>
+                      <head>
+                        <title>${g.proveedor || 'Imagen'}</title>
+                        <style>
+                          body { margin: 0; background: #0a0a0a; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+                          img { max-width: 100%; max-height: 100vh; object-fit: contain; }
+                        </style>
+                      </head>
+                      <body>
+                        <img src="${g.imageDataURL}" alt="${g.proveedor || ''}" />
+                      </body>
+                    </html>
+                  `)
+                  w.document.close()
+                }
+              }}
+            >
+              IMG
+            </button>
+          )}
           <span
             className={`pill ${g.hizoMatch ? 'pill-blue' : 'pill-dim'}`}
             title={g.hizoMatch ? 'Conciliado con el Banco' : 'Pendiente en Banco'}
@@ -3187,7 +3217,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.20</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.21</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
