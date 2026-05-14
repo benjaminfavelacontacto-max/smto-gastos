@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check, Plus, Link2 } from 'lucide-react'
+import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
@@ -745,23 +745,60 @@ function KpiCard({ variants, accent, Icon, value }) {
   )
 }
 
-function ConciliacionModal({ data, onClose }) {
+function ConciliacionModal({ data, onClose, onAgregarManual }) {
+  const total = Math.max(1, data.bancoRows || 0)
+  const pct = Math.min(100, Math.round((data.matches / total) * 100))
   const cBanco    = useCountUp(data.bancoRows)
   const cMatches  = useCountUp(data.matches)
+  const cSin      = useCountUp(data.sinFactura.length)
   const cPropinas = useCountUp(data.propinas)
+  const cPct      = useCountUp(pct)
 
-  const stagger = {
-    hidden: { opacity: 0 },
-    show:   { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.15 } },
+  const matchedRows = data.matchedRows || []
+  const revisionRows = matchedRows.filter(m => m.confidence < 80)
+
+  const [tab, setTab] = useState('matches')
+  const [query, setQuery] = useState('')
+  const [filterKey, setFilterKey] = useState('all')
+  const [expandedId, setExpandedId] = useState(null)
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    const t = setTimeout(() => setLoading(false), 800)
+    return () => clearTimeout(t)
+  }, [])
+
+  const fmtMoney = (n, currency = 'MXN') => {
+    const num = Number(n) || 0
+    return `${currency === 'USD' ? 'US$' : '$'}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
-  const item = {
-    hidden: { opacity: 0, y: 14 },
-    show:   { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 240, damping: 22 } },
+
+  const matchesPassesFilter = (m) => {
+    if (filterKey === 'usd') return m.csvMoneda === 'USD' || m.invoiceMoneda === 'USD'
+    if (filterKey === 'mxn') return (m.csvMoneda || 'MXN') === 'MXN' && (m.invoiceMoneda || 'MXN') === 'MXN'
+    if (filterKey === 'tickets') return m.isTicket
+    if (filterKey === 'facturas') return !m.isTicket
+    return true
   }
+  const sinFactPassesFilter = (s) => {
+    if (filterKey === 'usd') return (s.moneda || 'MXN') === 'USD'
+    if (filterKey === 'mxn') return (s.moneda || 'MXN') === 'MXN'
+    return true   // tickets/facturas filter is only meaningful for matched rows
+  }
+  const matchesQuery = (txt) => {
+    if (!query.trim()) return true
+    const q = query.trim().toLowerCase()
+    return (txt || '').toLowerCase().includes(q)
+  }
+
+  const visibleMatches  = matchedRows.filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
+  const visibleSin      = data.sinFactura.filter(s => sinFactPassesFilter(s) && matchesQuery(s.descripcion))
+  const visibleRevision = revisionRows.filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
+
+  const confidenceClass = c => c >= 90 ? 'cm-conf-green' : c >= 70 ? 'cm-conf-yellow' : 'cm-conf-orange'
 
   return (
     <motion.div
-      className="cm-overlay"
+      className="cm-fs-overlay"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -769,124 +806,305 @@ function ConciliacionModal({ data, onClose }) {
       onClick={onClose}
     >
       <motion.div
-        className="cm-modal"
-        initial={{ opacity: 0, y: 32, scale: 0.94 }}
+        className="cm-fs-shell"
+        initial={{ opacity: 0, y: 24, scale: 0.985 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 16, scale: 0.96 }}
-        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        exit={{ opacity: 0, y: 12, scale: 0.99 }}
+        transition={{ type: 'spring', stiffness: 240, damping: 26 }}
         onClick={e => e.stopPropagation()}
       >
-        <button className="cm-close" onClick={onClose} aria-label="Cerrar">
-          <X size={16} />
+        <button className="cm-fs-close" onClick={onClose} aria-label="Cerrar">
+          <X size={18} />
         </button>
 
-        {/* Header */}
-        <div className="cm-header">
-          <motion.div
-            className="cm-orb"
-            initial={{ scale: 0, rotate: -20 }}
-            animate={{ scale: 1, rotate: 0 }}
-            transition={{ type: 'spring', stiffness: 220, damping: 14, delay: 0.1 }}
-          >
-            <CheckCircle2 size={30} strokeWidth={2.2} />
-          </motion.div>
-          <h2 className="cm-title">Conciliación Terminada</h2>
-          <p className="cm-subtitle">
-            Procesamos {data.bancoRows} {data.bancoRows === 1 ? 'cargo' : 'cargos'} del estado de cuenta
-          </p>
-          {(data.ticketsMatched > 0 || data.foreignMatched > 0) && (
-            <p className="cm-subtitle cm-subtitle-extra">
-              {[
-                data.ticketsMatched > 0 && `🎯 ${data.ticketsMatched} ticket${data.ticketsMatched === 1 ? '' : 's'} por código de autorización`,
-                data.foreignMatched > 0 && `💵 ${data.foreignMatched} en moneda extranjera vinculada${data.foreignMatched === 1 ? '' : 's'}`,
-              ].filter(Boolean).join(' · ')}
-            </p>
+        {/* ───── TOP SUMMARY BAR ───── */}
+        <header className="cm-fs-summary">
+          <div className="cm-fs-summary-top">
+            <div className="cm-fs-summary-titles">
+              <h2 className="cm-fs-title">Conciliación Terminada</h2>
+              <p className="cm-fs-subtitle">
+                {cPct}% conciliado · {data.bancoRows} {data.bancoRows === 1 ? 'cargo' : 'cargos'} procesados
+              </p>
+            </div>
+            <div className="cm-fs-summary-toolbar">
+              <label className="cm-fs-search">
+                <Search size={14} strokeWidth={2.2} />
+                <input
+                  type="text"
+                  placeholder="Buscar por proveedor o descripción…"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                />
+              </label>
+              <select
+                className="cm-fs-filter"
+                value={filterKey}
+                onChange={e => setFilterKey(e.target.value)}
+              >
+                <option value="all">Todos</option>
+                <option value="usd">USD</option>
+                <option value="mxn">MXN</option>
+                <option value="tickets">Tickets</option>
+                <option value="facturas">Facturas</option>
+              </select>
+              <button
+                className="cm-fs-export"
+                disabled
+                title="Próximamente"
+                onClick={e => e.preventDefault()}
+              >
+                <Download size={14} /> Exportar
+              </button>
+            </div>
+          </div>
+
+          <div className="cm-fs-progress">
+            <motion.div
+              className="cm-fs-progress-fill"
+              initial={{ width: 0 }}
+              animate={{ width: `${pct}%` }}
+              transition={{ duration: 1.0, ease: 'easeOut', delay: 0.15 }}
+            />
+          </div>
+
+          <div className="cm-fs-chips">
+            <div className="cm-fs-chip cm-chip-blue">
+              <CreditCard size={14} />
+              <div>
+                <div className="cm-fs-chip-value">{cBanco}</div>
+                <div className="cm-fs-chip-label">Total cargos</div>
+              </div>
+            </div>
+            <div className="cm-fs-chip cm-chip-green">
+              <Target size={14} />
+              <div>
+                <div className="cm-fs-chip-value">{cMatches}</div>
+                <div className="cm-fs-chip-label">Matches exitosos</div>
+              </div>
+            </div>
+            <div className="cm-fs-chip cm-chip-red">
+              <XCircle size={14} />
+              <div>
+                <div className="cm-fs-chip-value">{cSin}</div>
+                <div className="cm-fs-chip-label">Sin factura</div>
+              </div>
+            </div>
+            <div className="cm-fs-chip cm-chip-purple">
+              <Sparkles size={14} />
+              <div>
+                <div className="cm-fs-chip-value">{cPropinas}</div>
+                <div className="cm-fs-chip-label">Propinas detectadas</div>
+              </div>
+            </div>
+          </div>
+
+          {(data.totalsMatched || data.totalsPending) && (
+            <div className="cm-fs-totals">
+              <div className="cm-fs-totals-block">
+                <span className="cm-fs-totals-label">Conciliado</span>
+                <span className="cm-fs-totals-value cm-fs-totals-green">
+                  {fmtMoney(data.totalsMatched?.mxn)} MXN
+                  {data.totalsMatched?.usd > 0 && <> · {fmtMoney(data.totalsMatched.usd, 'USD')} USD</>}
+                </span>
+              </div>
+              <div className="cm-fs-totals-block">
+                <span className="cm-fs-totals-label">Pendiente</span>
+                <span className="cm-fs-totals-value cm-fs-totals-red">
+                  {fmtMoney(data.totalsPending?.mxn)} MXN
+                  {data.totalsPending?.usd > 0 && <> · {fmtMoney(data.totalsPending.usd, 'USD')} USD</>}
+                </span>
+              </div>
+            </div>
           )}
+        </header>
+
+        {/* ───── TABS ───── */}
+        <div className="cm-fs-tabs" role="tablist">
+          {[
+            { key: 'matches',  label: 'Matches',     icon: <Check size={14} />,        count: visibleMatches.length,  badgeClass: 'cm-fs-badge-green' },
+            { key: 'sin',      label: 'Sin Factura', icon: <XCircle size={14} />,      count: visibleSin.length,      badgeClass: 'cm-fs-badge-red' },
+            { key: 'revision', label: 'Revisión',    icon: <AlertCircle size={14} />,  count: visibleRevision.length, badgeClass: 'cm-fs-badge-yellow' },
+          ].map(t => (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={tab === t.key}
+              className={`cm-fs-tab ${tab === t.key ? 'is-active' : ''}`}
+              onClick={() => setTab(t.key)}
+            >
+              {t.icon}
+              <span>{t.label}</span>
+              <span className={`cm-fs-tab-badge ${t.badgeClass}`}>{t.count}</span>
+              {tab === t.key && (
+                <motion.span className="cm-fs-tab-underline" layoutId="cm-fs-tab-underline" />
+              )}
+            </button>
+          ))}
         </div>
 
-        {/* KPI grid */}
-        <motion.div className="cm-kpi-grid" variants={stagger} initial="hidden" animate="show">
-          <KpiCard variants={item} accent="blue"   Icon={CreditCard} value={cBanco} />
-          <KpiCard variants={item} accent="green"  Icon={Target}     value={cMatches} />
-          <KpiCard variants={item} accent="purple" Icon={Sparkles}   value={cPropinas} />
-        </motion.div>
-        <motion.div
-          className="cm-kpi-labels"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4 }}
-        >
-          <span>Cargos en banco</span>
-          <span>Matches exitosos</span>
-          <span>Propinas detectadas</span>
-        </motion.div>
-
-        {/* Cargos sin factura */}
-        {data.sinFactura.length > 0 && (
-          <motion.section
-            className="cm-section"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.45 }}
-          >
-            <div className="cm-section-header cm-warn">
-              <AlertTriangle size={14} strokeWidth={2.4} />
-              <span>Cargos sin factura</span>
-              <span className="cm-count-pill cm-warn">{data.sinFactura.length}</span>
-            </div>
-            <div className="cm-alert-list">
-              {data.sinFactura.slice(0, 8).map((s, i) => (
-                <motion.div
-                  key={i}
-                  className="cm-alert"
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.5 + i * 0.04, type: 'spring', stiffness: 280, damping: 24 }}
-                >
-                  <div className="cm-alert-date">{formatDateDisplay(s.fecha)}</div>
-                  <div className="cm-alert-desc" title={s.descripcion || ''}>
-                    {s.descripcion || 'Sin descripción'}
-                  </div>
-                  <div className="cm-alert-amount">
-                    ${s.monto.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
-                </motion.div>
+        {/* ───── BODY ───── */}
+        <div className="cm-fs-body">
+          {loading ? (
+            <div className="cm-fs-skel-list">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="cm-fs-skel-card" />
               ))}
-              {data.sinFactura.length > 8 && (
-                <div className="cm-more">+{data.sinFactura.length - 8} más</div>
+            </div>
+          ) : (
+            <AnimatePresence mode="wait">
+              {tab === 'matches' && (
+                <motion.div
+                  key="matches"
+                  className="cm-fs-pane"
+                  initial={{ opacity: 0, x: 16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -16 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                >
+                  {visibleMatches.length === 0 ? (
+                    <div className="cm-fs-empty">Sin matches que cumplan los filtros.</div>
+                  ) : visibleMatches.map((m, i) => {
+                    const id = `${m.invoiceId}-${i}`
+                    const isOpen = expandedId === id
+                    return (
+                      <div
+                        key={id}
+                        className={`cm-fs-card cm-fs-match-card ${isOpen ? 'is-open' : ''}`}
+                        onClick={() => setExpandedId(isOpen ? null : id)}
+                      >
+                        <div className="cm-fs-match-head">
+                          <div className="cm-fs-match-left">
+                            <CheckCircle2 size={18} className="cm-fs-match-check" />
+                            <div>
+                              <div className="cm-fs-match-name">{m.csvDescripcion || '(sin descripción)'}</div>
+                              <div className="cm-fs-match-sub">{formatDateDisplay(m.csvDate)}</div>
+                            </div>
+                          </div>
+                          <div className="cm-fs-match-center">
+                            <ArrowRight size={14} className="cm-fs-match-arrow" />
+                            <div>
+                              <div className="cm-fs-match-name">{m.invoiceName}</div>
+                              <div className="cm-fs-match-sub">{m.method}</div>
+                            </div>
+                          </div>
+                          <div className="cm-fs-match-right">
+                            <span className={`cm-fs-conf ${confidenceClass(m.confidence)}`}>{m.confidence}%</span>
+                            <div className="cm-fs-match-amount">
+                              {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
+                              {m.csvAmountUSD > 0 && <span>{fmtMoney(m.csvAmountUSD, 'USD')} USD</span>}
+                            </div>
+                            <ChevronDown size={14} className={`cm-fs-chev ${isOpen ? 'is-open' : ''}`} />
+                          </div>
+                        </div>
+                        <div className="cm-fs-match-detail" style={{ maxHeight: isOpen ? 220 : 0 }}>
+                          <div className="cm-fs-detail-grid">
+                            <div><span>Pass</span><strong>{m.pass} — {m.method}</strong></div>
+                            <div><span>Factura</span><strong>{m.invoiceNumber || '—'}</strong></div>
+                            <div><span>Total factura</span><strong>{fmtMoney(m.invoiceTotal, m.invoiceMoneda)}</strong></div>
+                            {m.csvAuth && <div><span>Código autorización</span><strong>{m.csvAuth}</strong></div>}
+                            <div><span>Confianza</span><strong>{m.confidence}%</strong></div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </motion.div>
               )}
-            </div>
-          </motion.section>
-        )}
 
-        {/* Facturas sin cargo */}
-        {data.facturasSinCargo > 0 && (
-          <motion.section
-            className="cm-section"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.55 }}
-          >
-            <div className="cm-section-header cm-neutral">
-              <FileText size={14} strokeWidth={2.4} />
-              <span>Facturas sin cargo en banco</span>
-              <span className="cm-count-pill cm-neutral">{data.facturasSinCargo}</span>
-            </div>
-          </motion.section>
-        )}
+              {tab === 'sin' && (
+                <motion.div
+                  key="sin"
+                  className="cm-fs-pane"
+                  initial={{ opacity: 0, x: 16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -16 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                >
+                  {visibleSin.length === 0 ? (
+                    <div className="cm-fs-empty">Sin cargos pendientes que cumplan los filtros.</div>
+                  ) : visibleSin.map((s, i) => (
+                    <div key={i} className="cm-fs-card cm-fs-sin-card">
+                      <div className="cm-fs-sin-head">
+                        <div className="cm-fs-sin-left">
+                          <span className="cm-fs-badge cm-fs-badge-red">Sin Match</span>
+                          <div>
+                            <div className="cm-fs-match-name">{s.descripcion || 'Sin descripción'}</div>
+                            <div className="cm-fs-match-sub">{formatDateDisplay(s.fecha)}</div>
+                          </div>
+                        </div>
+                        <div className="cm-fs-sin-right">
+                          <div className="cm-fs-match-amount">
+                            <span>{fmtMoney(s.monto, s.moneda || 'MXN')} {s.moneda || 'MXN'}</span>
+                          </div>
+                          <button
+                            className="cm-fs-add-manual"
+                            onClick={() => onAgregarManual && onAgregarManual(s)}
+                          >
+                            <Plus size={12} /> Agregar manualmente
+                          </button>
+                        </div>
+                      </div>
+                      {s.sugerencias && s.sugerencias.length > 0 && (
+                        <div className="cm-fs-suggest">
+                          <span className="cm-fs-suggest-label">¿Quisiste decir…?</span>
+                          {s.sugerencias.map(sg => (
+                            <span key={sg.id} className="cm-fs-suggest-chip">
+                              {sg.proveedor} <em>{sg.score}%</em>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </motion.div>
+              )}
 
-        {/* CTA */}
-        <motion.button
-          className="cm-cta"
-          onClick={onClose}
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.98 }}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.62 }}
-        >
-          Listo
-        </motion.button>
+              {tab === 'revision' && (
+                <motion.div
+                  key="revision"
+                  className="cm-fs-pane"
+                  initial={{ opacity: 0, x: 16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -16 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                >
+                  {visibleRevision.length === 0 ? (
+                    <div className="cm-fs-empty">Todo conciliado con alta confianza.</div>
+                  ) : visibleRevision.map((m, i) => (
+                    <div key={`${m.invoiceId}-${i}`} className="cm-fs-card cm-fs-rev-card">
+                      <div className="cm-fs-match-head">
+                        <div className="cm-fs-match-left">
+                          <AlertCircle size={18} className="cm-fs-rev-icon" />
+                          <div>
+                            <div className="cm-fs-match-name">{m.csvDescripcion || '(sin descripción)'}</div>
+                            <div className="cm-fs-match-sub">{formatDateDisplay(m.csvDate)}</div>
+                          </div>
+                        </div>
+                        <div className="cm-fs-match-center">
+                          <ArrowRight size={14} className="cm-fs-match-arrow" />
+                          <div>
+                            <div className="cm-fs-match-name">{m.invoiceName}</div>
+                            <div className="cm-fs-match-sub">Pase {m.pass} — {m.method}</div>
+                          </div>
+                        </div>
+                        <div className="cm-fs-match-right">
+                          <span className={`cm-fs-conf ${confidenceClass(m.confidence)}`}>{m.confidence}%</span>
+                          <div className="cm-fs-match-amount">
+                            {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
+                            {m.csvAmountUSD > 0 && <span>{fmtMoney(m.csvAmountUSD, 'USD')} USD</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="cm-fs-rev-note">
+                        Confianza baja. Revisa el monto, la fecha y el proveedor antes de aceptar.
+                      </div>
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+        </div>
       </motion.div>
     </motion.div>
   )
@@ -1901,7 +2119,52 @@ export default function App() {
 
     let matches = 0, propinas = 0
     const sinFactura = []
+    const matchedRows = []
     const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: '' }))
+
+    // Normalize for fuzzy-suggestion comparison: strip accents, lowercase,
+    // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
+    // reasonable 0..1 similarity that's tolerant of word-order swaps.
+    const normalizeText = s => (s || '').toString().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ').trim()
+    const bigramSet = s => {
+      const t = normalizeText(s).replace(/\s/g, '')
+      const set = new Set()
+      for (let i = 0; i < t.length - 1; i++) set.add(t.slice(i, i + 2))
+      return set
+    }
+    const nameOverlap = (a, b) => {
+      const A = bigramSet(a), B = bigramSet(b)
+      if (!A.size || !B.size) return 0
+      let common = 0
+      for (const g of A) if (B.has(g)) common++
+      return common / Math.min(A.size, B.size)
+    }
+
+    // Snapshot the bank ↔ invoice pairing at apply time so the modal can
+    // render the match list without re-deriving anything from `nl` (which
+    // continues to mutate as later passes run).
+    const snapshotMatch = (idx, row, pass, method, confidence) => {
+      const g = nl[idx]
+      matchedRows.push({
+        pass,
+        method,
+        confidence,
+        invoiceId: g.id,
+        invoiceName: g.proveedor || '(sin proveedor)',
+        invoiceNumber: g.noFactura || '',
+        invoiceTotal: g.totalCFDI || 0,
+        invoiceMoneda: g.moneda || 'MXN',
+        isTicket: !!g.esTicket,
+        csvDate: formatCobro(row.dCSV),
+        csvDescripcion: row.descripcion || '',
+        csvAmountMXN: row.montoMXN || 0,
+        csvAmountUSD: row.montoUSD || 0,
+        csvMoneda: row.moneda || 'MXN',
+        csvAuth: row.autorizacion || '',
+      })
+    }
     const formatCobro = d => {
       // Store as YYYY-MM-DD so the native date picker on the row accepts it
       // directly and formatDateDisplay produces MM-DD-YY for the read view.
@@ -1992,7 +2255,7 @@ export default function App() {
           }
           if (!candidates.length) continue
           const idx = closestByDate(candidates, row.dCSV)
-          apply(idx, monto, row.dCSV)
+          apply(idx, monto, row.dCSV, row)
           row.matched = true
           break
         }
@@ -2062,6 +2325,7 @@ export default function App() {
         nl[idx].totalCFDI = row.montoMXN
         nl[idx].importe   = row.montoMXN
       }
+      snapshotMatch(idx, row, 0, 'Auth Code', 99)
       row.matched = true
       ticketsMatched++
       matches++
@@ -2090,6 +2354,24 @@ export default function App() {
       propinaSugerida20: inv.propinaSugerida20,
       propinaSugerida22: inv.propinaSugerida22,
     });
+    // Helper to label a Pass 1 hit by *which* candidate triggered, so the
+    // results modal can distinguish a clean total/subtotal match (high
+    // confidence) from a subtotal + suggested-gratuity match (lower).
+    const classifyPass1 = (inv, csvAmount) => {
+      const r = asReceipt(inv)
+      const sub = r.subtotal || 0
+      const tol = 0.10
+      if (r.total > 0 && Math.abs(r.total - csvAmount) <= tol) return { method: 'Smart Amount (total)', confidence: 92 }
+      if (sub > 0 && Math.abs(sub - csvAmount) <= tol) return { method: 'Smart Amount (subtotal)', confidence: 92 }
+      for (const pct of [18, 20, 22]) {
+        const sugg = inv[`propinaSugerida${pct}`]
+        const tip = sugg || sub * (pct / 100)
+        if (sub + tip > 0 && Math.abs(sub + tip - csvAmount) <= tol) {
+          return { method: `Smart Amount (+${pct}% tip)`, confidence: 85 }
+        }
+      }
+      return { method: 'Smart Amount', confidence: 88 }
+    }
     tryPass(
       (inv, m, row) => {
         if (smartAmountMatch(asReceipt(inv), m)) return true
@@ -2101,10 +2383,17 @@ export default function App() {
         if (isUSDInv && row.montoUSD > 0 && smartAmountMatch(asReceipt(inv), row.montoUSD)) return true
         return false
       },
-      (idx, _m, dCSV) => {
+      (idx, m, dCSV, row) => {
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
         nl[idx].formaPago = '04'  // bank-matched → card transaction
+        // Classify against whichever amount actually triggered the match
+        // (primary monto or USD secondary); fall back if neither lands.
+        const inv = nl[idx]
+        const usingUSD = !smartAmountMatch(asReceipt(inv), m) && row.montoUSD > 0
+        const classifyAmount = usingUSD ? row.montoUSD : m
+        const { method, confidence } = classifyPass1(inv, classifyAmount)
+        snapshotMatch(idx, row, 1, method, confidence)
         matches++
       }
     )
@@ -2126,7 +2415,7 @@ export default function App() {
         const maxPropina = base * 0.25
         return diff >= minPropina && diff <= maxPropina
       },
-      (idx, m, dCSV) => {
+      (idx, m, dCSV, row) => {
         const base = nl[idx].totalCFDI
         const prop = Math.round((m - base) * 100) / 100
         const pct  = base > 0 ? Math.round((prop / base) * 10000) / 100 : 0
@@ -2135,6 +2424,7 @@ export default function App() {
         nl[idx].formaPago = '04'  // bank-matched → card transaction
         nl[idx].montoPropina = prop
         nl[idx].propinaPorcentaje = pct
+        snapshotMatch(idx, row, 2, `Propina inferida (${pct}%)`, 75)
         matches++; propinas++
       }
     )
@@ -2144,21 +2434,36 @@ export default function App() {
     // a propina already recorded.
     tryPass(
       (inv, m) => Math.abs(inv.totalCFDI - m) <= 1.0,
-      (idx, _m, dCSV) => {
+      (idx, _m, dCSV, row) => {
         nl[idx].hizoMatch = true
         nl[idx].fechaCobro = formatCobro(dCSV)
         nl[idx].formaPago = '04'  // bank-matched → card transaction
+        snapshotMatch(idx, row, 3, 'Monto relajado (±$1)', 65)
         matches++
       }
     )
 
-    // Collect unmatched rows for the result modal.
+    // Collect unmatched rows for the result modal, attaching the top-2
+    // fuzzy-name suggestions from existing gastos for the "¿Quisiste decir...?"
+    // hint. Pool is all gastos (matched or not) — the user might have already
+    // reconciled a similarly-named row earlier and want to merge.
     for (const row of csvRows) {
       if (row.matched) continue
+      const desc = row.descripcion || ''
+      const sugerencias = nl
+        .map(g => ({ id: g.id, proveedor: g.proveedor || '', score: nameOverlap(desc, g.proveedor) }))
+        .filter(s => s.proveedor && s.score >= 0.4)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 2)
+        .map(s => ({ id: s.id, proveedor: s.proveedor, score: Math.round(s.score * 100) }))
       sinFactura.push({
         fecha: formatCobro(row.dCSV),
         monto: Math.max(...row.amounts),
         descripcion: row.descripcion,
+        montoMXN: row.montoMXN || 0,
+        montoUSD: row.montoUSD || 0,
+        moneda: row.moneda || 'MXN',
+        sugerencias,
       })
     }
 
@@ -2167,12 +2472,28 @@ export default function App() {
     // existing row already flagged esMonedaExtranjera that got matched.
     const foreignMatchesTotal = nl.filter(g => g.esMonedaExtranjera && g.fechaCobro).length
 
+    // Aggregate currency totals (Matched vs Pending) for the top summary
+    // bar — split MXN vs USD so the chips stay readable across mixed sheets.
+    const totalsMatched = matchedRows.reduce((acc, m) => {
+      acc.mxn += m.csvAmountMXN || 0
+      acc.usd += m.csvAmountUSD || 0
+      return acc
+    }, { mxn: 0, usd: 0 })
+    const totalsPending = sinFactura.reduce((acc, s) => {
+      acc.mxn += s.montoMXN || (s.moneda === 'MXN' ? s.monto : 0)
+      acc.usd += s.montoUSD || (s.moneda === 'USD' ? s.monto : 0)
+      return acc
+    }, { mxn: 0, usd: 0 })
+
     setLista(nl)
     setConciliacion({
       bancoRows,
       matches,
       propinas,
       sinFactura,
+      matchedRows,
+      totalsMatched,
+      totalsPending,
       facturasSinCargo: nl.length - matches,
       ticketsMatched,
       foreignMatched: foreignMatchesTotal,
@@ -2571,7 +2892,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.31</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.4</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -2817,7 +3138,11 @@ export default function App() {
       {/* ─── MODAL CONCILIACIÓN BANCARIA (premium glass) ─── */}
       <AnimatePresence>
         {conciliacion && (
-          <ConciliacionModal data={conciliacion} onClose={() => setConciliacion(null)} />
+          <ConciliacionModal
+            data={conciliacion}
+            onClose={() => setConciliacion(null)}
+            onAgregarManual={() => { setConciliacion(null); agregarManual() }}
+          />
         )}
       </AnimatePresence>
 
