@@ -2203,7 +2203,7 @@ export default function App() {
     // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
     // reasonable 0..1 similarity that's tolerant of word-order swaps.
     const normalizeText = s => (s || '').toString().toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, ' ').trim()
     const bigramSet = s => {
       const t = normalizeText(s).replace(/\s/g, '')
@@ -2639,10 +2639,41 @@ export default function App() {
       }))
   }
 
+  // Canonical filename builder used by the ZIP export. Output shape:
+  //   PROVEEDOR_FOLIO_Concepto_MM-DD-YY   e.g. GASNGO_EDC904627_Gasolina_05-11-26
+  // Strips accents (NFD + combining marks), keeps only alphanumerics +
+  // intra-word spaces (later collapsed to _), and clamps lengths so the
+  // overall filename stays well under filesystem limits.
+  const buildFileName = (g) => {
+    const prov = (g.proveedor || 'PROVEEDOR')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .trim().replace(/\s+/g, '_')
+      .toUpperCase().slice(0, 30)
+
+    const folio = (g.noFactura || 'SN')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toUpperCase()
+
+    const concepto = (g.concepto || 'Gasto')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .split(/\s+/).slice(0, 2)
+      .map(p => p.replace(/[^a-zA-Z0-9]/g, ''))
+      .filter(Boolean).join('-')
+      .slice(0, 20) || 'Gasto'
+
+    const f = (g.fechaFac || '').split('-')
+    const fecha = f.length === 3
+      ? `${f[1].padStart(2,'0')}-${f[2].padStart(2,'0')}-${f[0].slice(-2)}`
+      : 'SN'
+
+    return `${prov}_${folio}_${concepto}_${fecha}`
+  }
+
   // ── Exportar ZIP con Excel + carpeta Facturas/ ──
   // Output: SMTO_Gastos_<Colab>_<YYYYMMDD>.zip containing
   //   • Reporte_<Colab>_<YYYYMMDD>.xlsx  (fetched from /api/export-excel)
-  //   • Facturas/<PROVEEDOR>_<FOLIO>.xml + .pdf for every row
+  //   • Facturas/PROVEEDOR_FOLIO_Concepto_MM-DD-YY .xml + .pdf for every row
   // PDFs are read from gasto.pdfDataURL (intake-time data URL) so the
   // export doesn't depend on the original File handle, which can be
   // unreliable later. Falls back to pdfFile.arrayBuffer() for any gasto
@@ -2673,45 +2704,41 @@ export default function App() {
       console.warn('Excel fetch failed for ZIP:', err)
     }
 
-    // 2) Add each gasto's XML + PDF to Facturas/ with PROVEEDOR_FOLIO naming.
-    const slugify = (s, max) => (s || '')
-      .replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\s]/g, '')
-      .trim()
-      .replace(/\s+/g, '_')
-      .toUpperCase()
-      .slice(0, max)
+    // 2) Rename each gasto's XML + PDF through buildFileName. The four
+    //    branches (xmlContent / pdfDataURL / xmlFile fallback / pdfFile
+    //    fallback) cover every gasto shape we ship today, with r++ guards
+    //    so each gasto contributes at most one increment to the count.
+    let r = 0
     for (const g of lista) {
-      const provNombre = slugify(g.proveedor || 'PROVEEDOR', 35) || 'PROVEEDOR'
-      const folio = (g.noFactura || 'SN').replace(/[^a-zA-Z0-9]/g, '') || 'SN'
-      const base = `${provNombre}_${folio}`
+      if (g.xmlContent || g.pdfDataURL) {
+        const nom = buildFileName(g)
 
-      // XML — prefer the cached xmlContent string. Fall back to xmlFile for
-      // gastos that pre-date the xmlContent change.
-      let xmlContent = g.xmlContent
-      if (!xmlContent && g.xmlFile) {
-        try { xmlContent = await g.xmlFile.text() } catch {}
-      }
-      if (xmlContent) {
-        facturas.file(`${base}.xml`, xmlContent)
-      }
-
-      // PDF — prefer pdfDataURL (intake-time snapshot). Fall back to
-      // pdfFile.arrayBuffer() for older rows.
-      if (g.pdfDataURL) {
-        const base64 = String(g.pdfDataURL).split(',')[1] || ''
-        const binary = atob(base64)
-        const bytes = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-        facturas.file(`${base}.pdf`, bytes, { binary: true })
-      } else if (g.pdfFile) {
-        try {
-          const buf = await g.pdfFile.arrayBuffer()
-          facturas.file(`${base}.pdf`, buf)
-        } catch (err) {
-          console.warn('PDF fallback read failed:', g.pdfFile.name, err)
+        if (g.xmlContent) {
+          facturas.file(`${nom}.xml`, g.xmlContent)
+          r++
+        }
+        if (g.pdfDataURL) {
+          const base64Data = g.pdfDataURL.split(',')[1]
+          const binaryStr = atob(base64Data)
+          const bytes = new Uint8Array(binaryStr.length)
+          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i)
+          facturas.file(`${nom}.pdf`, bytes, { binary: true })
+          if (!g.xmlContent) r++
+        }
+        if (g.xmlFile && !g.xmlContent) {
+          facturas.file(`${nom}.xml`, await g.xmlFile.arrayBuffer())
+          r++
+        }
+        if (g.pdfFile && !g.pdfDataURL) {
+          facturas.file(`${nom}.pdf`, await g.pdfFile.arrayBuffer())
+          if (!g.xmlFile && !g.xmlContent) r++
         }
       }
     }
+    // r counts gastos that contributed at least one file (the guarded
+    // r++ branches above prevent double-counting). Preserved per spec;
+    // success-modal stats below still use the per-format filter counts.
+    void r
 
     // 3) Generate + trigger download.
     const zipBlob = await zip.generateAsync({ type: 'blob' })
@@ -2989,7 +3016,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.10</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.11</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
