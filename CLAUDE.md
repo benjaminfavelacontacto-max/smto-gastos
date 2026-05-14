@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v7.18
+Current version: v7.20
 
 ## Stack
 
@@ -54,7 +54,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 2. Bank reconciliation:
    - Clara MXN CSV: exact-only matching (smartAmountMatch ±$0.01)
    - Clara USA CSV: match by authorization code
-3. OCR for PDF/image tickets via Claude API — only fires for PDFs without a matching XML
+3. OCR for PDF/image tickets via Claude API — only fires for PDFs without a matching XML. Image-OCR receipts are wrapped into single-page PDFs at ZIP export so they ride along with the standard buildFileName naming.
 4. Multi-currency: USD, EUR, JPY, etc. with per-line exchange rate
 5. Propina (tip) split into its own sub-row in Excel
 6. Collaborator selector: 50 people across 4 categories (Admin, Socio, Servicio, Ventas)
@@ -96,7 +96,8 @@ The app is fully client-side except for two Python serverless functions (Excel e
 - XML alone → parsed locally, NO API call
 - XML + PDF → PDF linked to XML, NO OCR, NO cost
 - PDF without matching XML → user confirmation modal BEFORE calling OCR
-- Image (jpg/png/heic/webp) → compressed client-side to max 2000px width @ 85% quality, then OCR with user confirmation
+- Image (jpg/png/heic/webp/bmp/gif) → compressed client-side to max 2000px width @ 85% quality, then OCR with user confirmation
+- Image OCR receipts → original (compressed) image stored on the gasto as `imageDataURL`, then converted to a single-page PDF at ZIP-export time via jsPDF (loaded from CDN in `index.html`). The PDF filename follows the `buildFileName` convention.
 
 ## Deploy workflow
 
@@ -110,7 +111,7 @@ The app is fully client-side except for two Python serverless functions (Excel e
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v7.18
+- Current: v7.20
 
 ## Things to be careful about
 

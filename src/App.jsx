@@ -214,6 +214,35 @@ const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
   })
 }
 
+// Wrap an image data URL into a single-page PDF (data URL out). Used at
+// ZIP-export time so an OCR'd photo lands in Facturas/ with the same
+// PROVEEDOR_FOLIO_TIPO_FECHA naming as a CFDI-linked PDF. jsPDF is
+// loaded via CDN script tag in index.html — kept out of the bundle so
+// the main JS chunk stays lean.
+const imageToPDF = async (imageDataURL) => {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const orientation = img.width > img.height ? 'l' : 'p'
+        const { jsPDF } = window.jspdf || {}
+        if (!jsPDF) throw new Error('jsPDF not loaded')
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [img.width, img.height] })
+        pdf.addImage(imageDataURL, 'JPEG', 0, 0, img.width, img.height)
+        const pdfBlob = pdf.output('blob')
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = reject
+        reader.readAsDataURL(pdfBlob)
+      } catch (err) {
+        reject(err)
+      }
+    }
+    img.onerror = reject
+    img.src = imageDataURL
+  })
+}
+
 // Read a File/Blob as raw base64 (no data-URL prefix). Used to ship
 // images and PDFs to the /api/ocr-ticket endpoint.
 const fileToBase64 = (file) => new Promise((resolve, reject) => {
@@ -2051,6 +2080,12 @@ export default function App() {
         const gasto = await extractReceiptData(base64, mediaType, file.name)
         if (gasto) {
           gasto.esMonedaExtranjera = !!(gasto.moneda && gasto.moneda !== 'MXN')
+          // Stash the (compressed) image data URL so the ZIP export can
+          // wrap it into a single-page PDF named via buildFileName.
+          if (mediaType.startsWith('image/')) {
+            gasto.imageDataURL = `data:${mediaType};base64,${base64}`
+            gasto.originalFileName = file.name
+          }
           newGastos.push(gasto)
         }
       } catch (err) {
@@ -2172,6 +2207,12 @@ export default function App() {
                 gasto.pdfFile = file
                 gasto.pdfDataURL = `data:application/pdf;base64,${base64}`
                 gasto.tienePDF = true
+              }
+              // For OCR'd images, stash the data URL so exportar can wrap
+              // it into a single-page PDF named via buildFileName.
+              if (mediaType.startsWith('image/')) {
+                gasto.imageDataURL = `data:${mediaType};base64,${base64}`
+                gasto.originalFileName = file.name
               }
               gasto.isNew = true
               allNewGastos.push(gasto)
@@ -2827,6 +2868,19 @@ export default function App() {
     //    so each gasto contributes at most one increment to the count.
     let r = 0
     for (const g of lista) {
+      // Lazy: image-OCR gastos (no XML, no PDF, just a stashed image data
+      // URL) get wrapped into a single-page PDF on the fly so the regular
+      // pdfDataURL branch below handles them identically to a CFDI-linked
+      // PDF — same buildFileName naming, same write path. Mutation is OK
+      // since exportar is one-shot and no setLista follows; on a re-export
+      // the cached pdfDataURL is reused.
+      if (g.imageDataURL && !g.pdfDataURL) {
+        try {
+          g.pdfDataURL = await imageToPDF(g.imageDataURL)
+        } catch (err) {
+          console.warn('Could not convert image to PDF for', g.proveedor, err)
+        }
+      }
       if (g.xmlContent || g.pdfDataURL) {
         const nom = buildFileName(g)
 
@@ -3133,7 +3187,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.19</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.20</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
