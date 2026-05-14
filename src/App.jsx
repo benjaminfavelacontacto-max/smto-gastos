@@ -2077,7 +2077,11 @@ export default function App() {
 
     const xmlFiles   = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
     const pdfFiles   = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
-    const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.name.toLowerCase()))
+    // Extended image set: phones drop .heic by default on iOS and Android
+    // exports vary across .webp/.bmp/.gif. compressImage re-encodes them
+    // to JPEG via canvas before OCR, so all of these land at the endpoint
+    // as image/jpeg regardless of source format.
+    const imageFiles = files.filter(f => /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(f.name.toLowerCase()))
 
     const allNewGastos = []
 
@@ -2149,11 +2153,15 @@ export default function App() {
         setOcrLoading(true)
         for (const file of ocrFiles) {
           try {
-            const base64 = await fileToBase64(file)
+            // compressImage re-encodes images to a ≤2000px-wide JPEG so
+            // phone shots don't blow Vercel's 4.5 MB body cap; PDFs pass
+            // through untouched. mediaType derives from the compressed
+            // File's type when present, else from the original extension.
+            const fileForOCR = await compressImage(file)
+            const base64 = await fileToBase64(fileForOCR)
             const ext = file.name.split('.').pop().toLowerCase()
-            const mediaType = ext === 'pdf'
-              ? 'application/pdf'
-              : `image/${ext === 'jpg' ? 'jpeg' : ext}`
+            const mediaType = fileForOCR.type
+              || (ext === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`)
 
             const gasto = await extractReceiptData(base64, mediaType, file.name)
             if (gasto) {
@@ -3125,7 +3133,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.18</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.19</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
