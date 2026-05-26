@@ -2130,30 +2130,32 @@ tr.row-new {
   .colab-chip-avatar { width: 20px; height: 20px; font-size: 10px; }
   .colab-chip-cat { font-size: 10px; padding-left: 6px; }
 
-  /* ── Action bar — dos filas con scroll horizontal y fade ── */
+  /* ── Action bar — dos filas con scroll horizontal nativo ── */
   .action-bar {
-    padding: 8px 12px;
+    padding: 8px 0;
     flex-direction: column;
     gap: 6px;
     align-items: stretch;
+    overflow: visible;
   }
   .action-group {
-    position: relative;
     display: flex;
     gap: 6px;
-    overflow-x: auto;
+    /* scroll horizontal nativo — critical for iOS Safari */
+    overflow-x: scroll;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
+    /* padding lateral: el derecho extra deja ver el borde del siguiente botón */
+    padding: 2px 48px 4px 14px;
     scrollbar-width: none;
-    /* degradado derecho para indicar que hay más botones */
-    -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
   }
   .action-group::-webkit-scrollbar { display: none; }
 
   .btn-premium {
     height: 34px;
-    padding: 0 11px;
+    padding: 0 12px;
     font-size: 12px;
     gap: 5px;
     flex-shrink: 0;
