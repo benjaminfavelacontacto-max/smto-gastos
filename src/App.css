@@ -2105,7 +2105,26 @@ tr.row-new {
 
 /* ── Phone (≤ 767px) ──────────────────────────────────── */
 @media (max-width: 767px) {
-  .app { min-width: unset; }
+  /* Cambiar de "viewport fijo con scroll interno" a "página que fluye" */
+  html, body {
+    height: auto;
+    overflow: auto;
+    overflow-x: hidden;
+  }
+  .app {
+    min-width: unset;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  /* La tabla ya no ocupa el espacio restante — fluye con el contenido */
+  .table-wrap {
+    flex: unset;
+    height: auto;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
 
   /* ── Header compacto ── */
   .header {
