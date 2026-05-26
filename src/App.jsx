@@ -88,7 +88,7 @@ const TIPOS_ESPECIALES = [
   'Uniforme',
 ]
 
-const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves']
+const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda Navarro']
 
 const getTiposForColaborador = (colaborador) => {
   if (!colaborador) return TIPOS_NORMALES
@@ -148,7 +148,7 @@ const COLABORADORES = [
   { categoria: 'Ventas', nombre: 'Hector Duarte' },
   { categoria: 'Ventas', nombre: 'Juan Sotomayor' },
   { categoria: 'Ventas', nombre: 'Marco Alvarado' },
-  { categoria: 'Ventas', nombre: 'Miranda Navarro' },
+  { categoria: 'Admin', nombre: 'Miranda Navarro' },
   { categoria: 'Ventas', nombre: 'Marco Sanchez' },
 ]
 
@@ -3263,7 +3263,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.22</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.23</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
