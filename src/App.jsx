@@ -379,8 +379,16 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // Concepto — first line of the first Concepto's Descripcion, capped at 80
   // chars. Replaces the old keyword-based categorizer (Vuelo/Hotel/etc.) so
   // each row shows the actual product description from the XML.
-  const descripcionRaw   = conceptoEl ? (ga(conceptoEl, 'Descripcion', 'descripcion') || '') : ''
-  const claveProdServ    = conceptoEl ? (ga(conceptoEl, 'ClaveProdServ', 'claveprodserv') || '') : ''
+  let descripcionRaw = conceptoEl ? (ga(conceptoEl, 'Descripcion', 'descripcion') || '') : ''
+  let claveProdServ  = conceptoEl ? (ga(conceptoEl, 'ClaveProdServ', 'claveprodserv') || '') : ''
+  // Fallback por regex: cuando la Descripcion contiene comillas literales (ej. 15.6" FHD...)
+  // el atributo XML queda truncado en el DOM pero el texto crudo sí lo tiene.
+  if (!descripcionRaw) {
+    const dm = xmlText.match(/[Dd]escripcion="([^"]+)"/); if (dm) descripcionRaw = dm[1]
+  }
+  if (!claveProdServ) {
+    const cm = xmlText.match(/ClaveProdServ="([^"]+)"/i); if (cm) claveProdServ = cm[1]
+  }
   // Title-case so ALL-CAPS or all-lowercase descriptions render naturally.
   const toTitleCase = str => str.toLowerCase().replace(/(?:^|\s|\/|-)\S/g, c => c.toUpperCase())
   const descripcionFirstLine = descripcionRaw.split(/[\n\r]/)[0].trim()
@@ -3265,7 +3273,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.30</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.31</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
