@@ -2105,22 +2105,32 @@ tr.row-new {
 
 /* ── Phone (≤ 767px) ──────────────────────────────────── */
 @media (max-width: 767px) {
-  /* Keep full-height fixed layout — table scrolls inside */
   .app { min-width: unset; }
 
-  /* ── Header ── */
+  /* ── Header compacto ── */
   .header {
-    padding: 12px 14px;
-    gap: 8px;
-    flex-wrap: wrap;
+    padding: 10px 14px;
+    gap: 10px;
+    align-items: flex-start;
   }
-  .header-logo img,
-  .header-logo svg { width: 28px; height: 28px; }
-  .header-title { font-size: 16px; letter-spacing: -0.01em; }
-  .version-badge { font-size: 9px; padding: 1px 5px; margin-left: 6px; }
-  .header-sub { font-size: 11px; gap: 6px; margin-top: 3px; }
+  /* Override inline style on the logo img */
+  .header-logo img {
+    height: 32px !important;
+    width: auto !important;
+  }
+  .header-title {
+    font-size: 15px;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+  .version-badge { font-size: 9px; padding: 1px 5px; margin-left: 5px; }
+  /* Folder/count line — ocultar en phone, la info no es crítica */
+  .header-sub { display: none; }
+  .colab-chip { margin-top: 4px; font-size: 12px; padding: 4px 10px 4px 5px; }
+  .colab-chip-avatar { width: 20px; height: 20px; font-size: 10px; }
+  .colab-chip-cat { font-size: 10px; padding-left: 6px; }
 
-  /* ── Action bar — each group scrolls horizontally ── */
+  /* ── Action bar — dos filas con scroll horizontal y fade ── */
   .action-bar {
     padding: 8px 12px;
     flex-direction: column;
@@ -2128,12 +2138,16 @@ tr.row-new {
     align-items: stretch;
   }
   .action-group {
+    position: relative;
     display: flex;
-    gap: 7px;
+    gap: 6px;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     padding-bottom: 2px;
     scrollbar-width: none;
+    /* degradado derecho para indicar que hay más botones */
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
   }
   .action-group::-webkit-scrollbar { display: none; }
 
@@ -2143,63 +2157,55 @@ tr.row-new {
     font-size: 12px;
     gap: 5px;
     flex-shrink: 0;
+    white-space: nowrap;
   }
   .validacion-counter {
     padding: 5px 10px;
     font-size: 12px;
     flex-shrink: 0;
+    white-space: nowrap;
   }
 
-  /* ── Metrics — 2-col grid ── */
+  /* ── Metrics — grid 2 cols, 5° card ocupa fila completa ── */
   .metrics-bar {
     padding: 10px 12px;
     gap: 8px;
     display: grid;
     grid-template-columns: 1fr 1fr;
-    flex-wrap: unset;
   }
   .metric-card {
     flex: unset;
     min-width: unset;
-    padding: 12px 13px;
+    padding: 12px 14px;
     border-radius: 12px;
   }
+  .metric-card:last-child { grid-column: span 2; }
   .metric-label { font-size: 9.5px; }
   .metric-value { font-size: 17px; margin-top: 5px; }
 
-  /* ── Table wrap ── */
-  .table-wrap {
-    margin: 0 10px 12px;
-    border-radius: 12px;
-  }
+  /* ── Table ── */
+  .table-wrap { margin: 0 10px 12px; border-radius: 12px; }
 
-  /* ── Collaborator modal ── */
-  .colab-modal {
-    width: 95vw;
-    max-height: 88vh;
-  }
-  .colab-modal-header { padding: 22px 20px 14px; }
-
-  /* ── Premium modal ── */
+  /* ── Modals ── */
+  .colab-modal { width: 95vw; max-height: 88vh; }
+  .colab-modal-header { padding: 20px 18px 14px; }
   .premium-overlay { padding: 14px; }
-  .premium-modal   { padding: 28px 18px 22px; border-radius: 16px; }
-  .premium-title   { font-size: 18px; }
-
-  /* ── Conciliation modal ── */
+  .premium-modal { padding: 28px 18px 22px; border-radius: 16px; }
+  .premium-title { font-size: 18px; }
   .cm-overlay { padding: 12px; }
-  .cm-modal   { padding: 24px 18px 20px; border-radius: 18px; }
+  .cm-modal { padding: 24px 18px 20px; border-radius: 18px; }
 
-  /* ── Conciliation full-screen results ── */
+  /* ── Conciliation full-screen ── */
   .cm-fs-overlay { padding: 0; }
-  .cm-fs-shell   { border-radius: 0; max-height: 100dvh; }
+  .cm-fs-shell { border-radius: 0; max-height: 100dvh; }
   .cm-fs-summary { padding: 16px 14px 12px; }
   .cm-fs-summary-toolbar { width: 100%; }
-  .cm-fs-search  { min-width: 0; flex: 1; }
-  .cm-fs-chips   { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
-  .cm-fs-chip    { padding: 10px 12px; }
+  .cm-fs-search { min-width: 0; flex: 1; }
+  .cm-fs-chips { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
+  .cm-fs-chip { padding: 10px 12px; }
   .cm-fs-chip-value { font-size: 17px; }
-  .cm-fs-body    { padding: 12px 12px 20px; }
-  .cm-fs-title   { font-size: 18px; }
+  .cm-fs-body { padding: 12px 12px 20px; }
+  .cm-fs-title { font-size: 18px; }
   .cm-fs-match-head { grid-template-columns: 1fr; gap: 6px; }
   .cm-fs-match-right { justify-content: flex-start; }
 
