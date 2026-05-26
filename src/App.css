@@ -2105,25 +2105,27 @@ tr.row-new {
 
 /* ── Phone (≤ 767px) ──────────────────────────────────── */
 @media (max-width: 767px) {
-  /* Cambiar de "viewport fijo con scroll interno" a "página que fluye" */
+
+  /* ── Página fluida — scroll vertical nativo ── */
   html, body {
     height: auto;
-    overflow: auto;
     overflow-x: hidden;
+    overflow-y: auto;
   }
   .app {
     min-width: unset;
     height: auto;
     min-height: 100dvh;
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: visible;
   }
-  /* La tabla ya no ocupa el espacio restante — fluye con el contenido */
   .table-wrap {
     flex: unset;
     height: auto;
     max-height: none;
     overflow-x: auto;
     overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* ── Header compacto ── */
@@ -2132,62 +2134,59 @@ tr.row-new {
     gap: 10px;
     align-items: flex-start;
   }
-  /* Override inline style on the logo img */
   .header-logo img {
     height: 32px !important;
     width: auto !important;
   }
-  .header-title {
-    font-size: 15px;
-    letter-spacing: -0.01em;
-    line-height: 1.3;
-  }
+  .header-title { font-size: 15px; letter-spacing: -0.01em; line-height: 1.3; }
   .version-badge { font-size: 9px; padding: 1px 5px; margin-left: 5px; }
-  /* Folder/count line — ocultar en phone, la info no es crítica */
   .header-sub { display: none; }
   .colab-chip { margin-top: 4px; font-size: 12px; padding: 4px 10px 4px 5px; }
   .colab-chip-avatar { width: 20px; height: 20px; font-size: 10px; }
   .colab-chip-cat { font-size: 10px; padding-left: 6px; }
 
-  /* ── Action bar — dos filas con scroll horizontal nativo ── */
+  /* ── Action bar: dos filas, cada una scrollable horizontalmente ──
+     Clave iOS Safari: width explícito + box-sizing + sin touch-action override.
+     El browser detecta el swipe horizontal automáticamente cuando el elemento
+     tiene overflow-x: scroll y un ancho definido menor que su contenido.      */
   .action-bar {
-    padding: 8px 0;
+    padding: 6px 0 8px;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
     align-items: stretch;
-    overflow: visible;
+    overflow: hidden;          /* clip los bordes de los grupos */
   }
   .action-group {
+    width: 100%;               /* ancho explícito = condición necesaria iOS */
+    box-sizing: border-box;
     display: flex;
+    flex-wrap: nowrap;
     gap: 6px;
-    /* scroll horizontal nativo — critical for iOS Safari */
     overflow-x: scroll;
-    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
-    touch-action: pan-x;
     overscroll-behavior-x: contain;
-    /* padding lateral: el derecho extra deja ver el borde del siguiente botón */
-    padding: 2px 48px 4px 14px;
+    /* padding-right largo = deja asomar el primer botón oculto como hint */
+    padding: 2px 52px 5px 14px;
     scrollbar-width: none;
   }
   .action-group::-webkit-scrollbar { display: none; }
 
   .btn-premium {
+    flex-shrink: 0;
+    white-space: nowrap;
     height: 34px;
     padding: 0 12px;
     font-size: 12px;
     gap: 5px;
-    flex-shrink: 0;
-    white-space: nowrap;
   }
   .validacion-counter {
-    padding: 5px 10px;
-    font-size: 12px;
     flex-shrink: 0;
     white-space: nowrap;
+    padding: 5px 10px;
+    font-size: 12px;
   }
 
-  /* ── Metrics — grid 2 cols, 5° card ocupa fila completa ── */
+  /* ── Metrics — grid 2 cols, 5° card fila completa ── */
   .metrics-bar {
     padding: 10px 12px;
     gap: 8px;
@@ -2205,7 +2204,7 @@ tr.row-new {
   .metric-value { font-size: 17px; margin-top: 5px; }
 
   /* ── Table ── */
-  .table-wrap { margin: 0 10px 12px; border-radius: 12px; }
+  .table-wrap { margin: 0 10px 16px; border-radius: 12px; }
 
   /* ── Modals ── */
   .colab-modal { width: 95vw; max-height: 88vh; }
