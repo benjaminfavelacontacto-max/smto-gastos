@@ -1,9 +1,26 @@
 // src/tipoRules.js
-// Reglas predictivas de Tipo de gasto — v3
+// Reglas predictivas de Tipo de gasto — v4
 // 18,846 transacciones históricas SMTo + razones sociales fiscales mexicanas + conceptos CFDI
 // Keywords largos primero (greedy specificity). Sin keywords ≤3 chars ambiguos.
 
 export const TIPO_RULES = [
+  // ── Equipo de cómputo / PC ──────────────────────────────────────────────
+  ['EQUIPO DE COMPUTO',    'PC (Equipo)'],
+  ['EQUIPO DE CÓMPUTO',   'PC (Equipo)'],
+  ['EQUIPO DE ESCRITORIO','PC (Equipo)'],
+  ['COMPUTADORA PORTATIL','PC (Equipo)'],
+  ['COMPUTADORA PORTÁTIL','PC (Equipo)'],
+  ['COMPUTADORA PERSONAL', 'PC (Equipo)'],
+  ['COMPUTADORA',          'PC (Equipo)'],
+  ['ALIENWARE',            'PC (Equipo)'],
+  ['THINKPAD',             'PC (Equipo)'],
+  ['NOTEBOOK',             'PC (Equipo)'],
+  ['SERVIDOR',             'PC (Equipo)'],
+  ['IMPRESORA',            'PC (Equipo)'],
+  ['MACBOOK',              'PC (Equipo)'],
+  ['LAPTOP',               'PC (Equipo)'],
+  ['TABLET',               'PC (Equipo)'],
+  // ── Fin equipo de cómputo ───────────────────────────────────────────────
   ['COMERCIALIZADORA DE COMBUSTIBLES', 'Gasolina'],
   ['COMISION FEDERAL DE ELECTRICIDAD', 'Renta Oficina'],
   ['OPERADORA DE ESTACIONAMIENTOS', 'Estacionamiento'],
@@ -323,12 +340,17 @@ const VENTAS_VARIANT = {
   'Taxi': 'Gastos Rep (Representación)',
 }
 
+// Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.
+// 4321xxxx = Hardware de cómputo, 4322xxxx = Periféricos, 4323xxxx = Redes.
+const SAT_PC_PREFIXES = ['4321', '4322', '4323']
+
 /**
- * @param {string} proveedor    Nombre del emisor del CFDI
- * @param {string} descripcion  Primera línea del concepto del CFDI
- * @param {string} categoria    'Admin'|'Servicio'|'Ventas'|'Socio'
+ * @param {string} proveedor      Nombre del emisor del CFDI
+ * @param {string} descripcion    Primera línea del concepto del CFDI
+ * @param {string} categoria      'Admin'|'Servicio'|'Ventas'|'Socio'
+ * @param {string} claveProdServ  Código SAT del producto (opcional)
  */
-export function autoDetectTipo(proveedor, descripcion, categoria) {
+export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ = '') {
   const texto = `${proveedor || ''} ${descripcion || ''}`.toUpperCase()
   const isVentas = categoria === 'Ventas' || categoria === 'Socio'
 
@@ -346,7 +368,14 @@ export function autoDetectTipo(proveedor, descripcion, categoria) {
     }
   }
 
-  // 2. Si ninguna regla matcheó y el concepto es exactamente "TARIFA":
+  // 2. Código SAT — si el ClaveProdServ pertenece a hardware/cómputo, es PC (Equipo).
+  //    Aplica cuando la descripción no tiene keywords reconocibles (ej. genérico "Equipo de trabajo").
+  const cp = (claveProdServ || '').trim()
+  if (cp && SAT_PC_PREFIXES.some(prefix => cp.startsWith(prefix))) {
+    return 'PC (Equipo)'
+  }
+
+  // 3. Si ninguna regla matcheó y el concepto es exactamente "TARIFA":
   //    proveedor sin palabras corporativas = persona física (taxista/chofer) → Taxi
   const CORPORATE_WORDS = [
     'S.A', 'S.R.L', 'S.A.S', 'GRUPO ', 'EMPRESA', 'COMPAÑIA', 'COMPANIA',
@@ -361,6 +390,6 @@ export function autoDetectTipo(proveedor, descripcion, categoria) {
     return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
   }
 
-  // 3. Fallback
+  // 4. Fallback
   return isVentas ? 'Gastos Rep (Representación)' : 'Consumo Viáticos'
 }
