@@ -2071,3 +2071,144 @@ tr.row-new {
   border-color: rgba(168, 85, 247, 0.5);
   transform: translateY(-1px);
 }
+
+/* ═══════════════════════════════════════════
+   RESPONSIVE — tablet & mobile
+   Desktop styles above are NOT modified.
+   Breakpoints: ≤1024px (iPad/tablet), ≤767px (phone).
+═══════════════════════════════════════════ */
+
+/* ── iPad / tablet (≤ 1024px) ─────────────────────────── */
+@media (max-width: 1024px) {
+  .app { min-width: unset; }
+
+  .header { padding: 14px 20px; gap: 12px; }
+  .header-title { font-size: 19px; }
+
+  .action-bar { padding: 10px 20px; flex-wrap: wrap; gap: 8px; }
+
+  .metrics-bar { padding: 14px 20px; gap: 12px; flex-wrap: wrap; }
+  .metric-card {
+    flex: 1 1 calc(33.333% - 8px);
+    min-width: 130px;
+    padding: 14px 16px;
+  }
+  .metric-value { font-size: 20px; }
+
+  .table-wrap { margin: 0 16px 16px; }
+
+  .colab-modal { width: min(420px, 92vw); }
+
+  .cm-fs-overlay { padding: 16px; }
+  .cm-fs-chips   { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Phone (≤ 767px) ──────────────────────────────────── */
+@media (max-width: 767px) {
+  /* Keep full-height fixed layout — table scrolls inside */
+  .app { min-width: unset; }
+
+  /* ── Header ── */
+  .header {
+    padding: 12px 14px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .header-logo img,
+  .header-logo svg { width: 28px; height: 28px; }
+  .header-title { font-size: 16px; letter-spacing: -0.01em; }
+  .version-badge { font-size: 9px; padding: 1px 5px; margin-left: 6px; }
+  .header-sub { font-size: 11px; gap: 6px; margin-top: 3px; }
+
+  /* ── Action bar — each group scrolls horizontally ── */
+  .action-bar {
+    padding: 8px 12px;
+    flex-direction: column;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .action-group {
+    display: flex;
+    gap: 7px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .action-group::-webkit-scrollbar { display: none; }
+
+  .btn-premium {
+    height: 34px;
+    padding: 0 11px;
+    font-size: 12px;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .validacion-counter {
+    padding: 5px 10px;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  /* ── Metrics — 2-col grid ── */
+  .metrics-bar {
+    padding: 10px 12px;
+    gap: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex-wrap: unset;
+  }
+  .metric-card {
+    flex: unset;
+    min-width: unset;
+    padding: 12px 13px;
+    border-radius: 12px;
+  }
+  .metric-label { font-size: 9.5px; }
+  .metric-value { font-size: 17px; margin-top: 5px; }
+
+  /* ── Table wrap ── */
+  .table-wrap {
+    margin: 0 10px 12px;
+    border-radius: 12px;
+  }
+
+  /* ── Collaborator modal ── */
+  .colab-modal {
+    width: 95vw;
+    max-height: 88vh;
+  }
+  .colab-modal-header { padding: 22px 20px 14px; }
+
+  /* ── Premium modal ── */
+  .premium-overlay { padding: 14px; }
+  .premium-modal   { padding: 28px 18px 22px; border-radius: 16px; }
+  .premium-title   { font-size: 18px; }
+
+  /* ── Conciliation modal ── */
+  .cm-overlay { padding: 12px; }
+  .cm-modal   { padding: 24px 18px 20px; border-radius: 18px; }
+
+  /* ── Conciliation full-screen results ── */
+  .cm-fs-overlay { padding: 0; }
+  .cm-fs-shell   { border-radius: 0; max-height: 100dvh; }
+  .cm-fs-summary { padding: 16px 14px 12px; }
+  .cm-fs-summary-toolbar { width: 100%; }
+  .cm-fs-search  { min-width: 0; flex: 1; }
+  .cm-fs-chips   { grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
+  .cm-fs-chip    { padding: 10px 12px; }
+  .cm-fs-chip-value { font-size: 17px; }
+  .cm-fs-body    { padding: 12px 12px 20px; }
+  .cm-fs-title   { font-size: 18px; }
+  .cm-fs-match-head { grid-template-columns: 1fr; gap: 6px; }
+  .cm-fs-match-right { justify-content: flex-start; }
+
+  /* ── Toast ── */
+  .smto-toast {
+    right: 12px;
+    bottom: 16px;
+    left: 12px;
+    max-width: unset;
+    text-align: center;
+  }
+}
