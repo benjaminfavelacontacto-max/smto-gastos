@@ -89,8 +89,8 @@ def compute_date_range(gastos):
         return '', ''
     dates.sort()  # ascending — smallest date first
     def fmt(d):
-        # YYYY-MM-DD → MM-DD-YY
-        return f'{d[5:7]}-{d[8:10]}-{d[2:4]}'
+        # YYYY-MM-DD → DD/MM/AAAA
+        return f'{d[8:10]}/{d[5:7]}/{d[0:4]}'
     return fmt(dates[0]), fmt(dates[-1])
 
 def find_logo():
@@ -106,13 +106,18 @@ def find_logo():
     return None
 
 def format_date(date_str):
+    """Formato de fecha SOLO para el Excel exportado: DD/MM/AAAA.
+    Acepta YYYY-MM-DD (interno) o DD/MM/YYYY (ya formateado)."""
     if not date_str: return ''
     if '-' in date_str and len(date_str) == 10:
         parts = date_str.split('-')
-        return f'{parts[1]}-{parts[2]}-{parts[0][2:]}'
+        # YYYY-MM-DD → DD/MM/YYYY
+        return f'{parts[2]}/{parts[1]}/{parts[0]}'
     if '/' in date_str:
         parts = date_str.split('/')
-        return f'{parts[1]}-{parts[0]}-{parts[2][2:] if len(parts[2])>2 else parts[2]}'
+        # Asume DD/MM/YYYY ya correcto; sólo normaliza el año a 4 dígitos.
+        yr = parts[2] if len(parts[2]) == 4 else ('20' + parts[2])
+        return f'{parts[0]}/{parts[1]}/{yr}'
     return date_str
 
 FORMA_PAGO_MAP = {
