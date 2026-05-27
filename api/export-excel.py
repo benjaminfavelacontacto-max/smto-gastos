@@ -8,6 +8,7 @@ try:
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
     from openpyxl.utils import get_column_letter
     from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.workbook.protection import WorkbookProtection
     from PIL import Image as PILImage
 except Exception:
     IMPORT_ERROR = traceback.format_exc()
@@ -154,10 +155,22 @@ def fill_row_bg(ws, row, start_col, end_col, color):
 
 def build_workbook(gastos, colaborador=''):
     wb = Workbook()
+    # Protección a nivel libro EXPLÍCITAMENTE deshabilitada. Sin esto, algunos
+    # usuarios de Windows ven el diálogo "es un archivo de solo lectura" al
+    # intentar guardar — Excel interpreta cualquier elemento <fileSharing> o
+    # WorkbookProtection con flags ambiguos como "read-only recommended".
+    wb.security = WorkbookProtection(
+        lockStructure=False,
+        lockWindows=False,
+        lockRevision=False,
+        workbookPassword=None,
+        revisionsPassword=None,
+    )
     ws = wb.active
     ws.title = 'Reporte SMTO'
     ws.sheet_view.showGridLines = False
     ws.protection.sheet = False  # make the sheet fully editable after export
+    ws.protection.enabled = False  # belt-and-suspenders: also drop the element
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates) so
     # each column gets the width that fits its content, regardless of order.
