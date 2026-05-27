@@ -456,6 +456,51 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   let   retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
   let   retenciones   = retencionISR + retencionIVA
 
+  // Fallback por regex sobre el XML crudo: cuando la Descripcion contiene comillas
+  // literales (ej. 15.6"), el DOMParser trunca el documento y el root <cfdi:Impuestos>
+  // nunca llega a construirse → iva/retenciones=0 aunque el XML SÍ los declara.
+  // Si rootImp no existe O iva quedó en 0 con totalCFDI>subtotal, recurrimos a regex.
+  const hasRootImp = !!rootImp
+  const totalCFDIQuick = parseFloat(ga(comp, 'Total', 'total') || '0') || 0
+  const subTotalQuick  = parseFloat(ga(comp, 'SubTotal', 'subtotal') || '0') || 0
+  if ((!hasRootImp || iva === 0) && totalCFDIQuick > subTotalQuick) {
+    const mTras = xmlText.match(/TotalImpuestosTrasladados="([0-9.]+)"/i)
+    if (mTras) {
+      const v = parseFloat(mTras[1]) || 0
+      if (v > 0) iva = v
+    }
+    const mRet = xmlText.match(/TotalImpuestosRetenidos="([0-9.]+)"/i)
+    if (mRet && retenciones === 0) {
+      const v = parseFloat(mRet[1]) || 0
+      if (v > 0) {
+        // Buscar el desglose por tipo (001=ISR, 002=IVA) en los hijos <Retencion>.
+        // Capturamos SOLO el bloque <cfdi:Retenciones>...</cfdi:Retenciones> del root.
+        const retBlock = xmlText.match(/<\w*:?Retenciones>([\s\S]*?)<\/\w*:?Retenciones>/i)
+        if (retBlock) {
+          let isrSum = 0, ivaSum = 0
+          const reEl = /<\w*:?Retencion\b[^>]*>/gi
+          let m
+          while ((m = reEl.exec(retBlock[1])) !== null) {
+            const tag = m[0]
+            const tipo = (tag.match(/Impuesto="([0-9]+)"/i) || [])[1] || ''
+            const imp  = parseFloat((tag.match(/Importe="([0-9.]+)"/i) || [])[1] || '0') || 0
+            if (tipo === '001') isrSum += imp
+            else if (tipo === '002') ivaSum += imp
+          }
+          if (isrSum > 0 || ivaSum > 0) {
+            retencionISR = isrSum
+            retencionIVA = ivaSum
+            retenciones  = isrSum + ivaSum
+          } else {
+            retenciones = v
+          }
+        } else {
+          retenciones = v
+        }
+      }
+    }
+  }
+
   // Per-RFC override: some providers' <Retencion Impuesto="001"> is actually
   // a trasladado ISR (the invoice line-item tax), not a withholding.
   if (RFC_ISR_COMO_TRASLADO.includes(rfc)) {
@@ -3273,7 +3318,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.32</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.33</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
