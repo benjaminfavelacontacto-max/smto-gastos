@@ -5,7 +5,7 @@ from datetime import datetime
 IMPORT_ERROR = None
 try:
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
     from openpyxl.utils import get_column_letter
     from openpyxl.drawing.image import Image as XLImage
     from PIL import Image as PILImage
@@ -152,6 +152,7 @@ def build_workbook(gastos, colaborador=''):
     ws = wb.active
     ws.title = 'Reporte SMTO'
     ws.sheet_view.showGridLines = False
+    ws.protection.sheet = False  # make the sheet fully editable after export
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates) so
     # each column gets the width that fits its content, regardless of order.
@@ -590,6 +591,13 @@ def build_workbook(gastos, colaborador=''):
             ws.add_image(img)
         except Exception as e:
             print(f'Logo: {e}')
+
+    # Explicitly unlock every cell so openpyxl's default locked=True
+    # doesn't prevent editing even when sheet protection is off.
+    _unlocked = Protection(locked=False)
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.protection = _unlocked
 
     return wb
 
