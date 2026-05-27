@@ -379,7 +379,11 @@ def build_workbook(gastos, colaborador=''):
         if propina_mxn > 0 or propina_ext > 0:
             # Net (without tip) — main row carries this, the propina sub-row
             # below it carries the tip itself, SUM yields the total charged.
-            importe   = max(0, round(total_mxn - propina_mxn, 2))
+            # IMPORTANTE: la columna L del padre es la fórmula =I+J-K, así que
+            # `importe` debe ser totalCFDI − propina − IVA + retenciones para
+            # que L_parent + L_propina = totalCFDI (sin doble-contar impuestos)
+            # y SUM(I) = SubTotal real (sin IVA).
+            importe   = max(0, round(total_mxn - propina_mxn - iva + ret, 2))
             monto_usd = max(0, round(monto_ext - propina_ext, 2))
         else:
             importe   = importe_raw
