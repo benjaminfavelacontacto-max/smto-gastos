@@ -3059,13 +3059,48 @@ export default function App() {
 
     const facturasBlob = await facturasZip.generateAsync({ type: 'blob' })
 
-    // 3) Descargas — primero el Excel, luego (con pequeño retardo para que
-    //    algunos navegadores no bloqueen el segundo) el ZIP de facturas.
-    const xlsxName = `Reporte_${colabSlug}_${today}.xlsx`
-    const zipName  = `Facturas_${colabSlug}_${today}.zip`
-    if (excelBlob) downloadBlob(excelBlob, xlsxName)
-    await new Promise(r => setTimeout(r, 600))
-    downloadBlob(facturasBlob, zipName)
+    // 3) Entrega.
+    //    Preferencia: File System Access API → crea una CARPETA REAL en el
+    //    disco con el Excel suelto + el ZIP de facturas adentro (sin
+    //    necesidad de descomprimir nada).
+    //    Fallback (Firefox/Safari sin la API): dos descargas sueltas.
+    const folderName = `SMTO_Gastos_${colabSlug}_${today}`
+    const xlsxName   = `Reporte_${colabSlug}_${today}.xlsx`
+    const zipName    = `Facturas_${colabSlug}_${today}.zip`
+
+    let usedFolderPicker = false
+    if (typeof window.showDirectoryPicker === 'function') {
+      try {
+        // El usuario elige el directorio padre (Descargas, Escritorio, etc.).
+        const parentDir = await window.showDirectoryPicker({ mode: 'readwrite' })
+        // Creamos la carpeta normal adentro.
+        const targetDir = await parentDir.getDirectoryHandle(folderName, { create: true })
+
+        if (excelBlob) {
+          const xlsxHandle = await targetDir.getFileHandle(xlsxName, { create: true })
+          const xlsxStream = await xlsxHandle.createWritable()
+          await xlsxStream.write(excelBlob)
+          await xlsxStream.close()
+        }
+        const zipHandle = await targetDir.getFileHandle(zipName, { create: true })
+        const zipStream = await zipHandle.createWritable()
+        await zipStream.write(facturasBlob)
+        await zipStream.close()
+
+        usedFolderPicker = true
+      } catch (err) {
+        // Si el usuario canceló el picker, no descargamos nada — silencioso.
+        if (err && err.name === 'AbortError') return
+        console.warn('Folder picker falló, usando descargas sueltas:', err)
+      }
+    }
+
+    if (!usedFolderPicker) {
+      // Navegador sin File System Access API (Firefox/Safari) → dos descargas.
+      if (excelBlob) downloadBlob(excelBlob, xlsxName)
+      await new Promise(r => setTimeout(r, 600))
+      downloadBlob(facturasBlob, zipName)
+    }
 
     // 4) Modal de éxito.
     const xmlCount = lista.filter(g => g.xmlContent || g.xmlFile).length
@@ -3074,7 +3109,9 @@ export default function App() {
     showModal({
       type: 'success',
       title: '¡Descarga lista!',
-      subtitle: 'Se descargaron el Excel y un ZIP aparte con las facturas renombradas.',
+      subtitle: usedFolderPicker
+        ? `Carpeta "${folderName}" creada con el Excel y el ZIP de facturas adentro.`
+        : 'Se descargaron el Excel y un ZIP aparte con las facturas renombradas.',
       stats: [
         { value: xmlCount, label: 'XMLs',   color: '#59D39B' },
         { value: pdfCount, label: 'PDFs',   color: '#60a5fa' },
@@ -3359,7 +3396,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.39</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.40</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
