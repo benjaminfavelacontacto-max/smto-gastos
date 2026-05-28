@@ -2291,6 +2291,35 @@ export default function App() {
         if (g) nueva.push(g)
       } catch {}
     }
+    // Segunda pasada de matching XML↔PDF: parseCFDI es estricto (nombre
+    // exacto, UUID, o substring normalizado). Aquí cubrimos PDFs renombrados
+    // por el usuario que contienen el folio o RFC del XML en su nombre
+    // ("Proveedor 1189 Gastos.pdf" ↔ XML cuyo folio es 1189). Misma lógica
+    // que handleDrop para que ambos caminos sean consistentes.
+    const linkedPdfNamesAfterParse = new Set(
+      nueva.filter(g => g.pdfFile).map(g => g.pdfFile.name)
+    )
+    for (const pdf of pdfs) {
+      if (linkedPdfNamesAfterParse.has(pdf.name)) continue
+      const pdfBase = pdf.name.replace(/\.pdf$/i, '').toLowerCase()
+      const match = nueva.find(g => {
+        const xmlBase = (g.xmlFile?.name || '').replace(/\.xml$/i, '').toLowerCase()
+        const folio   = (g.noFactura || '').toLowerCase()
+        const rfc     = (g.rfc || '').toLowerCase()
+        return (
+          pdfBase === xmlBase ||
+          (folio && folio.length >= 3 && pdfBase.includes(folio)) ||
+          (rfc   && rfc.length   >= 4 && pdfBase.includes(rfc))   ||
+          (xmlBase && xmlBase.includes(pdfBase))
+        )
+      })
+      if (match && !match.pdfFile) {
+        match.pdfFile = pdf
+        match.tienePDF = true
+        linkedPdfNamesAfterParse.add(pdf.name)
+      }
+    }
+
     // Persist PDF bytes as data URLs so the ZIP export survives even if
     // the original File reference goes stale. XMLs already carry their
     // text via gasto.xmlContent from parseCFDI.
@@ -3816,7 +3845,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.61</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.62</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
