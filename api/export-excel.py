@@ -396,6 +396,10 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
         tipo = g.get('tipo', 'Consumo')
         monto_usd_raw = round(g.get('montoUSD', 0) or 0, 2)
         tipo_cambio = round(g.get('tipoCambio', 0) or 0, 2)
+        # Per-row póliza (sólo se llena cuando el colaborador es especial
+        # y corrió el cotejo con su Saldos); para todos los demás cae al
+        # folio Clara global del colaborador.
+        poliza_row = g.get('polizaNumero') or poliza_numero
 
         # Propina-row fields. When the gasto has any propina, the main row
         # shows the NET amount (total − tip) so main_row + propina_sub_row
@@ -426,7 +430,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             (2,  g.get('rfc', ''),       'left',   'rfc'),
             (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
             (4,  tipo,                   'center', 'badge_tipo'),
-            (5,  poliza_numero,          'center', 'normal'),
+            (5,  poliza_row,             'center', 'normal'),
             (6,  g.get('noFactura', ''), 'center', 'normal'),
             (7,  fecha_fac,              'center', 'normal'),
             (8,  fecha_cobro,            'center', 'normal'),

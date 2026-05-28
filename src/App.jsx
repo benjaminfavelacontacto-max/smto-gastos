@@ -425,6 +425,99 @@ function parseCSVLine(line, sep) {
   return result
 }
 
+/* Parser del Excel "Saldos AAAA" usado por los colaboradores especiales.
+   Cada pestaña suele traer headers Fecha|Tipo|Folio|Factura|Concepto|
+   Ingreso|Egreso en alguna fila (varía por hoja: r3 a r177). Algunas
+   pestañas legacy (Banamex, Intercam) tienen columna 'Desc' en vez de
+   'Tipo' y sin 'Folio'; las parseamos igual aunque su folio quede
+   vacío.
+
+   Devuelve [{ sheet, fecha, tipo, folio, factura, concepto, egreso }]. */
+function parseSaldosXLSX(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: 'array' })
+  const rows = []
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName]
+    if (!ws || !ws['!ref']) continue
+    const range = XLSX.utils.decode_range(ws['!ref'])
+    const getCell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })]?.v
+
+    // Encuentra fila de headers en las primeras ~200 filas.
+    let headerRow = -1
+    let cols = null
+    const maxScan = Math.min(range.s.r + 200, range.e.r)
+    for (let r = range.s.r; r <= maxScan; r++) {
+      const v = (c) => String(getCell(r, c) || '').trim()
+      if (v(0) === 'Fecha' && v(1) === 'Tipo' && v(2) === 'Folio' && v(3) === 'Factura') {
+        headerRow = r
+        cols = { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 }
+        break
+      }
+      if (v(0) === 'Fecha' && (v(1) === 'Desc' || v(1) === 'Descripción') && v(3) === 'Factura') {
+        headerRow = r
+        cols = { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 }
+        break
+      }
+    }
+    if (headerRow < 0) continue
+
+    for (let r = headerRow + 1; r <= range.e.r; r++) {
+      const factura = String(getCell(r, cols.factura) || '').trim()
+      if (!factura || factura.toUpperCase() === 'NA') continue
+      const folio = cols.folio !== null ? String(getCell(r, cols.folio) || '').trim() : ''
+      rows.push({
+        sheet:    sheetName,
+        fecha:    getCell(r, cols.fecha) || '',
+        tipo:     String(getCell(r, cols.tipo) || '').trim(),
+        folio,
+        factura,
+        concepto: String(getCell(r, cols.concepto) || '').trim(),
+        egreso:   Number(getCell(r, cols.egreso)) || 0,
+      })
+    }
+  }
+  return rows
+}
+
+/* Normaliza una factura para comparación: sin espacios, guiones, slashes,
+   puntos; uppercase. "48 3993 64000" y "48399364000" matchearán. */
+const normFactura = (s) => String(s || '').replace(/[\s\-/.]/g, '').toUpperCase()
+
+/* Cotejo: por cada gasto busca la fila del Saldos con la misma factura
+   normalizada. Devuelve los matched, sin-match por ambos lados, y marca
+   las discrepancias de tipo para que el usuario decida. */
+function cotejarConSaldos(saldosRows, lista) {
+  const matched = []
+  const sinMatchGastos = []
+  const usedSaldos = new Set()
+
+  const byFactura = new Map()
+  saldosRows.forEach((row, idx) => {
+    const k = normFactura(row.factura)
+    if (!k) return
+    if (!byFactura.has(k)) byFactura.set(k, [])
+    byFactura.get(k).push(idx)
+  })
+
+  lista.forEach((g) => {
+    const k = normFactura(g.noFactura)
+    const candidates = k ? (byFactura.get(k) || []) : []
+    const saldosIdx = candidates.find(idx => !usedSaldos.has(idx))
+    if (saldosIdx === undefined) {
+      sinMatchGastos.push(g)
+      return
+    }
+    usedSaldos.add(saldosIdx)
+    const sRow = saldosRows[saldosIdx]
+    const tipoDiffers = !!sRow.tipo && !!g.tipo &&
+      sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
+    matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers })
+  })
+
+  const sinMatchSaldos = saldosRows.filter((_, idx) => !usedSaldos.has(idx))
+  return { matched, sinMatchGastos, sinMatchSaldos }
+}
+
 function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // RFCs whose <Retencion Impuesto="001"> is actually an ISR trasladado
   // (their PDFs label it as a line-item tax, not a withholding).
@@ -1984,6 +2077,8 @@ export default function App() {
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
   const photoRef  = useRef(null)
+  const saldosRef = useRef(null)
+  const [cotejoModal, setCotejoModal] = useState(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -3078,6 +3173,7 @@ export default function App() {
       propinaExtranjero:Number(g.propinaExtranjero) || 0,
       moneda:           g.moneda || '',
       monedaCodigo:     g.monedaCodigo || '',
+      polizaNumero:     g.polizaNumero || '',
     }))
     try {
       const response = await fetch('/api/export-excel', {
@@ -3314,6 +3410,64 @@ export default function App() {
   // Defers to /api/export-excel (Python serverless function on Vercel) so the
   // .xls file gets full template formatting via xlrd + xlutils + xlwt —
   // something community SheetJS can't preserve in the browser.
+  // ── Cotejo con Saldos (solo colaboradores especiales) ──
+  // Aplica las pólizas que sí matchean automáticamente; abre el modal de
+  // discrepancias para que el usuario decida tipo por tipo.
+  const handleSaldosFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const saldosRows = parseSaldosXLSX(arrayBuffer)
+      if (saldosRows.length === 0) {
+        showModal({
+          type: 'error',
+          title: 'Saldos sin datos',
+          subtitle: 'No se encontraron filas con Fecha|Tipo|Folio|Factura en ninguna pestaña.',
+          primaryLabel: 'Entendido',
+          onPrimary: closeModal,
+        })
+        return
+      }
+      const result = cotejarConSaldos(saldosRows, lista)
+      // Aplica las pólizas que matcheron (todas, incluso las que tienen
+      // discrepancia de tipo — el folio sí se aplica; la decisión del tipo
+      // se resuelve en el modal). Tipo NO se cambia aquí; el modal lo
+      // hará después de que el usuario decida.
+      setLista(prev => prev.map(g => {
+        const m = result.matched.find(x => x.gastoId === g.id)
+        if (!m) return g
+        return { ...g, polizaNumero: m.saldosRow.folio || 'N/A' }
+      }))
+      setCotejoModal({ result, decisions: {} })
+    } catch (err) {
+      console.warn('parseSaldosXLSX:', err)
+      showModal({
+        type: 'error',
+        title: 'Error leyendo Saldos',
+        subtitle: err.message || 'No se pudo leer el archivo.',
+        primaryLabel: 'Entendido',
+        onPrimary: closeModal,
+      })
+    } finally {
+      e.target.value = ''
+    }
+  }
+
+  // Aplica las decisiones de tipo del modal al state y lo cierra.
+  const aplicarDecisionesCotejo = () => {
+    if (!cotejoModal) return
+    const { result, decisions } = cotejoModal
+    setLista(prev => prev.map(g => {
+      const m = result.matched.find(x => x.gastoId === g.id)
+      if (!m || !m.tipoDiffers) return g
+      const choice = decisions[g.id]
+      if (choice === 'saldos') return { ...g, tipo: m.saldosRow.tipo }
+      return g
+    }))
+    setCotejoModal(null)
+  }
+
   const exportarExcel = async () => {
     if (!lista.length) return
     try {
@@ -3430,7 +3584,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.51</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.52</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -3497,6 +3651,22 @@ export default function App() {
           />
           <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => photoRef.current?.click()} />
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
+            <PremiumButton
+              title="Cotejar con Saldos"
+              icon="🔍"
+              variant="secondary"
+              isDisabled={!lista.length}
+              onClick={() => saldosRef.current?.click()}
+            />
+          )}
+          <input
+            ref={saldosRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleSaldosFile}
+          />
           {(() => {
             const total = lista.length
             const validados = lista.filter(g => g.validado).length
@@ -3682,6 +3852,129 @@ export default function App() {
           }}
         />
       )}
+
+      {/* ─── MODAL COTEJO CON SALDOS (solo especiales) ─── */}
+      {cotejoModal && (() => {
+        const { result, decisions } = cotejoModal
+        const discrepancias = result.matched.filter(m => m.tipoDiffers)
+        const sinMatchG = result.sinMatchGastos
+        const sinMatchS = result.sinMatchSaldos
+        const setDecision = (gastoId, choice) => {
+          setCotejoModal(prev => ({ ...prev, decisions: { ...prev.decisions, [gastoId]: choice } }))
+        }
+        const fmtMoney = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const fmtFecha = (d) => {
+          if (!d) return ''
+          if (d instanceof Date) return d.toLocaleDateString('es-MX')
+          if (typeof d === 'number') {
+            const dt = new Date(Date.UTC(1899, 11, 30) + d * 86400000)
+            return dt.toLocaleDateString('es-MX')
+          }
+          return String(d).slice(0, 10)
+        }
+        return (
+          <div className="premium-overlay" onClick={() => setCotejoModal(null)}>
+            <div className="premium-modal" onClick={e => e.stopPropagation()}
+              style={{ maxWidth: 880, width: '92vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
+              <div className="premium-icon-wrap" style={{ background: 'rgba(89,211,155,0.12)', boxShadow: '0 0 40px #59D39B30' }}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#59D39B" strokeWidth="2.5">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+              </div>
+              <div className="premium-title">Cotejo con Saldos</div>
+              <div className="premium-subtitle">
+                {result.matched.length} pólizas aplicadas · {discrepancias.length} discrepancia(s) de tipo · {sinMatchG.length} gasto(s) sin match · {sinMatchS.length} fila(s) Saldos sobrantes
+              </div>
+
+              <div style={{ overflowY: 'auto', flex: 1, marginTop: 16, padding: '0 4px' }}>
+                {discrepancias.length > 0 && (
+                  <section style={{ marginBottom: 24 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Discrepancias de tipo
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {discrepancias.map(m => {
+                        const choice = decisions[m.gastoId]
+                        return (
+                          <div key={m.gastoId} style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 10, padding: 12 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>
+                              {m.gasto.proveedor} · {m.gasto.noFactura}
+                            </div>
+                            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                              {fmtFecha(m.gasto.fechaFac)} · ${fmtMoney(m.gasto.totalCFDI)}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <button
+                                onClick={() => setDecision(m.gastoId, 'mantener')}
+                                style={{
+                                  flex: 1, minWidth: 200, padding: '8px 12px', borderRadius: 8,
+                                  border: choice === 'mantener' ? '2px solid #59D39B' : '1px solid rgba(148,163,184,0.3)',
+                                  background: choice === 'mantener' ? 'rgba(89,211,155,0.15)' : 'transparent',
+                                  color: '#e2e8f0', cursor: 'pointer', fontSize: 12, fontWeight: 600, textAlign: 'left',
+                                }}>
+                                <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>MANTENER (app)</div>
+                                {m.gasto.tipo}
+                              </button>
+                              <button
+                                onClick={() => setDecision(m.gastoId, 'saldos')}
+                                style={{
+                                  flex: 1, minWidth: 200, padding: '8px 12px', borderRadius: 8,
+                                  border: choice === 'saldos' ? '2px solid #59D39B' : '1px solid rgba(148,163,184,0.3)',
+                                  background: choice === 'saldos' ? 'rgba(89,211,155,0.15)' : 'transparent',
+                                  color: '#e2e8f0', cursor: 'pointer', fontSize: 12, fontWeight: 600, textAlign: 'left',
+                                }}>
+                                <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>USAR SALDOS</div>
+                                {m.saldosRow.tipo}
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </section>
+                )}
+
+                {sinMatchG.length > 0 && (
+                  <section style={{ marginBottom: 24 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Gastos sin match en Saldos
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+                      {sinMatchG.map(g => (
+                        <div key={g.id} style={{ background: 'rgba(239,68,68,0.06)', borderLeft: '3px solid #ef4444', padding: '6px 10px', borderRadius: 4 }}>
+                          <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{g.proveedor}</span>
+                          <span style={{ color: '#94a3b8' }}> · {g.noFactura} · ${fmtMoney(g.totalCFDI)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {sinMatchS.length > 0 && (
+                  <section style={{ marginBottom: 24 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Filas del Saldos sin match (informativo)
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, maxHeight: 180, overflowY: 'auto' }}>
+                      {sinMatchS.map((s, i) => (
+                        <div key={i} style={{ background: 'rgba(148,163,184,0.06)', borderLeft: '3px solid #64748b', padding: '6px 10px', borderRadius: 4 }}>
+                          <span style={{ color: '#e2e8f0' }}>{s.sheet}</span>
+                          <span style={{ color: '#94a3b8' }}> · {fmtFecha(s.fecha)} · {s.tipo || '—'} · {s.factura} · ${fmtMoney(s.egreso)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
+
+              <div className="premium-actions" style={{ marginTop: 16 }}>
+                <button className="premium-btn-secondary" onClick={() => setCotejoModal(null)}>Cancelar</button>
+                <button className="premium-btn-primary" onClick={aplicarDecisionesCotejo}>Aplicar y cerrar</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ─── MODAL CONCILIACIÓN BANCARIA (premium glass) ─── */}
       <AnimatePresence>
