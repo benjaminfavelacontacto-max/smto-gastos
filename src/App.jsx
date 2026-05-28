@@ -3231,10 +3231,35 @@ export default function App() {
     if (!lista.length) return
     try {
       closeModal()
+      // SLIM el payload: el endpoint sólo consume 19 campos numéricos/texto
+      // por gasto. Si mandamos `lista` tal cual, cada gasto puede traer
+      // imageDataURL (base64, ~150KB), pdfDataURL, XML crudo, etc. Con 100+
+      // facturas eso supera el límite de 4.5MB de Vercel y devuelve 413.
+      const gastosSlim = lista.map(g => ({
+        rfc:              g.rfc || '',
+        proveedor:        g.proveedor || '',
+        tipo:             g.tipo || '',
+        noFactura:        g.noFactura || '',
+        fechaFac:         g.fechaFac || '',
+        fechaCobro:       g.fechaCobro || '',
+        concepto:         g.concepto || '',
+        importe:          Number(g.importe) || 0,
+        iva:              Number(g.iva) || 0,
+        retenciones:      Number(g.retenciones) || 0,
+        totalCFDI:        Number(g.totalCFDI) || 0,
+        formaPago:        g.formaPago || '',
+        montoUSD:         Number(g.montoUSD) || 0,
+        montoExtranjero:  Number(g.montoExtranjero) || 0,
+        tipoCambio:       Number(g.tipoCambio) || 0,
+        montoPropina:     Number(g.montoPropina) || 0,
+        propinaExtranjero:Number(g.propinaExtranjero) || 0,
+        moneda:           g.moneda || '',
+        monedaCodigo:     g.monedaCodigo || '',
+      }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: lista, colaborador: colaborador?.nombre || '' }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '' }),
       })
       if (!response.ok) {
         try {
@@ -3318,7 +3343,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.37</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.38</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
