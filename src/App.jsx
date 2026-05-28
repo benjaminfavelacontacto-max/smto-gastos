@@ -3882,18 +3882,23 @@ export default function App() {
         return
       }
 
-      // Filtro por año (si la lista ya tiene gastos, restringe a esos años)
+      // Filtro por año — SIEMPRE se aplica. Si la lista ya tiene gastos
+      // cargados, usa los años de esos gastos. Si la lista está vacía
+      // (usuario clickea 'Agregar Nómina' sin haber subido XMLs todavía),
+      // cae al año del sistema. Nunca se carga sin filtro.
       const gastoYears = new Set()
       lista.forEach(g => {
         const y = String(g.fechaFac || '').slice(0, 4)
         if (/^\d{4}$/.test(y)) gastoYears.add(y)
       })
-      const filtered = gastoYears.size === 0
-        ? nominaRows
-        : nominaRows.filter(r => {
-            const y = (saldosFechaToIso(r.fecha) || '').slice(0, 4)
-            return /^\d{4}$/.test(y) && gastoYears.has(y)
-          })
+      if (gastoYears.size === 0) {
+        gastoYears.add(String(new Date().getFullYear()))
+      }
+      const filtered = nominaRows.filter(r => {
+        const y = (saldosFechaToIso(r.fecha) || '').slice(0, 4)
+        return /^\d{4}$/.test(y) && gastoYears.has(y)
+      })
+      const yearLabel = [...gastoYears].sort().join(', ')
 
       // Dedup contra la lista existente
       const existingKeys = new Set(lista.map(g => `${g.rfc}|${g.noFactura}`))
@@ -3970,8 +3975,8 @@ export default function App() {
           type: 'info',
           title: 'Sin nóminas nuevas',
           subtitle: dupesSkipped > 0
-            ? `Las ${dupesSkipped} nóminas del archivo ya están cargadas en el reporte.`
-            : 'No se encontraron nóminas para los años de los gastos cargados.',
+            ? `Las ${dupesSkipped} nóminas de ${yearLabel} ya están cargadas en el reporte.`
+            : `No se encontraron nóminas de ${yearLabel} en el archivo.`,
           primaryLabel: 'Entendido',
           onPrimary: closeModal,
         })
@@ -3982,7 +3987,7 @@ export default function App() {
       const totalNominas = newGastos.reduce((s, g) => s + g.importe, 0)
       showModal({
         type: 'success',
-        title: 'Nóminas agregadas',
+        title: `Nóminas ${yearLabel} agregadas`,
         subtitle: dupesSkipped > 0
           ? `+${newGastos.length} nuevas · ${dupesSkipped} duplicadas omitidas`
           : `${newGastos.length} nómina${newGastos.length === 1 ? '' : 's'} agregada${newGastos.length === 1 ? '' : 's'} al reporte.`,
@@ -4142,7 +4147,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.74</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.75</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
