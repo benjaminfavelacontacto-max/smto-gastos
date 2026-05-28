@@ -472,48 +472,57 @@ function parseSaldosXLSX(arrayBuffer) {
     const range = XLSX.utils.decode_range(ws['!ref'])
     const getCell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })]?.v
 
-    // Encuentra fila de headers en las primeras ~200 filas.
-    let headerRow = -1
-    let cols = null
-    const maxScan = Math.min(range.s.r + 200, range.e.r)
-    for (let r = range.s.r; r <= maxScan; r++) {
+    // Encuentra TODAS las filas de header en la pestaña. Algunos archivos
+    // de Saldos apilan varias cuentas verticalmente en una sola pestaña
+    // (ej. "BBVA MXN Cheques" trae Concentradora, Cheques SMTO Pesos, etc.).
+    // Cada header inicia un bloque de datos que corre hasta el siguiente
+    // header (o hasta el final de la pestaña).
+    const headers = []
+    for (let r = range.s.r; r <= range.e.r; r++) {
       const v = (c) => String(getCell(r, c) || '').trim()
       if (v(0) === 'Fecha' && v(1) === 'Tipo' && v(2) === 'Folio' && v(3) === 'Factura') {
-        headerRow = r
-        cols = { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 }
-        break
-      }
-      if (v(0) === 'Fecha' && (v(1) === 'Desc' || v(1) === 'Descripción') && v(3) === 'Factura') {
-        headerRow = r
-        cols = { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 }
-        break
+        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
+      } else if (v(0) === 'Fecha' && (v(1) === 'Desc' || v(1) === 'Descripción') && v(3) === 'Factura') {
+        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
       }
     }
-    if (headerRow < 0) continue
+    if (headers.length === 0) continue
 
-    for (let r = headerRow + 1; r <= range.e.r; r++) {
-      const factura = String(getCell(r, cols.factura) || '').trim()
-      if (!factura || factura.toUpperCase() === 'NA') continue
-      const folio = cols.folio !== null ? String(getCell(r, cols.folio) || '').trim() : ''
-      // Detección de USD: barre TODAS las columnas del renglón en busca del
-      // acrónimo USD o "dólar/dolar". Algunas pestañas marcan moneda en una
-      // columna fuera del set principal (Tipo / Concepto / Factura).
-      let moneda = 'MXN'
-      const colMax = Math.min(range.e.c, 20)
-      for (let c = range.s.c; c <= colMax; c++) {
-        const v = String(getCell(r, c) || '').toUpperCase()
-        if (/\bUSD\b|\bD[ÓO]LAR/.test(v)) { moneda = 'USD'; break }
+    for (let h = 0; h < headers.length; h++) {
+      const { row: hRow, cols } = headers[h]
+      const endRow = h + 1 < headers.length ? headers[h + 1].row - 1 : range.e.r
+      for (let r = hRow + 1; r <= endRow; r++) {
+        const factura = String(getCell(r, cols.factura) || '').trim()
+        const tipo    = String(getCell(r, cols.tipo) || '').trim()
+        const concepto = String(getCell(r, cols.concepto) || '').trim()
+        // Skip filas vacías (sin tipo, factura, ni concepto)
+        if (!factura && !tipo && !concepto) continue
+        // Skip filas con factura NA EXCEPTO si son Nómina — el cotejo las
+        // ignora (factura inválida) pero el flujo "Agregar Nómina" las
+        // necesita para identificarlas via tipo="Nómina ...".
+        const isNomina = /^n[óo]mina\b/i.test(tipo)
+        if (!isNomina && (!factura || factura.toUpperCase() === 'NA')) continue
+        const folio = cols.folio !== null ? String(getCell(r, cols.folio) || '').trim() : ''
+        // Detección de USD: barre TODAS las columnas del renglón en busca del
+        // acrónimo USD o "dólar/dolar". Algunas pestañas marcan moneda en una
+        // columna fuera del set principal (Tipo / Concepto / Factura).
+        let moneda = 'MXN'
+        const colMax = Math.min(range.e.c, 20)
+        for (let c = range.s.c; c <= colMax; c++) {
+          const v = String(getCell(r, c) || '').toUpperCase()
+          if (/\bUSD\b|\bD[ÓO]LAR/.test(v)) { moneda = 'USD'; break }
+        }
+        rows.push({
+          sheet:    sheetName,
+          fecha:    getCell(r, cols.fecha) || '',
+          tipo,
+          folio,
+          factura,
+          concepto,
+          egreso:   Number(getCell(r, cols.egreso)) || 0,
+          moneda,
+        })
       }
-      rows.push({
-        sheet:    sheetName,
-        fecha:    getCell(r, cols.fecha) || '',
-        tipo:     String(getCell(r, cols.tipo) || '').trim(),
-        folio,
-        factura,
-        concepto: String(getCell(r, cols.concepto) || '').trim(),
-        egreso:   Number(getCell(r, cols.egreso)) || 0,
-        moneda,
-      })
     }
   }
   return rows
@@ -546,11 +555,14 @@ function cotejarConSaldos(saldosRows, lista) {
       })
     : saldosRows
 
-  // 3) Índice por factura normalizada → posiciones dentro de filteredSaldos
+  // 3) Índice por factura normalizada → posiciones dentro de filteredSaldos.
+  //    Skip filas con factura 'NA' (típicamente nóminas/comisiones) — no son
+  //    matchables contra los gastos y meterlas crearía falsos positivos si
+  //    algún gasto manual tuviera noFactura='NA'.
   const byFactura = new Map()
   filteredSaldos.forEach((row, idx) => {
     const k = normFactura(row.factura)
-    if (!k) return
+    if (!k || k === 'NA') return
     if (!byFactura.has(k)) byFactura.set(k, [])
     byFactura.get(k).push(idx)
   })
@@ -4130,7 +4142,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.73</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.74</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
