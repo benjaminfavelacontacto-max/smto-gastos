@@ -609,7 +609,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
     fechaFac,
     concepto:   conceptoClasif,
-    tipo: autoDetectTipo(proveedor, descripcionFirstLine, colaborador?.categoria, claveProdServ),
+    tipo: autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria, claveProdServ),
     importe,
     iva,
     isrTrasladado,
@@ -2160,7 +2160,7 @@ export default function App() {
         : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
       fechaFac: parsed.fecha || today,
       concepto: parsed.concepto || '',
-      tipo: autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', colaborador?.categoria),
+      tipo: autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria),
       // For foreign-currency tickets leave the MXN side at 0 — Pass 0 of
       // validarBanco will fill it from the bank statement's "Monto en MXN"
       // column once the authorization code matches.
@@ -3376,7 +3376,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.47</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.48</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
