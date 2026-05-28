@@ -96,6 +96,10 @@ const TIPOS_ESPECIALES = [
   'Marketing',
   'No Comprobado',
   'Nómina',
+  'Nómina Adm',
+  'Nómina Soc',
+  'Nómina Ser',
+  'Nómina Ven',
   'PC',
   'Papelería',
   'Pasaporte o Visa',
@@ -2227,6 +2231,7 @@ export default function App() {
   const bancoRef  = useRef(null)
   const photoRef  = useRef(null)
   const saldosRef = useRef(null)
+  const nominaRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
   const [duplicadosModal, setDuplicadosModal] = useState(null)
   const [ocrSelectionModal, setOcrSelectionModal] = useState(null)
@@ -3839,6 +3844,159 @@ export default function App() {
     }
   }
 
+  // ── AGREGAR NÓMINA (solo Alejandro Olivar) ──
+  // Sube el archivo de Saldos, busca todas las filas cuyo tipo empiece con
+  // "Nómina" (Nómina Adm/Soc/Ser/Ven, etc.) y las inserta como gastos con
+  // el mismo shape que los demás para que aparezcan en la tabla y en el
+  // export a Excel. Aplica filtro por año (si ya hay gastos) y dedup por
+  // clave sintética (folio + persona + fecha) para no duplicar en re-imports.
+  const handleNominaFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const saldosRows = parseSaldosXLSX(arrayBuffer)
+      const nominaRows = saldosRows.filter(r =>
+        /^n[óo]mina\b/i.test(String(r.tipo || '').trim())
+      )
+      if (nominaRows.length === 0) {
+        showModal({
+          type: 'error',
+          title: 'Sin nóminas',
+          subtitle: 'No se encontraron filas tipo "Nómina" en el archivo.',
+          primaryLabel: 'Entendido',
+          onPrimary: closeModal,
+        })
+        return
+      }
+
+      // Filtro por año (si la lista ya tiene gastos, restringe a esos años)
+      const gastoYears = new Set()
+      lista.forEach(g => {
+        const y = String(g.fechaFac || '').slice(0, 4)
+        if (/^\d{4}$/.test(y)) gastoYears.add(y)
+      })
+      const filtered = gastoYears.size === 0
+        ? nominaRows
+        : nominaRows.filter(r => {
+            const y = (saldosFechaToIso(r.fecha) || '').slice(0, 4)
+            return /^\d{4}$/.test(y) && gastoYears.has(y)
+          })
+
+      // Dedup contra la lista existente
+      const existingKeys = new Set(lista.map(g => `${g.rfc}|${g.noFactura}`))
+      const newGastos = []
+      let dupesSkipped = 0
+
+      for (const r of filtered) {
+        const fechaIso = saldosFechaToIso(r.fecha) || ''
+        const conceptoStr = String(r.concepto || '').trim()
+        // Strip "Nómina " prefix y sufijo de período ("1a Ene 26") para
+        // obtener un nombre de persona como proveedor.
+        const proveedor = conceptoStr
+          .replace(/^n[óo]mina\s+/i, '')
+          .replace(/\s+\d+a?\s+\w+\s+\d+\s*$/i, '')
+          .trim() || conceptoStr
+        const personaNorm = proveedor
+          .normalize('NFD')
+          .replace(/\p{Diacritic}/gu, '')
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 16)
+        const fechaCompact = fechaIso.replace(/-/g, '').slice(2)
+        const folio = String(r.folio || '').trim()
+        const noFactura = `NOM-${folio || 'X'}-${personaNorm}-${fechaCompact}`
+
+        const key = `|${noFactura}`
+        if (existingKeys.has(key)) { dupesSkipped++; continue }
+        existingKeys.add(key)
+
+        const importe = Number(r.egreso) || 0
+        newGastos.push({
+          id: genId(),
+          rfc: '',
+          proveedor,
+          tipo: String(r.tipo || '').trim(),
+          noFactura,
+          fechaFac:  fechaIso,
+          fechaCobro: fechaIso,
+          concepto:  conceptoStr,
+          importe,
+          iva: 0,
+          isrTrasladado: 0,
+          retencionISR:  0,
+          retencionIVA:  0,
+          retenciones:   0,
+          totalCFDI:     importe,
+          propinaPorcentaje: 0,
+          montoPropina:      0,
+          formaPago: '03',
+          uuid:     crypto.randomUUID(),
+          tienePDF: false,
+          pdfFile:  null,
+          xmlFile:  null,
+          hizoMatch: false,
+          validado:  false,
+          montoUSD:           0,
+          montoExtranjero:    0,
+          importeUSD:         0,
+          ivaUSD:             0,
+          retencionesUSD:     0,
+          tipoCambio:         0,
+          moneda:             'MXN',
+          monedaCodigo:       'MXN',
+          esMonedaExtranjera: false,
+          esTicket:    false,
+          esNomina:    true,
+          polizaNumero: folio,
+          isNew: true,
+        })
+      }
+
+      if (newGastos.length === 0) {
+        showModal({
+          type: 'info',
+          title: 'Sin nóminas nuevas',
+          subtitle: dupesSkipped > 0
+            ? `Las ${dupesSkipped} nóminas del archivo ya están cargadas en el reporte.`
+            : 'No se encontraron nóminas para los años de los gastos cargados.',
+          primaryLabel: 'Entendido',
+          onPrimary: closeModal,
+        })
+        return
+      }
+
+      setLista(prev => [...prev, ...newGastos])
+      const totalNominas = newGastos.reduce((s, g) => s + g.importe, 0)
+      showModal({
+        type: 'success',
+        title: 'Nóminas agregadas',
+        subtitle: dupesSkipped > 0
+          ? `+${newGastos.length} nuevas · ${dupesSkipped} duplicadas omitidas`
+          : `${newGastos.length} nómina${newGastos.length === 1 ? '' : 's'} agregada${newGastos.length === 1 ? '' : 's'} al reporte.`,
+        stats: [
+          { value: `+${newGastos.length}`, label: 'Nóminas', color: '#59D39B' },
+          { value: `$${totalNominas.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, label: 'Total', color: 'rgba(255,255,255,0.85)' },
+        ],
+        primaryLabel: 'Continuar',
+      })
+      setTimeout(() => {
+        setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+      }, 1500)
+    } catch (err) {
+      console.warn('handleNominaFile:', err)
+      showModal({
+        type: 'error',
+        title: 'Error leyendo archivo',
+        subtitle: err.message || 'No se pudo leer el archivo de Saldos.',
+        primaryLabel: 'Entendido',
+        onPrimary: closeModal,
+      })
+    } finally {
+      e.target.value = ''
+    }
+  }
+
   // Aplica las decisiones de tipo del modal al state y lo cierra.
   const aplicarDecisionesCotejo = () => {
     if (!cotejoModal) return
@@ -3972,7 +4130,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.72</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.73</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4048,12 +4206,27 @@ export default function App() {
               onClick={() => saldosRef.current?.click()}
             />
           )}
+          {colaborador?.nombre === 'Alejandro Olivar' && (
+            <PremiumButton
+              title="Agregar Nómina"
+              icon="👥"
+              variant="secondary"
+              onClick={() => nominaRef.current?.click()}
+            />
+          )}
           <input
             ref={saldosRef}
             type="file"
             accept=".xlsx,.xls"
             style={{ display: 'none' }}
             onChange={handleSaldosFile}
+          />
+          <input
+            ref={nominaRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleNominaFile}
           />
           {(() => {
             const total = lista.length
