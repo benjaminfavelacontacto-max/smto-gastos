@@ -69,14 +69,14 @@ DETECCION DEL TIPO DE DOCUMENTO:
 - En cualquier otro caso → tipoDocumento="ticket" y aplica las reglas de ticket/recibo normales.
 
 REGLAS PARA PEDIMENTO (tipoDocumento="pedimento"):
-- folio: el numero que aparece junto a "Num Pedimento" o "Numero de Pedimento" — preservalo TAL CUAL (con guiones, espacios, etc, sin alterar). Este es el identificador unico del pedimento.
+- folio: el numero que aparece junto a "Num Pedimento" o "Numero de Pedimento" — preservalo TAL CUAL (con guiones, espacios, etc, sin alterar). Este es el identificador unico del pedimento. Ejemplo: "26 48 3993 6406196"
 - fecha: la fecha que aparece junto a "Fecha de Pago" (formato YYYY-MM-DD). NO uses la fecha de emision ni la fecha de operacion.
-- total: el monto que aparece junto a "Importe Pagado" o "Total Pagado". Es la cifra final en pesos mexicanos.
+- total: el monto que aparece junto a "Importe Pagado" o "Total Pagado". Es la cifra final en pesos mexicanos. Quita las comas de miles antes de convertir a numero (1,449.00 → 1449.00).
 - subtotal: usa el mismo valor que total (no aplica desglose de IVA en pedimentos).
 - iva: 0 (los pedimentos ya incluyen los impuestos prorrateados en el importe pagado).
 - propina: 0
-- proveedor: "Aduana"
-- concepto: "Tramite de Aduana"
+- proveedor: "SMTO ENGINEERING"
+- concepto: "Pedimento de Importacion"
 - moneda: "MXN" (los pedimentos se pagan siempre en pesos mexicanos)
 - formaPago: "03" (transferencia)
 - propinaSugerida18/20/22: 0

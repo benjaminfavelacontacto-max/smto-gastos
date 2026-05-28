@@ -2620,11 +2620,11 @@ export default function App() {
       return {
         id: genId(),
         rfc: '',
-        proveedor: parsed.proveedor || 'Aduana',
+        proveedor: parsed.proveedor || 'SMTO ENGINEERING',
         noFactura: String(parsed.folio || ('PED-' + uuid.slice(0, 6).toUpperCase())),
         fechaFac:  parsed.fecha || today,
-        concepto:  parsed.concepto || 'Tramite de Aduana',
-        tipo: autoDetectTipo('Aduana', 'pedimento importacion', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria),
+        concepto:  parsed.concepto || 'Pedimento de Importacion',
+        tipo: autoDetectTipo('SMTO ENGINEERING', 'pedimento importacion', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria),
         importe:    importePagado,
         iva:        0,
         isrTrasladado:  0,
@@ -3972,7 +3972,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.70</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.71</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
