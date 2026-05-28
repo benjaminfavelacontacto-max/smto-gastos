@@ -1,5 +1,5 @@
 from http.server import BaseHTTPRequestHandler
-import json, os, sys, tempfile, traceback
+import json, os, sys, tempfile, traceback, re
 from datetime import datetime
 
 IMPORT_ERROR = None
@@ -12,6 +12,21 @@ try:
     from PIL import Image as PILImage
 except Exception:
     IMPORT_ERROR = traceback.format_exc()
+
+# openpyxl rejects XML 1.0 illegal control chars (vertical tab, form feed, etc.).
+# CFDI fields and OCR output occasionally smuggle one in (PDF text extraction
+# is notorious for U+000B between syllables). Strip them recursively from any
+# string value in the incoming payload before it reaches ws.cell.
+_ILLEGAL_XLSX_CHARS = re.compile(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]')
+
+def sanitize(v):
+    if isinstance(v, str):
+        return _ILLEGAL_XLSX_CHARS.sub('', v)
+    if isinstance(v, dict):
+        return {k: sanitize(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [sanitize(x) for x in v]
+    return v
 
 # SMTO Brand palette
 SMTO_BLACK = '050505'
@@ -645,6 +660,8 @@ class handler(BaseHTTPRequestHandler):
             else:
                 gastos = data
                 colaborador = ''
+            gastos = sanitize(gastos)
+            colaborador = sanitize(colaborador)
             wb = build_workbook(gastos, colaborador)
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                 tmp_path = tmp.name
