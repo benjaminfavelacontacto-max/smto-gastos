@@ -1,9 +1,41 @@
 // src/tipoRules.js
-// Reglas predictivas de Tipo de gasto — v4
+// Reglas predictivas de Tipo de gasto — v5
 // 18,846 transacciones históricas SMTo + razones sociales fiscales mexicanas + conceptos CFDI
 // Keywords largos primero (greedy specificity). Sin keywords ≤3 chars ambiguos.
 
 export const TIPO_RULES = [
+  // ── Proveedores SMTO con asignación fija (lista 2026-05) ────────────────
+  // Estas reglas viven ARRIBA de las genéricas para ganar prioridad. P.ej.
+  // FEDEX abajo dice "Envíos" pero aquí lo forzamos a "Aduana" por convenio
+  // interno SMTO.
+  ['BISMAK',         'Consultoría'],
+  ['C Y C ',         'Consultoría'],
+  ['C Y C,',         'Consultoría'],
+  ['JUAN M ROB',     'Consultoría'],
+  ['JUAN MANUEL ROB','Consultoría'],
+  ['ZUÑIGA',         'Contador'],
+  ['ZUNIGA',         'Contador'],
+  ['FEDEX',          'Aduana'],          // override del FEDEX→Envíos genérico
+  ['INTEGRADORA',    'Aduana'],
+  ['DESP CANO',      'Aduana'],
+  ['DESPACHO CANO',  'Aduana'],
+  ['IBG ',           'Comercio Exterior'],
+  ['KLF ',           'Comercio Exterior'],
+  ['MBGE',           'IT&SW'],
+  ['SFERP',          'IT&SW'],
+  ['PROVISOR',       'COGS'],
+  ['TEKTRONIX',      'COGS'],
+  ['ROHDE',          'COGS'],
+  ['GASNGO',         'Gasolina'],
+  ['ILIANA ALV',     'Renta Oficina'],
+  ['ILIANA ALVAREZ', 'Renta Oficina'],
+  ['LA VENTOLERA',   'Renta Oficina'],
+  ['TOMAS VALLES',   'Renta Oficina'],
+  ['ITESO',          'Renta Oficina'],
+  ['FIAT ',          'Renta Oficina'],   // override de FIAT (marca de auto)
+  ['VANRENTA',       'Automóvil'],
+  // ── Fin proveedores SMTO ────────────────────────────────────────────────
+
   // ── Equipo de cómputo / PC ──────────────────────────────────────────────
   ['EQUIPO DE COMPUTO',    'PC (Equipo)'],
   ['EQUIPO DE CÓMPUTO',   'PC (Equipo)'],
@@ -359,6 +391,13 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
   if ((proveedor || '').toUpperCase().includes('FACTURIFY') &&
       (descripcion || '').toUpperCase().trim() === 'TARIFA') {
     return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
+  }
+
+  // REFIEL → si la descripción empieza con "RENTA" es Automóvil; en cualquier
+  // otro caso cae a las reglas genéricas / fallback.
+  if ((proveedor || '').toUpperCase().includes('REFIEL') &&
+      (descripcion || '').toUpperCase().trim().startsWith('RENTA')) {
+    return 'Automóvil'
   }
 
   // 1. Primero: buscar en reglas conocidas (marcas, razones sociales, conceptos específicos)
