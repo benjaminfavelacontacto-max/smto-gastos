@@ -255,33 +255,40 @@ const COLUMNS = [
 
 const genId = () => Math.random().toString(36).slice(2, 11)
 
-/* Display dates as MM-DD-YY app-wide. Internal storage stays YYYY-MM-DD
+/* Display dates as DD-MM-YYYY app-wide. Internal storage stays YYYY-MM-DD
    (HTML5 date input requirement). parseDateDisplay reverses for storage. */
 const formatDateDisplay = (dateStr) => {
   if (!dateStr) return ''
   let d, m, y
   if (dateStr.includes('-') && dateStr.length === 10) {
-    // YYYY-MM-DD
-    const [yyyy, mm, dd] = dateStr.split('-')
-    d = dd; m = mm; y = yyyy.slice(-2)
+    const parts = dateStr.split('-')
+    if (parts[0].length === 4) {
+      // YYYY-MM-DD (storage)
+      [y, m, d] = parts
+    } else {
+      // Already DD-MM-YYYY (idempotent passthrough)
+      return dateStr
+    }
   } else if (dateStr.includes('/')) {
-    // DD/MM/YYYY
+    // DD/MM/YYYY (export format or CSV)
     const parts = dateStr.split('/')
-    d = parts[0]; m = parts[1]; y = (parts[2] || '').slice(-2)
+    d = parts[0]; m = parts[1]; y = parts[2] || ''
+    if (y.length === 2) y = '20' + y
   } else if (dateStr.includes('-') && dateStr.length <= 8) {
-    // Already MM-DD-YY
-    return dateStr
+    // Legacy MM-DD-YY (saved in old reports) — promote to DD-MM-YYYY
+    const [mm, dd, yy] = dateStr.split('-')
+    d = dd; m = mm; y = '20' + yy
   } else {
     return dateStr
   }
-  return `${m.padStart(2, '0')}-${d.padStart(2, '0')}-${y}`
+  return `${d.padStart(2, '0')}-${m.padStart(2, '0')}-${y}`
 }
 
 const parseDateDisplay = (s) => {
   if (!s) return ''
   const parts = s.split('-')
   if (parts.length !== 3) return s
-  const [mm, dd, y] = parts
+  const [dd, mm, y] = parts
   if (y.length === 2) return `20${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
   if (y.length === 4) return `${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
   return s
@@ -707,11 +714,11 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
 
 function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
   // Display ↔ storage: app-wide formatDateDisplay/parseDateDisplay handle
-  // the MM-DD-YY ↔ YYYY-MM-DD round-trip.
+  // the DD-MM-YYYY ↔ YYYY-MM-DD round-trip.
   const dateDisplay  = formatDateDisplay(g.fechaFac)
   const onDateChange = v => upd('fechaFac', parseDateDisplay(v))
 
-  // Per-row toggle for the Fecha Cobro cell: span (MM-DD-YY) when blurred,
+  // Per-row toggle for the Fecha Cobro cell: span (DD-MM-YYYY) when blurred,
   // native date picker (YYYY-MM-DD) when focused.
   const [editingCobro, setEditingCobro] = useState(false)
   // type="date" needs YYYY-MM-DD on its value attr. Bank-matched DD/MM/YYYY
@@ -817,7 +824,7 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
         <input className="cell-in" value={dateDisplay} onChange={e => onDateChange(e.target.value)} />
       </td>
 
-      {/* Fecha Cobro — span shows MM-DD-YY; click swaps to date picker
+      {/* Fecha Cobro — span shows DD-MM-YYYY; click swaps to date picker
           (which uses YYYY-MM-DD natively). Blur returns to display mode. */}
       <td>
         {editingCobro ? (
@@ -2584,7 +2591,7 @@ export default function App() {
     }
     const formatCobro = d => {
       // Store as YYYY-MM-DD so the native date picker on the row accepts it
-      // directly and formatDateDisplay produces MM-DD-YY for the read view.
+      // directly and formatDateDisplay produces DD-MM-YYYY for the read view.
       const dd   = String(d.getDate()).padStart(2, '0')
       const mm   = String(d.getMonth() + 1).padStart(2, '0')
       const yyyy = d.getFullYear()
@@ -3423,7 +3430,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.50</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.51</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
