@@ -796,13 +796,21 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   //   2. UUID dentro del nombre del PDF
   //   3. Coincidencia "fuzzy": tras normalizar (lowercase + solo alfanuméricos),
   //      uno contiene al otro, o comparten los primeros 15 caracteres.
-  const base    = xmlFile.name.replace(/\.xml$/i, '').toLowerCase()
-  const norm    = s => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  // Normaliza nombres a NFD + lower + sin acentos para que XMLs/PDFs con
+  // distinta codificación Unicode (e.g., PDF descargado desde Safari/Whats
+  // queda en NFC; XML emitido en NFD por algunos sistemas) matchéen igual.
+  // Sin esta normalización, "Representación.pdf" (NFC) no matchea
+  // "Representación.xml" (NFD) aunque visualmente sean idénticos.
+  const stripDiacritics = s => (s || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+  const base    = stripDiacritics(xmlFile.name.replace(/\.xml$/i, '').toLowerCase())
+  const norm    = s => stripDiacritics(s.toLowerCase()).replace(/[^a-z0-9]/g, '')
   const xmlNorm = norm(base)
   const pdfFile = pdfFiles.find(f => {
-    const pdfBase = f.name.replace(/\.pdf$/i, '').toLowerCase()
+    const pdfBase = stripDiacritics(f.name.replace(/\.pdf$/i, '').toLowerCase())
     if (pdfBase === base) return true
-    if (uuid && f.name.toUpperCase().includes(uuid.toUpperCase())) return true
+    if (uuid && stripDiacritics(f.name.toUpperCase()).includes(uuid.toUpperCase())) return true
     const pdfNorm = norm(pdfBase)
     if (xmlNorm.length >= 6 && pdfNorm.length >= 6) {
       if (xmlNorm.includes(pdfNorm) || pdfNorm.includes(xmlNorm)) return true
@@ -2296,16 +2304,17 @@ export default function App() {
     // por el usuario que contienen el folio o RFC del XML en su nombre
     // ("Proveedor 1189 Gastos.pdf" ↔ XML cuyo folio es 1189). Misma lógica
     // que handleDrop para que ambos caminos sean consistentes.
+    const normName = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
     const linkedPdfNamesAfterParse = new Set(
       nueva.filter(g => g.pdfFile).map(g => g.pdfFile.name)
     )
     for (const pdf of pdfs) {
       if (linkedPdfNamesAfterParse.has(pdf.name)) continue
-      const pdfBase = pdf.name.replace(/\.pdf$/i, '').toLowerCase()
+      const pdfBase = normName(pdf.name.replace(/\.pdf$/i, ''))
       const match = nueva.find(g => {
-        const xmlBase = (g.xmlFile?.name || '').replace(/\.xml$/i, '').toLowerCase()
-        const folio   = (g.noFactura || '').toLowerCase()
-        const rfc     = (g.rfc || '').toLowerCase()
+        const xmlBase = normName((g.xmlFile?.name || '').replace(/\.xml$/i, ''))
+        const folio   = normName(g.noFactura || '')
+        const rfc     = normName(g.rfc || '')
         return (
           pdfBase === xmlBase ||
           (folio && folio.length >= 3 && pdfBase.includes(folio)) ||
@@ -3845,7 +3854,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.62</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.63</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
