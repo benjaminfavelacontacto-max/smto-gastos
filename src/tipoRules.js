@@ -15,6 +15,11 @@ export const TIPO_RULES = [
   ['JUAN MANUEL ROB','Consultoría'],
   ['ZUÑIGA',         'Contador'],
   ['ZUNIGA',         'Contador'],
+  ['DHL ',           'Envíos'],
+  ['DHL,',           'Envíos'],
+  ['DHL EXPRESS',    'Envíos'],
+  ['DHL DE MEXICO',  'Envíos'],
+  ['DHL MEXICO',     'Envíos'],
   ['FEDEX',          'Aduana'],          // override del FEDEX→Envíos genérico
   ['INTEGRADORA',    'Aduana'],
   ['DESP CANO',      'Aduana'],
