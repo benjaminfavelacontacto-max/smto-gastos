@@ -179,7 +179,14 @@ def fill_row_bg(ws, row, start_col, end_col, color):
     for c in range(start_col, end_col + 1):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=color)
 
-def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
+def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None):
+    # Invierte POLIZAS_CLARA (nombre → folio) a (folio → nombre) para que la
+    # columna USUARIO pueda resolver cada póliza al colaborador dueño.
+    polizas_map = polizas_map or {}
+    usuario_por_poliza = {}
+    for nombre, folio in polizas_map.items():
+        if folio:
+            usuario_por_poliza[str(folio).strip()] = nombre
     wb = Workbook()
     # Protección a nivel libro EXPLÍCITAMENTE deshabilitada. Sin esto, algunos
     # usuarios de Windows ven el diálogo "es un archivo de solo lectura" al
@@ -199,13 +206,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
     ws.protection.enabled = False  # belt-and-suspenders: also drop the element
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates).
-    # Layout: A spacer, B-N data, O BANCO (nuevo), P MONTO USD, Q T/C, R spacer.
-    # BANCO ahora carga el nombre completo de la pestaña Saldos
-    # (e.g. "BBVA MXN Cheques", "Monex USD Cheques") — necesita ancho extra.
+    # Layout: A spacer, B-N data, O BANCO, P MONTO USD, Q T/C, R USUARIO, S spacer.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
         'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 18, 'N': 15,
-        'O': 22, 'P': 13, 'Q': 13, 'R': 3,
+        'O': 22, 'P': 13, 'Q': 13, 'R': 24, 'S': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -214,7 +219,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
     # outer spacer cols past the totals/footer still inherit BG_PAGE.
     nrows_painted = max(80, 40 + len(gastos))
     for r in range(1, nrows_painted):
-        fill_row_bg(ws, r, 1, 18, BG_PAGE)
+        fill_row_bg(ws, r, 1, 19, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
     ws.row_dimensions[1].height = 50
@@ -268,7 +273,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
     ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
-    for c in range(2, 18):
+    for c in range(2, 19):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(
@@ -410,7 +415,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
     ws.row_dimensions[9].height = 28
 
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C']
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -431,7 +436,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             top=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
             left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
-            right=Side(style='medium', color=EXCEL_GREEN) if col == 17 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 18 else None,
         )
 
     # ═══ DATA ROWS (row 10+) ═══
@@ -517,6 +522,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
         banco = (g.get('banco') or '').strip()
+        # USUARIO se resuelve por el folio (poliza_row) usando el mapa
+        # invertido de POLIZAS_CLARA. Si el folio del Saldos no matchea
+        # ningún colaborador del mapa, cae al nombre del colaborador dueño
+        # del reporte (e.g., 'Alejandro Olivar' para sus propias facturas).
+        usuario = usuario_por_poliza.get(str(poliza_row).strip()) or colaborador or ''
         cells = [
             (2,  g.get('rfc', ''),       'left',   'rfc'),
             (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
@@ -538,6 +548,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             (15, banco,                  'center', 'normal'),
             (16, monto_usd,              'center', 'currency'),
             (17, tc_val,                 'center', 'tipocambio'),
+            (18, usuario,                'center', 'normal'),
         ]
 
         for col, val, align, style_type in cells:
@@ -575,7 +586,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-        ws.cell(row=row, column=18).fill = PatternFill('solid', start_color=BG_PAGE)
+        ws.cell(row=row, column=19).fill = PatternFill('solid', start_color=BG_PAGE)
 
         row += 1
 
@@ -589,7 +600,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
 
             # Paint the whole band first so per-cell font/border calls below
             # only need to touch the cells that carry content.
-            for c in range(1, 18):
+            for c in range(1, 19):
                 pcell = ws.cell(row=row, column=c)
                 pcell.fill = PatternFill('solid', start_color=propina_bg)
                 pcell.border = Border(bottom=Side(style='hair', color=BORDER_LIGHT))
@@ -643,7 +654,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             # Outer spacers stay on page bg so the propina band fits inside
             # the table boundary like every other data row.
             ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-            ws.cell(row=row, column=18).fill = PatternFill('solid', start_color=BG_PAGE)
+            ws.cell(row=row, column=19).fill = PatternFill('solid', start_color=BG_PAGE)
 
             row += 1
 
@@ -652,7 +663,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
     row += 1
 
     ws.row_dimensions[row].height = 32
-    for c in range(2, 18):
+    for c in range(2, 19):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
         cell.border = Border()
@@ -687,16 +698,17 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # FORMA PAGO (N), BANCO (O) y T/C (Q) en la banda de totales sólo llevan
-    # el fill negro (FORMA y BANCO son no-agregables; T/C es per-fila).
+    # FORMA PAGO (N), BANCO (O), T/C (Q) y USUARIO (R) en la banda de
+    # totales sólo llevan el fill negro (no son agregables).
     ws.cell(row=row, column=14).fill = PatternFill('solid', start_color=SMTO_BLACK)
     ws.cell(row=row, column=15).fill = PatternFill('solid', start_color=SMTO_BLACK)
     ws.cell(row=row, column=17).fill = PatternFill('solid', start_color=SMTO_BLACK)
+    ws.cell(row=row, column=18).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
-    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=17)
+    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=18)
     ft = ws.cell(row=row, column=11)
     ft.value = 'SMTO Engineering · v7.78'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
@@ -755,14 +767,17 @@ class handler(BaseHTTPRequestHandler):
                 gastos = data.get('gastos', [])
                 colaborador = data.get('colaborador', '')
                 poliza_numero = data.get('polizaNumero', 'N/A')
+                polizas_map = data.get('polizasMap', {}) or {}
             else:
                 gastos = data
                 colaborador = ''
                 poliza_numero = 'N/A'
+                polizas_map = {}
             gastos = sanitize(gastos)
             colaborador = sanitize(colaborador)
             poliza_numero = sanitize(poliza_numero)
-            wb = build_workbook(gastos, colaborador, poliza_numero)
+            polizas_map = sanitize(polizas_map) if isinstance(polizas_map, dict) else {}
+            wb = build_workbook(gastos, colaborador, poliza_numero, polizas_map)
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)
