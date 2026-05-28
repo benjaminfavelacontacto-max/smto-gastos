@@ -200,10 +200,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates).
     # Layout: A spacer, B-N data, O BANCO (nuevo), P MONTO USD, Q T/C, R spacer.
+    # BANCO ahora carga el nombre completo de la pestaña Saldos
+    # (e.g. "BBVA MXN Cheques", "Monex USD Cheques") — necesita ancho extra.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
         'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 18, 'N': 15,
-        'O': 12, 'P': 13, 'Q': 13, 'R': 3,
+        'O': 22, 'P': 13, 'Q': 13, 'R': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w

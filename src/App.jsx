@@ -3837,10 +3837,12 @@ export default function App() {
         const m = result.matched.find(x => x.gastoId === g.id)
         if (!m) return g
         const fechaCobro = saldosFechaToIso(m.saldosRow.fecha) || g.fechaCobro
-        // El "banco" es la primera palabra del nombre de la pestaña Saldos
-        // donde apareció la fila (e.g. "BBVA MXN Cheques" → "BBVA"). Se
-        // muestra en la columna BANCO del Excel exportado.
-        const banco = String(m.saldosRow.sheet || '').trim().split(/\s+/)[0] || ''
+        // El "banco" es el nombre COMPLETO de la pestaña Saldos donde
+        // apareció la fila (e.g. "BBVA MXN Cheques", "Monex USD Cheques",
+        // "Kapital MXN Flex"). Esto identifica la cuenta exacta — distingue
+        // BBVA Cheques de BBVA Concentradora, MXN de USD, etc. Se muestra
+        // en la columna BANCO del Excel exportado.
+        const banco = String(m.saldosRow.sheet || '').trim().replace(/\s+/g, ' ')
         return {
           ...g,
           polizaNumero: m.saldosRow.folio || 'N/A',
@@ -4001,7 +4003,7 @@ export default function App() {
             esTicket:    false,
             esNomina:    true,
             polizaNumero: folio,
-            banco:       String(r.sheet || '').trim().split(/\s+/)[0] || '',
+            banco:       String(r.sheet || '').trim().replace(/\s+/g, ' '),
             isNew: true,
           })
         }
@@ -4215,7 +4217,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.78</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.79</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
