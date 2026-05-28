@@ -48,6 +48,7 @@ class handler(BaseHTTPRequestHandler):
                             'type': 'text',
                             'text': '''Extract receipt/ticket/invoice data. Respond ONLY with a JSON object, no markdown, no explanation:
 {
+  "tipoDocumento": "ticket | pedimento",
   "proveedor": "business or restaurant name",
   "concepto": "brief description (food, gas, hotel, taxi, etc)",
   "fecha": "YYYY-MM-DD or null",
@@ -62,7 +63,25 @@ class handler(BaseHTTPRequestHandler):
   "folio": "card authorization / approval code as plain digits",
   "formaPago": "04"
 }
-Rules:
+
+DETECCION DEL TIPO DE DOCUMENTO:
+- Si el documento contiene los textos "Num Pedimento", "Pedimento", "Importe Pagado", "Fecha de Pago" y/o "Aduana" → es un PEDIMENTO de importacion mexicano. Marca tipoDocumento="pedimento".
+- En cualquier otro caso → tipoDocumento="ticket" y aplica las reglas de ticket/recibo normales.
+
+REGLAS PARA PEDIMENTO (tipoDocumento="pedimento"):
+- folio: el numero que aparece junto a "Num Pedimento" o "Numero de Pedimento" — preservalo TAL CUAL (con guiones, espacios, etc, sin alterar). Este es el identificador unico del pedimento.
+- fecha: la fecha que aparece junto a "Fecha de Pago" (formato YYYY-MM-DD). NO uses la fecha de emision ni la fecha de operacion.
+- total: el monto que aparece junto a "Importe Pagado" o "Total Pagado". Es la cifra final en pesos mexicanos.
+- subtotal: usa el mismo valor que total (no aplica desglose de IVA en pedimentos).
+- iva: 0 (los pedimentos ya incluyen los impuestos prorrateados en el importe pagado).
+- propina: 0
+- proveedor: "Aduana"
+- concepto: "Tramite de Aduana"
+- moneda: "MXN" (los pedimentos se pagan siempre en pesos mexicanos)
+- formaPago: "03" (transferencia)
+- propinaSugerida18/20/22: 0
+
+REGLAS PARA TICKET (tipoDocumento="ticket"):
 - proveedor: full business name as shown on receipt
 - folio: look for Approval Code, Authorization Code, Auth, Approval, Code — return ONLY the digits as a plain string. If multiple codes exist prefer the one labeled "Approval" or "Authorization". This number is critical for bank matching, so do not strip leading zeros or insert dashes. If no auth code is shown fall back to a visible Check #, Ticket # or Receipt # in the same plain-digits form.
 - formaPago: 04=card/mastercard/visa, 02=cash/efectivo

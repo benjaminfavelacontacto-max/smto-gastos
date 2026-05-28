@@ -491,6 +491,15 @@ function parseSaldosXLSX(arrayBuffer) {
       const factura = String(getCell(r, cols.factura) || '').trim()
       if (!factura || factura.toUpperCase() === 'NA') continue
       const folio = cols.folio !== null ? String(getCell(r, cols.folio) || '').trim() : ''
+      // Detección de USD: barre TODAS las columnas del renglón en busca del
+      // acrónimo USD o "dólar/dolar". Algunas pestañas marcan moneda en una
+      // columna fuera del set principal (Tipo / Concepto / Factura).
+      let moneda = 'MXN'
+      const colMax = Math.min(range.e.c, 20)
+      for (let c = range.s.c; c <= colMax; c++) {
+        const v = String(getCell(r, c) || '').toUpperCase()
+        if (/\bUSD\b|\bD[ÓO]LAR/.test(v)) { moneda = 'USD'; break }
+      }
       rows.push({
         sheet:    sheetName,
         fecha:    getCell(r, cols.fecha) || '',
@@ -499,6 +508,7 @@ function parseSaldosXLSX(arrayBuffer) {
         factura,
         concepto: String(getCell(r, cols.concepto) || '').trim(),
         egreso:   Number(getCell(r, cols.egreso)) || 0,
+        moneda,
       })
     }
   }
@@ -510,37 +520,65 @@ function parseSaldosXLSX(arrayBuffer) {
 const normFactura = (s) => String(s || '').replace(/[\s\-/.]/g, '').toUpperCase()
 
 /* Cotejo: por cada gasto busca la fila del Saldos con la misma factura
-   normalizada. Devuelve los matched, sin-match por ambos lados, y marca
-   las discrepancias de tipo para que el usuario decida. */
+   normalizada, MISMO AÑO y MISMA MONEDA. Esto evita matchear una factura
+   2026 contra un renglón Saldos 2025, y evita matchear USD contra MXN.
+   Devuelve los matched, sin-match por ambos lados, y marca las
+   discrepancias de tipo para que el usuario decida. */
 function cotejarConSaldos(saldosRows, lista) {
-  const matched = []
-  const sinMatchGastos = []
-  const usedSaldos = new Set()
+  // 1) Conjunto de años presentes en los gastos
+  const gastoYears = new Set()
+  lista.forEach(g => {
+    const y = String(g.fechaFac || '').slice(0, 4)
+    if (/^\d{4}$/.test(y)) gastoYears.add(y)
+  })
 
+  // 2) Filtrar Saldos: solo renglones cuyo año esté en el set de gastos.
+  //    Si los gastos no tienen año detectable, cae al comportamiento previo.
+  const filterByYear = gastoYears.size > 0
+  const filteredSaldos = filterByYear
+    ? saldosRows.filter(row => {
+        const yearStr = (saldosFechaToIso(row.fecha) || '').slice(0, 4)
+        return /^\d{4}$/.test(yearStr) && gastoYears.has(yearStr)
+      })
+    : saldosRows
+
+  // 3) Índice por factura normalizada → posiciones dentro de filteredSaldos
   const byFactura = new Map()
-  saldosRows.forEach((row, idx) => {
+  filteredSaldos.forEach((row, idx) => {
     const k = normFactura(row.factura)
     if (!k) return
     if (!byFactura.has(k)) byFactura.set(k, [])
     byFactura.get(k).push(idx)
   })
 
+  const matched = []
+  const sinMatchGastos = []
+  const usedSaldos = new Set()
+
+  // 4) Match con constraint de moneda: USD-gasto solo matchea USD-saldos.
   lista.forEach((g) => {
     const k = normFactura(g.noFactura)
     const candidates = k ? (byFactura.get(k) || []) : []
-    const saldosIdx = candidates.find(idx => !usedSaldos.has(idx))
+    const gMoneda = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
+
+    const saldosIdx = candidates.find(idx => {
+      if (usedSaldos.has(idx)) return false
+      const sMoneda = (filteredSaldos[idx].moneda || 'MXN').toString().toUpperCase()
+      return sMoneda === gMoneda
+    })
+
     if (saldosIdx === undefined) {
       sinMatchGastos.push(g)
       return
     }
     usedSaldos.add(saldosIdx)
-    const sRow = saldosRows[saldosIdx]
+    const sRow = filteredSaldos[saldosIdx]
     const tipoDiffers = !!sRow.tipo && !!g.tipo &&
       sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
     matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers })
   })
 
-  const sinMatchSaldos = saldosRows.filter((_, idx) => !usedSaldos.has(idx))
+  const sinMatchSaldos = filteredSaldos.filter((_, idx) => !usedSaldos.has(idx))
   return { matched, sinMatchGastos, sinMatchSaldos }
 }
 
@@ -2124,6 +2162,7 @@ export default function App() {
   const saldosRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
   const [duplicadosModal, setDuplicadosModal] = useState(null)
+  const [ocrSelectionModal, setOcrSelectionModal] = useState(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -2262,7 +2301,7 @@ export default function App() {
       }
     }
 
-    const applyBatch = (batch) => {
+    const applyBatch = (batch, ocrCount = 0) => {
       setLista(batch)
       setLoading(false)
       if (batch.length > 0) {
@@ -2270,17 +2309,86 @@ export default function App() {
         showModal({
           type: 'success',
           title: 'Carpeta cargada',
-          subtitle: `Procesamos ${xmls.length} archivo${xmls.length === 1 ? '' : 's'} correctamente.`,
+          subtitle: `Procesamos ${xmls.length} XML${xmls.length === 1 ? '' : 's'}${ocrCount > 0 ? ` + ${ocrCount} OCR` : ''} correctamente.`,
           stats: [
             { value: `+${batch.length}`,                label: 'Facturas nuevas', color: '#59D39B' },
             { value: xmls.length,                       label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
             ...(linkedPDFs > 0 ? [{ value: linkedPDFs, label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
+            ...(ocrCount > 0  ? [{ value: ocrCount,    label: 'OCR IA',          color: '#f59e0b' }] : []),
           ],
           primaryLabel: 'Continuar',
         })
         setCarpetaSuccess(true)
         setTimeout(() => setCarpetaSuccess(false), 2500)
       }
+    }
+
+    // Helper: detecta orphan PDFs (sin XML pareja) + imágenes en la carpeta.
+    // Son candidatos a OCR; el usuario decide uno por uno cuáles procesar.
+    const detectOcrCandidates = (xmlGastos) => {
+      const linkedPdfNames = new Set(
+        xmlGastos.filter(g => g.pdfFile).map(g => g.pdfFile.name)
+      )
+      const orphanPDFs = pdfs.filter(p => !linkedPdfNames.has(p.name))
+      const imageFiles = files.filter(f =>
+        /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(f.name)
+      )
+      return [...orphanPDFs, ...imageFiles]
+    }
+
+    // Helper: corre OCR sobre los archivos seleccionados, regresa los gastos
+    // ya formateados (con pdfDataURL/imageDataURL para el export).
+    const runOcrOnSelection = async (selectedFiles) => {
+      if (!selectedFiles.length) return []
+      setLoading(true)
+      const results = []
+      for (const file of selectedFiles) {
+        try {
+          const isImage = (file.type || '').startsWith('image/') ||
+            /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(file.name)
+          const fileForOCR = isImage ? await compressImage(file) : file
+          const base64 = await fileToBase64(fileForOCR)
+          const mediaType = isImage ? 'image/jpeg' : 'application/pdf'
+          const g = await extractReceiptData(base64, mediaType, file.name)
+          if (isImage) {
+            try { g.imageDataURL = await fileToDataURL(fileForOCR) } catch {}
+            g.originalFileName = file.name
+          } else {
+            g.pdfFile = file
+            g.tienePDF = true
+            try { g.pdfDataURL = await fileToDataURL(file) } catch {}
+          }
+          g.isNew = true
+          results.push(g)
+        } catch (err) {
+          console.warn('OCR failed for', file.name, err)
+        }
+      }
+      setLoading(false)
+      return results
+    }
+
+    // Wraps applyBatch: si hay candidatos OCR abre el modal de selección;
+    // si el usuario cancela u opta por no procesar nada, aplica sólo XMLs.
+    const applyBatchWithOcrGate = (xmlBatch) => {
+      const candidates = detectOcrCandidates(xmlBatch)
+      if (candidates.length === 0) {
+        applyBatch(xmlBatch)
+        return
+      }
+      setLoading(false)
+      setOcrSelectionModal({
+        items: candidates.map(f => ({ file: f, selected: false })),
+        onConfirm: async (selectedFiles) => {
+          setOcrSelectionModal(null)
+          const ocrResults = await runOcrOnSelection(selectedFiles)
+          applyBatch([...xmlBatch, ...ocrResults], ocrResults.length)
+        },
+        onCancel: () => {
+          setOcrSelectionModal(null)
+          applyBatch(xmlBatch)
+        },
+      })
     }
 
     // Detect duplicate RFC+noFactura keys within this batch
@@ -2299,11 +2407,11 @@ export default function App() {
         incoming: nueva,
         onConfirm: (kept) => {
           setDuplicadosModal(null)
-          applyBatch(kept)
+          applyBatchWithOcrGate(kept)
         },
       })
     } else {
-      applyBatch(nueva)
+      applyBatchWithOcrGate(nueva)
     }
   }
 
@@ -2350,16 +2458,63 @@ export default function App() {
     }
     const parsed = await response.json()
     const uuid = crypto.randomUUID()
-    const monedaCode = (parsed.moneda || 'MXN').toString().toUpperCase()
-    const isExtranjera = !!monedaCode && monedaCode !== 'MXN'
+    const esPedimento  = (parsed.tipoDocumento || '').toString().toLowerCase() === 'pedimento'
+    const monedaCode   = esPedimento ? 'MXN' : (parsed.moneda || 'MXN').toString().toUpperCase()
+    const isExtranjera = !esPedimento && !!monedaCode && monedaCode !== 'MXN'
     const today = new Date().toISOString().slice(0, 10)
     const subtotal = Number(parsed.subtotal) || 0
     const iva = Number(parsed.iva) || 0
     const total = Number(parsed.total) || 0
-    const propina = Number(parsed.propina) || 0
-    const propinaSugerida18 = Number(parsed.propinaSugerida18) || 0
-    const propinaSugerida20 = Number(parsed.propinaSugerida20) || 0
-    const propinaSugerida22 = Number(parsed.propinaSugerida22) || 0
+    const propina = esPedimento ? 0 : Number(parsed.propina) || 0
+    const propinaSugerida18 = esPedimento ? 0 : Number(parsed.propinaSugerida18) || 0
+    const propinaSugerida20 = esPedimento ? 0 : Number(parsed.propinaSugerida20) || 0
+    const propinaSugerida22 = esPedimento ? 0 : Number(parsed.propinaSugerida22) || 0
+
+    // Pedimento branch: el importe pagado entra como total y como importe;
+    // sin IVA desglosado, sin propina. proveedor/concepto fijos. esTicket=false
+    // para que Pass 0 (auth code en CSV Clara) NO intente matchearlo.
+    if (esPedimento) {
+      const importePagado = total || subtotal
+      return {
+        id: genId(),
+        rfc: '',
+        proveedor: parsed.proveedor || 'Aduana',
+        noFactura: String(parsed.folio || ('PED-' + uuid.slice(0, 6).toUpperCase())),
+        fechaFac:  parsed.fecha || today,
+        concepto:  parsed.concepto || 'Tramite de Aduana',
+        tipo: autoDetectTipo('Aduana', 'pedimento importacion', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria),
+        importe:    importePagado,
+        iva:        0,
+        isrTrasladado:  0,
+        retencionISR:   0,
+        retencionIVA:   0,
+        retenciones:    0,
+        totalCFDI:  importePagado,
+        propinaPorcentaje: 0,
+        montoPropina:      0,
+        fechaCobro: parsed.fecha || today,
+        formaPago: parsed.formaPago || '03',
+        uuid,
+        tienePDF: false,
+        pdfFile: null,
+        xmlFile: null,
+        hizoMatch: false,
+        validado: false,
+        montoExtranjero:    0,
+        propinaExtranjero:  0,
+        monedaCodigo:       'MXN',
+        esMonedaExtranjera: false,
+        montoUSD:           0,
+        tipoCambio:         0,
+        moneda:             'MXN',
+        esTicket:           false,
+        esPedimento:        true,
+        subtotal:           importePagado,
+        propinaSugerida18:  0,
+        propinaSugerida20:  0,
+        propinaSugerida22:  0,
+      }
+    }
 
     return {
       id: genId(),
@@ -3661,7 +3816,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.60</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.61</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4104,6 +4259,71 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ─── MODAL SELECCIÓN OCR (archivos sin XML en la carpeta) ─── */}
+      {ocrSelectionModal && (() => {
+        const { items, onConfirm, onCancel } = ocrSelectionModal
+        const selectedCount = items.filter(i => i.selected).length
+        const costEstimate  = (selectedCount * 0.01).toFixed(2)
+        const setAllSelected = (val) => setOcrSelectionModal(prev => ({
+          ...prev,
+          items: prev.items.map(i => ({ ...i, selected: val })),
+        }))
+        const toggle = (idx) => setOcrSelectionModal(prev => ({
+          ...prev,
+          items: prev.items.map((i, k) => k === idx ? { ...i, selected: !i.selected } : i),
+        }))
+        return (
+          <div className="premium-overlay" onClick={onCancel}>
+            <div className="premium-modal" style={{ maxWidth: 580 }} onClick={e => e.stopPropagation()}>
+              <div className="premium-icon-wrap" style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)' }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>
+                </svg>
+              </div>
+              <h2 className="premium-title">Archivos sin XML detectados</h2>
+              <p className="premium-subtitle">
+                {items.length} archivo{items.length === 1 ? '' : 's'} en la carpeta no {items.length === 1 ? 'tiene' : 'tienen'} un XML pareja.
+                Selecciona cuáles procesar con OCR. Cada uno consume ~$0.01 USD de IA.
+              </p>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '12px 0 4px', fontSize: 12 }}>
+                <button
+                  onClick={() => setAllSelected(true)}
+                  style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.75)', padding: '4px 12px', borderRadius: 6, cursor: 'pointer' }}
+                >Seleccionar todos</button>
+                <button
+                  onClick={() => setAllSelected(false)}
+                  style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.75)', padding: '4px 12px', borderRadius: 6, cursor: 'pointer' }}
+                >Ninguno</button>
+              </div>
+              <div className="ocr-list">
+                {items.map((it, idx) => {
+                  const isImage = (it.file.type || '').startsWith('image/') ||
+                    /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(it.file.name)
+                  return (
+                    <label key={idx} className={`ocr-item${it.selected ? ' selected' : ''}`}>
+                      <input type="checkbox" checked={it.selected} onChange={() => toggle(idx)} />
+                      <span className={`ocr-item-badge ${isImage ? 'img' : 'pdf'}`}>{isImage ? 'IMG' : 'PDF'}</span>
+                      <span className="ocr-item-name">{it.file.name}</span>
+                    </label>
+                  )
+                })}
+              </div>
+              <div style={{ marginTop: 12, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
+                {selectedCount === 0
+                  ? 'Sin archivos seleccionados — se cargarán solo los XMLs'
+                  : `${selectedCount} seleccionado${selectedCount === 1 ? '' : 's'} · costo estimado ~$${costEstimate} USD`}
+              </div>
+              <div className="premium-actions" style={{ marginTop: 18 }}>
+                <button className="premium-btn-secondary" onClick={onCancel}>Cancelar</button>
+                <button className="premium-btn-primary" onClick={() => onConfirm(items.filter(i => i.selected).map(i => i.file))}>
+                  {selectedCount === 0 ? 'Continuar sin OCR' : `Procesar ${selectedCount}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ─── MODAL CONCILIACIÓN BANCARIA (premium glass) ─── */}
       <AnimatePresence>
