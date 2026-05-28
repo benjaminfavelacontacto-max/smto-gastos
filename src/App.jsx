@@ -9,8 +9,14 @@ import { autoDetectTipo } from './tipoRules'
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
    (Admin/Servicio) sees the operational list. */
 const TIPOS_VENTAS = [
+  'Aduana',
+  'Automóvil',
   'Avión Ventas',
   'Casetas Ventas',
+  'COGS',
+  'Comercio Exterior',
+  'Consultoría',
+  'Contador',
   'Envíos',
   'Estacionamiento Ventas',
   'Gasolina Ventas',
@@ -19,15 +25,23 @@ const TIPOS_VENTAS = [
   'Gastos Rep Viáticos',
   'Herramientas Ventas',
   'Hotel Ventas',
+  'IT & SW (Software/Sistemas)',
   'Marketing',
+  'Renta Oficina',
 ]
 
 const TIPOS_NORMALES = [
+  'Aduana',
+  'Automóvil',
   'Avión',
   'Casetas',
   'Celular',
+  'COGS',
+  'Comercio Exterior',
+  'Consultoría',
   'Consumo',
   'Consumo Viáticos',
+  'Contador',
   'Envíos',
   'Estacionamiento',
   'Gasolina',
@@ -74,6 +88,7 @@ const TIPOS_ESPECIALES = [
   'IMSS',
   'ISR',
   'IT&SW',
+  'IT & SW (Software/Sistemas)',
   'Manto Auto',
   'Marketing',
   'No Comprobado',
@@ -3358,7 +3373,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.45</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.46</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
