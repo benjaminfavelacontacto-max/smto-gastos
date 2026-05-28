@@ -121,7 +121,8 @@ body::before {
    ACTION BAR
 ═══════════════════════════════════════════ */
 .action-bar {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 8px;
   padding: 12px 32px;
   background: rgba(255, 255, 255, 0.02);
   backdrop-filter: blur(16px);
@@ -130,7 +131,8 @@ body::before {
   flex-shrink: 0;
 }
 
-.action-group { display: flex; align-items: center; gap: 10px; }
+.action-group { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.action-bar > .action-group:last-child { margin-left: auto; }
 
 /* ═══════════════════════════════════════════
    BUTTONS
