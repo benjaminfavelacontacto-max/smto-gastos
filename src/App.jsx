@@ -3882,23 +3882,28 @@ export default function App() {
         return
       }
 
-      // Filtro por año — SIEMPRE se aplica. Si la lista ya tiene gastos
-      // cargados, usa los años de esos gastos. Si la lista está vacía
-      // (usuario clickea 'Agregar Nómina' sin haber subido XMLs todavía),
-      // cae al año del sistema. Nunca se carga sin filtro.
-      const gastoYears = new Set()
+      // Filtro por MES + AÑO — SIEMPRE se aplica. Si la lista ya tiene
+      // gastos, usa los meses (YYYY-MM) de esos gastos. Si está vacía
+      // (usuario clickea 'Agregar Nómina' sin XMLs todavía), cae al mes
+      // actual del sistema. Así sólo entran nóminas del periodo activo.
+      const gastoYearMonths = new Set()
       lista.forEach(g => {
-        const y = String(g.fechaFac || '').slice(0, 4)
-        if (/^\d{4}$/.test(y)) gastoYears.add(y)
+        const ym = String(g.fechaFac || '').slice(0, 7)
+        if (/^\d{4}-\d{2}$/.test(ym)) gastoYearMonths.add(ym)
       })
-      if (gastoYears.size === 0) {
-        gastoYears.add(String(new Date().getFullYear()))
+      if (gastoYearMonths.size === 0) {
+        const now = new Date()
+        gastoYearMonths.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
       }
       const filtered = nominaRows.filter(r => {
-        const y = (saldosFechaToIso(r.fecha) || '').slice(0, 4)
-        return /^\d{4}$/.test(y) && gastoYears.has(y)
+        const ym = (saldosFechaToIso(r.fecha) || '').slice(0, 7)
+        return /^\d{4}-\d{2}$/.test(ym) && gastoYearMonths.has(ym)
       })
-      const yearLabel = [...gastoYears].sort().join(', ')
+      const MES_NOMBRES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+      const yearLabel = [...gastoYearMonths].sort().map(ym => {
+        const [y, m] = ym.split('-')
+        return `${MES_NOMBRES[parseInt(m, 10) - 1]} ${y}`
+      }).join(', ')
 
       // Dedup contra la lista existente
       const existingKeys = new Set(lista.map(g => `${g.rfc}|${g.noFactura}`))
@@ -4147,7 +4152,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.75</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.76</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
