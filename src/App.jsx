@@ -2364,10 +2364,24 @@ export default function App() {
     // Helper: detecta orphan PDFs (sin XML pareja) + imágenes en la carpeta.
     // Son candidatos a OCR; el usuario decide uno por uno cuáles procesar.
     const detectOcrCandidates = (xmlGastos) => {
+      // Fuente 1: gastos que parseCFDI logró linkear con su PDF
       const linkedPdfNames = new Set(
         xmlGastos.filter(g => g.pdfFile).map(g => g.pdfFile.name)
       )
-      const orphanPDFs = pdfs.filter(p => !linkedPdfNames.has(p.name))
+      // Fuente 2 (defensa de raíz): la carpeta tiene un archivo .xml con el
+      // MISMO nombre base que el PDF. Aunque parseCFDI haya fallado al parsear
+      // ese XML (namespace raro, sello inválido, RFC vacío, etc.) o aunque
+      // la heurística de matching no haya tripeado, el PDF claramente tiene
+      // XML pareja en el folder y NO debe mandarse a OCR.
+      const xmlBaseNames = new Set(
+        xmls.map(x => normName(x.name.replace(/\.xml$/i, '')))
+      )
+      const orphanPDFs = pdfs.filter(p => {
+        if (linkedPdfNames.has(p.name)) return false
+        const pdfBase = normName(p.name.replace(/\.pdf$/i, ''))
+        if (xmlBaseNames.has(pdfBase)) return false
+        return true
+      })
       const imageFiles = files.filter(f =>
         /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(f.name)
       )
@@ -3854,7 +3868,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.63</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.64</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
