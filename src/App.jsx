@@ -495,13 +495,12 @@ function parseSaldosXLSX(arrayBuffer) {
         const factura = String(getCell(r, cols.factura) || '').trim()
         const tipo    = String(getCell(r, cols.tipo) || '').trim()
         const concepto = String(getCell(r, cols.concepto) || '').trim()
-        // Skip filas vacías (sin tipo, factura, ni concepto)
+        // Skip filas completamente vacías (sin tipo, factura, ni concepto)
         if (!factura && !tipo && !concepto) continue
-        // Skip filas con factura NA EXCEPTO si son Nómina — el cotejo las
-        // ignora (factura inválida) pero el flujo "Agregar Nómina" las
-        // necesita para identificarlas via tipo="Nómina ...".
-        const isNomina = /^n[óo]mina\b/i.test(tipo)
-        if (!isNomina && (!factura || factura.toUpperCase() === 'NA')) continue
+        // Las filas con factura 'NA' SI se conservan — el cotejo principal
+        // (por factura) las ignora, pero el fallback de cotejo (por
+        // proveedor + monto + año-mes) las usa para asignar banco a gastos
+        // cuyo registro en Saldos no trae folio explícito.
         const folio = cols.folio !== null ? String(getCell(r, cols.folio) || '').trim() : ''
         // Detección de USD: barre TODAS las columnas del renglón en busca del
         // acrónimo USD o "dólar/dolar". Algunas pestañas marcan moneda en una
@@ -600,6 +599,46 @@ function cotejarConSaldos(saldosRows, lista) {
       sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
     matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers })
   })
+
+  // 5) FALLBACK match: para gastos que no encontraron factura en el Saldos,
+  //    intenta matchear contra los renglones con factura='NA' (o vacía) por
+  //    PROVEEDOR + MONTO + AÑO-MES. Cubre el caso donde el Saldos no tiene
+  //    el folio de la factura pero sí registra el movimiento del banco.
+  const normProv = s => String(s || '')
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const stillSinMatch = []
+  for (const g of sinMatchGastos) {
+    const gProv = normProv(g.proveedor)
+    if (gProv.length < 8) { stillSinMatch.push(g); continue }
+    const gTotal = Number(g.totalCFDI) || 0
+    const gYM = String(g.fechaFac || '').slice(0, 7)
+
+    let foundIdx = -1
+    for (let i = 0; i < filteredSaldos.length; i++) {
+      if (usedSaldos.has(i)) continue
+      const row = filteredSaldos[i]
+      const facNorm = normFactura(row.factura)
+      if (facNorm && facNorm !== 'NA') continue  // solo filas sin factura clara
+      const rowYM = (saldosFechaToIso(row.fecha) || '').slice(0, 7)
+      if (rowYM && gYM && rowYM !== gYM) continue
+      const concNorm = normProv(row.concepto)
+      if (!concNorm.includes(gProv)) continue
+      // Tolera diferencia de ±$0.01 para evitar problemas de redondeo.
+      if (gTotal > 0 && Math.abs((Number(row.egreso) || 0) - gTotal) > 0.01) continue
+      foundIdx = i
+      break
+    }
+
+    if (foundIdx === -1) { stillSinMatch.push(g); continue }
+    usedSaldos.add(foundIdx)
+    const sRow = filteredSaldos[foundIdx]
+    const tipoDiffers = !!sRow.tipo && !!g.tipo &&
+      sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
+    matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers })
+  }
+  sinMatchGastos.length = 0
+  sinMatchGastos.push(...stillSinMatch)
 
   const sinMatchSaldos = filteredSaldos.filter((_, idx) => !usedSaldos.has(idx))
   return { matched, sinMatchGastos, sinMatchSaldos }
@@ -4217,7 +4256,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.79</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.80</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
