@@ -1057,8 +1057,10 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   transition: all 0.2s;
 }
 .premium-btn-primary {
+  background: #0A84FF;
   color: white;
   letter-spacing: -0.01em;
+  box-shadow: 0 0 0 1px rgba(10, 132, 255, 0.3), 0 4px 12px rgba(10, 132, 255, 0.2);
 }
 .premium-btn-primary:hover {
   transform: translateY(-1px);
