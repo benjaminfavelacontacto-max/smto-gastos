@@ -450,6 +450,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
         tipo = g.get('tipo', 'Consumo')
         monto_usd_raw = round(g.get('montoUSD', 0) or 0, 2)
         tipo_cambio = round(g.get('tipoCambio', 0) or 0, 2)
+        # Valores en USD preservados desde parseCFDI (importe/iva/ret en la
+        # gasto vienen en 0 hasta que se aplique el T/C en el Excel). El
+        # bloque is_usd_row de abajo los multiplica por la celda editable.
+        importe_usd_raw = round(g.get('importeUSD', 0) or 0, 2)
+        iva_usd_raw     = round(g.get('ivaUSD', 0) or 0, 2)
+        ret_usd_raw     = round(g.get('retencionesUSD', 0) or 0, 2)
         # Per-row póliza (sólo se llena cuando el colaborador es especial
         # y corrió el cotejo con su Saldos); para todos los demás cae al
         # folio Clara global del colaborador.
@@ -481,17 +487,25 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
         # USD passthrough: si el colaborador es especial y la factura viene
         # en moneda extranjera, IMPORTE / IVA / RETENCIÓN / T/C usan formulas
         # que multiplican el valor en USD por la celda editable $N$7. Cambiar
-        # esa celda recalcula toda la fila al instante.
+        # esa celda recalcula toda la fila al instante. importe/iva/ret en
+        # la gasto vienen en 0 (la UI los muestra así hasta tener T/C); los
+        # valores reales en USD viajan en importeUSD / ivaUSD / retencionesUSD.
         is_usd_row = (
             is_especial
             and tc_ref is not None
             and (moneda_code or 'MXN').upper() not in ('MXN', '', 'XXX')
-            and (importe_raw > 0 or iva > 0 or ret > 0)
+            and (importe_usd_raw > 0 or iva_usd_raw > 0 or ret_usd_raw > 0 or monto_usd_raw > 0)
         )
         if is_usd_row:
-            importe_val = f'={importe_raw}*{tc_ref}'
-            iva_val     = f'={iva}*{tc_ref}'
-            ret_val     = f'={ret}*{tc_ref}'
+            # Fallback: si por alguna razón no llegaron los desgloses USD,
+            # asumimos que el total USD ES el subtotal (IVA/Ret = 0) — el
+            # MXN-importe siempre coincidirá con el MONTO USD visible.
+            usd_imp = importe_usd_raw if importe_usd_raw > 0 else monto_usd_raw
+            usd_iva = iva_usd_raw
+            usd_ret = ret_usd_raw
+            importe_val = f'={usd_imp}*{tc_ref}'
+            iva_val     = f'={usd_iva}*{tc_ref}' if usd_iva > 0 else 0
+            ret_val     = f'={usd_ret}*{tc_ref}' if usd_ret > 0 else 0
             tc_val      = f'={tc_ref}'
         else:
             importe_val = importe

@@ -821,13 +821,18 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
   const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
-  // Moneda + tipo de cambio del CFDI. Si el comprobante viene en USD u otra
-  // divisa, los campos importe / iva / retenciones / totalCFDI quedan en esa
-  // moneda extranjera (tal como los emite el SAT). El backend de Excel para
-  // colaboradores especiales convierte esos valores a MXN vía celda editable.
+  // Moneda + tipo de cambio del CFDI. Para CFDIs en USD / otra divisa:
+  //   - importe / iva / retenciones / totalCFDI quedan en 0 en la UI hasta
+  //     que el usuario aplique un T/C (se hace en el Excel, no aquí).
+  //   - los montos originales en USD se preservan en importeUSD / ivaUSD /
+  //     retencionesUSD / montoUSD para que el backend de Excel los pueda
+  //     multiplicar por la celda editable de T/C (=USD * $N$7).
   const monedaXML      = (ga(comp, 'Moneda', 'moneda') || 'MXN').toUpperCase()
   const tipoCambioXML  = parseFloat(ga(comp, 'TipoCambio', 'tipocambio') || '0') || 0
   const esExtranjera   = monedaXML !== 'MXN' && monedaXML !== 'XXX'
+  const importeUSD     = esExtranjera ? importe     : 0
+  const ivaUSD         = esExtranjera ? iva         : 0
+  const retencionesUSD = esExtranjera ? retenciones : 0
   return {
     id: genId(),
     rfc,
@@ -844,13 +849,13 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     fechaFac,
     concepto:   conceptoClasif,
     tipo: autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria, claveProdServ),
-    importe,
-    iva,
+    importe:        esExtranjera ? 0 : importe,
+    iva:            esExtranjera ? 0 : iva,
     isrTrasladado,
     retencionISR,
     retencionIVA,
-    retenciones,
-    totalCFDI,
+    retenciones:    esExtranjera ? 0 : retenciones,
+    totalCFDI:      esExtranjera ? 0 : totalCFDI,
     propinaPorcentaje: 0,
     montoPropina: 0,
     fechaCobro: fechaFac,
@@ -867,6 +872,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     validado: false,
     montoUSD:           esExtranjera ? totalCFDI : 0,
     montoExtranjero:    esExtranjera ? totalCFDI : 0,
+    importeUSD,
+    ivaUSD,
+    retencionesUSD,
     tipoCambio:         esExtranjera ? tipoCambioXML : 0,
     moneda:             monedaXML,
     monedaCodigo:       monedaXML,
@@ -3452,6 +3460,9 @@ export default function App() {
       propinaExtranjero:Number(g.propinaExtranjero) || 0,
       moneda:           g.moneda || '',
       monedaCodigo:     g.monedaCodigo || '',
+      importeUSD:       Number(g.importeUSD) || 0,
+      ivaUSD:           Number(g.ivaUSD) || 0,
+      retencionesUSD:   Number(g.retencionesUSD) || 0,
       polizaNumero:     g.polizaNumero || '',
     }))
     try {
@@ -3780,6 +3791,9 @@ export default function App() {
         propinaExtranjero:Number(g.propinaExtranjero) || 0,
         moneda:           g.moneda || '',
         monedaCodigo:     g.monedaCodigo || '',
+        importeUSD:       Number(g.importeUSD) || 0,
+        ivaUSD:           Number(g.ivaUSD) || 0,
+        retencionesUSD:   Number(g.retencionesUSD) || 0,
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
@@ -3868,7 +3882,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.64</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.65</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
