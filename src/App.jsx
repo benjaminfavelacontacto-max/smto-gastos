@@ -2959,32 +2959,25 @@ export default function App() {
     return `${prov} ${folio} ${tipo} ${fecha}`
   }
 
-  // ── Exportar: Excel suelto + ZIP separado con las facturas ──
-  // El usuario pidió que en vez de UN solo ZIP que contenga todo, se
-  // descarguen dos archivos por separado:
-  //   1) Reporte_<Colab>_<YYYYMMDD>.xlsx   (suelto, listo para abrir)
-  //   2) Facturas_<Colab>_<YYYYMMDD>.zip   (sólo XMLs/PDFs renombrados)
-  // Así el Excel queda accesible sin descomprimir y las facturas viajan
-  // empaquetadas en su propio ZIP que el usuario abre cuando las necesite.
+  // ── Exportar ZIP con Excel + carpeta Facturas/ ──
+  // Output: SMTO_Gastos_<Colab>_<YYYYMMDD>.zip containing
+  //   • Reporte_<Colab>_<YYYYMMDD>.xlsx  (fetched from /api/export-excel)
+  //   • Facturas/Proveedor Folio Tipo MM-DD-YY .xml + .pdf for every row
+  // PDFs are read from gasto.pdfDataURL (intake-time data URL) so the
+  // export doesn't depend on the original File handle, which can be
+  // unreliable later. Falls back to pdfFile.arrayBuffer() for any gasto
+  // that pre-dates the data-URL change in this session.
   const exportar = async () => {
+    const zip = new JSZip()
+    const facturas = zip.folder('Facturas')
+
     const colabSlug = (colaborador?.nombre || 'SMTO')
       .replace(/[^a-zA-Z0-9]/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '')
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
 
-    // Helper para detonar la descarga de un Blob como archivo.
-    const downloadBlob = (blob, filename) => {
-      const url = URL.createObjectURL(blob)
-      const a = Object.assign(document.createElement('a'), { href: url, download: filename })
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      // Pequeño delay antes del revoke para que Chrome no cancele la descarga.
-      setTimeout(() => URL.revokeObjectURL(url), 1500)
-    }
-
-    // 1) Excel — payload slim (sólo los 19 campos que consume el endpoint)
+    // 1) Pull the Excel report from the server-side renderer. Payload slim
     //    para no rebasar el límite de 4.5 MB de Vercel con muchas facturas.
     const gastosSlim = lista.map(g => ({
       rfc:              g.rfc || '',
@@ -3007,23 +3000,23 @@ export default function App() {
       moneda:           g.moneda || '',
       monedaCodigo:     g.monedaCodigo || '',
     }))
-    let excelBlob = null
     try {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '' }),
       })
-      if (response.ok) excelBlob = await response.blob()
+      if (response.ok) {
+        const excelBlob = await response.blob()
+        zip.file(`Reporte_${colabSlug}_${today}.xlsx`, excelBlob)
+      }
     } catch (err) {
-      console.warn('Excel fetch failed:', err)
+      console.warn('Excel fetch failed for ZIP:', err)
     }
 
-    // 2) ZIP de facturas — sólo XMLs/PDFs renombrados, sin Excel adentro.
-    const facturasZip = new JSZip()
+    // 2) Rename each gasto's XML + PDF through buildFileName.
     let r = 0
     for (const g of lista) {
-      // Image-OCR → PDF on-the-fly (igual que antes).
       if (g.imageDataURL && !g.pdfDataURL) {
         try {
           g.pdfDataURL = await imageToPDF(g.imageDataURL)
@@ -3034,7 +3027,7 @@ export default function App() {
       if (g.xmlContent || g.pdfDataURL) {
         const nom = buildFileName(g)
         if (g.xmlContent) {
-          facturasZip.file(`${nom}.xml`, g.xmlContent)
+          facturas.file(`${nom}.xml`, g.xmlContent)
           r++
         }
         if (g.pdfDataURL) {
@@ -3042,80 +3035,42 @@ export default function App() {
           const binaryStr = atob(base64Data)
           const bytes = new Uint8Array(binaryStr.length)
           for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i)
-          facturasZip.file(`${nom}.pdf`, bytes, { binary: true })
+          facturas.file(`${nom}.pdf`, bytes, { binary: true })
           if (!g.xmlContent) r++
         }
         if (g.xmlFile && !g.xmlContent) {
-          facturasZip.file(`${nom}.xml`, await g.xmlFile.arrayBuffer())
+          facturas.file(`${nom}.xml`, await g.xmlFile.arrayBuffer())
           r++
         }
         if (g.pdfFile && !g.pdfDataURL) {
-          facturasZip.file(`${nom}.pdf`, await g.pdfFile.arrayBuffer())
+          facturas.file(`${nom}.pdf`, await g.pdfFile.arrayBuffer())
           if (!g.xmlFile && !g.xmlContent) r++
         }
       }
     }
     void r
 
-    const facturasBlob = await facturasZip.generateAsync({ type: 'blob' })
+    // 3) Generate + trigger download.
+    const zipBlob = await zip.generateAsync({ type: 'blob' })
+    const zipName = `SMTO_Gastos_${colabSlug}_${today}.zip`
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(zipBlob),
+      download: zipName,
+    })
+    a.click()
+    URL.revokeObjectURL(a.href)
 
-    // 3) Entrega.
-    //    Preferencia: File System Access API → crea una CARPETA REAL en el
-    //    disco con el Excel suelto + el ZIP de facturas adentro (sin
-    //    necesidad de descomprimir nada).
-    //    Fallback (Firefox/Safari sin la API): dos descargas sueltas.
-    const folderName = `SMTO_Gastos_${colabSlug}_${today}`
-    const xlsxName   = `Reporte_${colabSlug}_${today}.xlsx`
-    const zipName    = `Facturas_${colabSlug}_${today}.zip`
-
-    let usedFolderPicker = false
-    if (typeof window.showDirectoryPicker === 'function') {
-      try {
-        // El usuario elige el directorio padre (Descargas, Escritorio, etc.).
-        const parentDir = await window.showDirectoryPicker({ mode: 'readwrite' })
-        // Creamos la carpeta normal adentro.
-        const targetDir = await parentDir.getDirectoryHandle(folderName, { create: true })
-
-        if (excelBlob) {
-          const xlsxHandle = await targetDir.getFileHandle(xlsxName, { create: true })
-          const xlsxStream = await xlsxHandle.createWritable()
-          await xlsxStream.write(excelBlob)
-          await xlsxStream.close()
-        }
-        const zipHandle = await targetDir.getFileHandle(zipName, { create: true })
-        const zipStream = await zipHandle.createWritable()
-        await zipStream.write(facturasBlob)
-        await zipStream.close()
-
-        usedFolderPicker = true
-      } catch (err) {
-        // Si el usuario canceló el picker, no descargamos nada — silencioso.
-        if (err && err.name === 'AbortError') return
-        console.warn('Folder picker falló, usando descargas sueltas:', err)
-      }
-    }
-
-    if (!usedFolderPicker) {
-      // Navegador sin File System Access API (Firefox/Safari) → dos descargas.
-      if (excelBlob) downloadBlob(excelBlob, xlsxName)
-      await new Promise(r => setTimeout(r, 600))
-      downloadBlob(facturasBlob, zipName)
-    }
-
-    // 4) Modal de éxito.
+    // 4) Success modal — generic PremiumModal with three stats.
     const xmlCount = lista.filter(g => g.xmlContent || g.xmlFile).length
     const pdfCount = lista.filter(g => g.pdfDataURL || g.pdfFile).length
-    const totalSize = (excelBlob ? excelBlob.size : 0) + facturasBlob.size
     showModal({
       type: 'success',
-      title: '¡Descarga lista!',
-      subtitle: usedFolderPicker
-        ? `Carpeta "${folderName}" creada con el Excel y el ZIP de facturas adentro.`
-        : 'Se descargaron el Excel y un ZIP aparte con las facturas renombradas.',
+      title: '¡ZIP Generado!',
+      subtitle: 'Paquete descargado con Excel + facturas renombradas.',
       stats: [
         { value: xmlCount, label: 'XMLs',   color: '#59D39B' },
         { value: pdfCount, label: 'PDFs',   color: '#60a5fa' },
-        { value: formatBytes(totalSize), label: 'Tamaño', color: 'rgba(255,255,255,0.6)' },
+        { value: formatBytes(zipBlob.size), label: 'Tamaño', color: 'rgba(255,255,255,0.6)' },
       ],
       primaryLabel: 'Listo',
     })
@@ -3396,7 +3351,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.40</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.41</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
