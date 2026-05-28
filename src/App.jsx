@@ -2247,6 +2247,7 @@ export default function App() {
   const [cotejoModal, setCotejoModal] = useState(null)
   const [duplicadosModal, setDuplicadosModal] = useState(null)
   const [ocrSelectionModal, setOcrSelectionModal] = useState(null)
+  const [nominaPickerModal, setNominaPickerModal] = useState(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -3882,129 +3883,164 @@ export default function App() {
         return
       }
 
-      // Filtro por MES + AÑO — SIEMPRE se aplica. Si la lista ya tiene
-      // gastos, usa los meses (YYYY-MM) de esos gastos. Si está vacía
-      // (usuario clickea 'Agregar Nómina' sin XMLs todavía), cae al mes
-      // actual del sistema. Así sólo entran nóminas del periodo activo.
-      const gastoYearMonths = new Set()
-      lista.forEach(g => {
-        const ym = String(g.fechaFac || '').slice(0, 7)
-        if (/^\d{4}-\d{2}$/.test(ym)) gastoYearMonths.add(ym)
-      })
-      if (gastoYearMonths.size === 0) {
-        const now = new Date()
-        gastoYearMonths.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
-      }
-      const filtered = nominaRows.filter(r => {
-        const ym = (saldosFechaToIso(r.fecha) || '').slice(0, 7)
-        return /^\d{4}-\d{2}$/.test(ym) && gastoYearMonths.has(ym)
-      })
+      // Agrupa nóminas por YYYY-MM para que el usuario elija el mes a importar.
       const MES_NOMBRES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-      const yearLabel = [...gastoYearMonths].sort().map(ym => {
-        const [y, m] = ym.split('-')
-        return `${MES_NOMBRES[parseInt(m, 10) - 1]} ${y}`
-      }).join(', ')
-
-      // Dedup contra la lista existente
-      const existingKeys = new Set(lista.map(g => `${g.rfc}|${g.noFactura}`))
-      const newGastos = []
-      let dupesSkipped = 0
-
-      for (const r of filtered) {
-        const fechaIso = saldosFechaToIso(r.fecha) || ''
-        const conceptoStr = String(r.concepto || '').trim()
-        // Strip "Nómina " prefix y sufijo de período ("1a Ene 26") para
-        // obtener un nombre de persona como proveedor.
-        const proveedor = conceptoStr
-          .replace(/^n[óo]mina\s+/i, '')
-          .replace(/\s+\d+a?\s+\w+\s+\d+\s*$/i, '')
-          .trim() || conceptoStr
-        const personaNorm = proveedor
-          .normalize('NFD')
-          .replace(/\p{Diacritic}/gu, '')
-          .toUpperCase()
-          .replace(/[^A-Z0-9]/g, '')
-          .slice(0, 16)
-        const fechaCompact = fechaIso.replace(/-/g, '').slice(2)
-        const folio = String(r.folio || '').trim()
-        const noFactura = `NOM-${folio || 'X'}-${personaNorm}-${fechaCompact}`
-
-        const key = `|${noFactura}`
-        if (existingKeys.has(key)) { dupesSkipped++; continue }
-        existingKeys.add(key)
-
-        const importe = Number(r.egreso) || 0
-        newGastos.push({
-          id: genId(),
-          rfc: '',
-          proveedor,
-          tipo: String(r.tipo || '').trim(),
-          noFactura,
-          fechaFac:  fechaIso,
-          fechaCobro: fechaIso,
-          concepto:  conceptoStr,
-          importe,
-          iva: 0,
-          isrTrasladado: 0,
-          retencionISR:  0,
-          retencionIVA:  0,
-          retenciones:   0,
-          totalCFDI:     importe,
-          propinaPorcentaje: 0,
-          montoPropina:      0,
-          formaPago: '03',
-          uuid:     crypto.randomUUID(),
-          tienePDF: false,
-          pdfFile:  null,
-          xmlFile:  null,
-          hizoMatch: false,
-          validado:  false,
-          montoUSD:           0,
-          montoExtranjero:    0,
-          importeUSD:         0,
-          ivaUSD:             0,
-          retencionesUSD:     0,
-          tipoCambio:         0,
-          moneda:             'MXN',
-          monedaCodigo:       'MXN',
-          esMonedaExtranjera: false,
-          esTicket:    false,
-          esNomina:    true,
-          polizaNumero: folio,
-          isNew: true,
-        })
+      const byMonth = new Map()  // ym → { rows, total }
+      for (const r of nominaRows) {
+        const ym = (saldosFechaToIso(r.fecha) || '').slice(0, 7)
+        if (!/^\d{4}-\d{2}$/.test(ym)) continue
+        if (!byMonth.has(ym)) byMonth.set(ym, { rows: [], total: 0 })
+        const bucket = byMonth.get(ym)
+        bucket.rows.push(r)
+        bucket.total += Number(r.egreso) || 0
       }
 
-      if (newGastos.length === 0) {
+      const months = [...byMonth.entries()]
+        .map(([ym, { rows, total }]) => {
+          const [y, m] = ym.split('-')
+          return {
+            ym,
+            label: `${MES_NOMBRES[parseInt(m, 10) - 1]} ${y}`,
+            count: rows.length,
+            total,
+            rows,
+          }
+        })
+        .sort((a, b) => b.ym.localeCompare(a.ym))  // más reciente primero
+
+      if (months.length === 0) {
         showModal({
-          type: 'info',
-          title: 'Sin nóminas nuevas',
-          subtitle: dupesSkipped > 0
-            ? `Las ${dupesSkipped} nóminas de ${yearLabel} ya están cargadas en el reporte.`
-            : `No se encontraron nóminas de ${yearLabel} en el archivo.`,
+          type: 'error',
+          title: 'Sin nóminas con fecha válida',
+          subtitle: 'No se pudieron extraer fechas de las nóminas del archivo.',
           primaryLabel: 'Entendido',
           onPrimary: closeModal,
         })
         return
       }
 
-      setLista(prev => [...prev, ...newGastos])
-      const totalNominas = newGastos.reduce((s, g) => s + g.importe, 0)
-      showModal({
-        type: 'success',
-        title: `Nóminas ${yearLabel} agregadas`,
-        subtitle: dupesSkipped > 0
-          ? `+${newGastos.length} nuevas · ${dupesSkipped} duplicadas omitidas`
-          : `${newGastos.length} nómina${newGastos.length === 1 ? '' : 's'} agregada${newGastos.length === 1 ? '' : 's'} al reporte.`,
-        stats: [
-          { value: `+${newGastos.length}`, label: 'Nóminas', color: '#59D39B' },
-          { value: `$${totalNominas.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, label: 'Total', color: 'rgba(255,255,255,0.85)' },
-        ],
-        primaryLabel: 'Continuar',
+      // Sugiere el mes que matchea con los gastos cargados (o el más reciente
+      // del archivo si no hay gastos).
+      const gastoYearMonths = new Set()
+      lista.forEach(g => {
+        const ym = String(g.fechaFac || '').slice(0, 7)
+        if (/^\d{4}-\d{2}$/.test(ym)) gastoYearMonths.add(ym)
       })
-      setTimeout(() => {
-        setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
-      }, 1500)
+      const sugerido = months.find(m => gastoYearMonths.has(m.ym))?.ym || months[0].ym
+
+      // Convierte el bucket del mes seleccionado en gastos y los inserta.
+      const applyNominasForMonth = (selectedYM) => {
+        const bucket = months.find(m => m.ym === selectedYM)
+        if (!bucket) return
+        const existingKeys = new Set(lista.map(g => `${g.rfc}|${g.noFactura}`))
+        const newGastos = []
+        let dupesSkipped = 0
+
+        for (const r of bucket.rows) {
+          const fechaIso = saldosFechaToIso(r.fecha) || ''
+          const conceptoStr = String(r.concepto || '').trim()
+          const proveedor = conceptoStr
+            .replace(/^n[óo]mina\s+/i, '')
+            .replace(/\s+\d+a?\s+\w+\s+\d+\s*$/i, '')
+            .trim() || conceptoStr
+          const personaNorm = proveedor
+            .normalize('NFD')
+            .replace(/\p{Diacritic}/gu, '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '')
+            .slice(0, 16)
+          const fechaCompact = fechaIso.replace(/-/g, '').slice(2)
+          const folio = String(r.folio || '').trim()
+          const noFactura = `NOM-${folio || 'X'}-${personaNorm}-${fechaCompact}`
+
+          const key = `|${noFactura}`
+          if (existingKeys.has(key)) { dupesSkipped++; continue }
+          existingKeys.add(key)
+
+          const importe = Number(r.egreso) || 0
+          newGastos.push({
+            id: genId(),
+            rfc: '',
+            proveedor,
+            tipo: String(r.tipo || '').trim(),
+            noFactura,
+            fechaFac:  fechaIso,
+            fechaCobro: fechaIso,
+            concepto:  conceptoStr,
+            importe,
+            iva: 0,
+            isrTrasladado: 0,
+            retencionISR:  0,
+            retencionIVA:  0,
+            retenciones:   0,
+            totalCFDI:     importe,
+            propinaPorcentaje: 0,
+            montoPropina:      0,
+            formaPago: '03',
+            uuid:     crypto.randomUUID(),
+            tienePDF: false,
+            pdfFile:  null,
+            xmlFile:  null,
+            hizoMatch: false,
+            validado:  false,
+            montoUSD:           0,
+            montoExtranjero:    0,
+            importeUSD:         0,
+            ivaUSD:             0,
+            retencionesUSD:     0,
+            tipoCambio:         0,
+            moneda:             'MXN',
+            monedaCodigo:       'MXN',
+            esMonedaExtranjera: false,
+            esTicket:    false,
+            esNomina:    true,
+            polizaNumero: folio,
+            isNew: true,
+          })
+        }
+
+        if (newGastos.length === 0) {
+          showModal({
+            type: 'info',
+            title: 'Sin nóminas nuevas',
+            subtitle: dupesSkipped > 0
+              ? `Las ${dupesSkipped} nóminas de ${bucket.label} ya están cargadas en el reporte.`
+              : `No se encontraron nóminas nuevas en ${bucket.label}.`,
+            primaryLabel: 'Entendido',
+            onPrimary: closeModal,
+          })
+          return
+        }
+
+        setLista(prev => [...prev, ...newGastos])
+        const totalNominas = newGastos.reduce((s, g) => s + g.importe, 0)
+        showModal({
+          type: 'success',
+          title: `Nóminas ${bucket.label} agregadas`,
+          subtitle: dupesSkipped > 0
+            ? `+${newGastos.length} nuevas · ${dupesSkipped} duplicadas omitidas`
+            : `${newGastos.length} nómina${newGastos.length === 1 ? '' : 's'} agregada${newGastos.length === 1 ? '' : 's'} al reporte.`,
+          stats: [
+            { value: `+${newGastos.length}`, label: 'Nóminas', color: '#59D39B' },
+            { value: `$${totalNominas.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, label: 'Total', color: 'rgba(255,255,255,0.85)' },
+          ],
+          primaryLabel: 'Continuar',
+        })
+        setTimeout(() => {
+          setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+        }, 1500)
+      }
+
+      // Abre el picker de mes
+      setNominaPickerModal({
+        months,
+        selectedYM: sugerido,
+        onConfirm: (ym) => {
+          setNominaPickerModal(null)
+          applyNominasForMonth(ym)
+        },
+        onCancel: () => setNominaPickerModal(null),
+      })
     } catch (err) {
       console.warn('handleNominaFile:', err)
       showModal({
@@ -4152,7 +4188,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.76</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.77</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4705,6 +4741,52 @@ export default function App() {
                 <button className="premium-btn-secondary" onClick={onCancel}>Cancelar</button>
                 <button className="premium-btn-primary" onClick={() => onConfirm(items.filter(i => i.selected).map(i => i.file))}>
                   {selectedCount === 0 ? 'Continuar sin OCR' : `Procesar ${selectedCount}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ─── MODAL SELECCIÓN DE MES PARA NÓMINAS ─── */}
+      {nominaPickerModal && (() => {
+        const { months, selectedYM, onConfirm, onCancel } = nominaPickerModal
+        const pick = (ym) => setNominaPickerModal(prev => ({ ...prev, selectedYM: ym }))
+        return (
+          <div className="premium-overlay" onClick={onCancel}>
+            <div className="premium-modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+              <div className="premium-icon-wrap" style={{ background: 'rgba(89,211,155,0.15)', border: '1px solid rgba(89,211,155,0.25)' }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#59D39B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                  <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                </svg>
+              </div>
+              <h2 className="premium-title">Selecciona el mes</h2>
+              <p className="premium-subtitle">
+                Elige de qué mes quieres importar las nóminas. Se encontraron {months.length} {months.length === 1 ? 'mes' : 'meses'} con nóminas en el archivo.
+              </p>
+              <div className="month-list">
+                {months.map(m => (
+                  <label key={m.ym} className={`month-item${selectedYM === m.ym ? ' selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="nomina-month"
+                      checked={selectedYM === m.ym}
+                      onChange={() => pick(m.ym)}
+                    />
+                    <div className="month-info">
+                      <div className="month-name">{m.label}</div>
+                      <div className="month-stats">
+                        {m.count} nómina{m.count === 1 ? '' : 's'} · ${m.total.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <div className="premium-actions" style={{ marginTop: 18 }}>
+                <button className="premium-btn-secondary" onClick={onCancel}>Cancelar</button>
+                <button className="premium-btn-primary" disabled={!selectedYM} onClick={() => onConfirm(selectedYM)}>
+                  Agregar nóminas
                 </button>
               </div>
             </div>
