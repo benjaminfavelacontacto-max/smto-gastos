@@ -4,3 +4,11 @@ dist
 *.local
 .env
 .vercel
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Office temp / lock files
+~$*
