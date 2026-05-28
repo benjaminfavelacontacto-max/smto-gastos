@@ -15,6 +15,11 @@ export const TIPO_RULES = [
   ['JUAN MANUEL ROB','Consultoría'],
   ['ZUÑIGA',         'Contador'],
   ['ZUNIGA',         'Contador'],
+  ['ZÚÑIGA',         'Contador'],
+  // El SAT registró el Ñ del despacho como '&' literal: 'ZU&IGA RODRIGUEZ Y CIA'.
+  // Agregamos la variante exacta para que la auto-detección funcione tal cual
+  // viene en el CFDI sin tocar el XML.
+  ['ZU&IGA',         'Contador'],
   ['DHL ',           'Envíos'],
   ['DHL,',           'Envíos'],
   ['DHL EXPRESS',    'Envíos'],
