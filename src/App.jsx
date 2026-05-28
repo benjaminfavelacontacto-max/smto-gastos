@@ -555,17 +555,24 @@ function cotejarConSaldos(saldosRows, lista) {
   const sinMatchGastos = []
   const usedSaldos = new Set()
 
-  // 4) Match con constraint de moneda: USD-gasto solo matchea USD-saldos.
+  // 4) Match con preferencia de moneda: primero intenta misma-moneda
+  //    (USD↔USD, MXN↔MXN). Si no hay candidato exacto, hace fallback al
+  //    primer renglón disponible para esa factura. Esto cubre el caso típico
+  //    donde la fila USD del Saldos no trae el marcador 'USD' explícito y
+  //    de otra forma la factura quedaría sin fechaCobro.
   lista.forEach((g) => {
     const k = normFactura(g.noFactura)
     const candidates = k ? (byFactura.get(k) || []) : []
     const gMoneda = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
 
-    const saldosIdx = candidates.find(idx => {
+    let saldosIdx = candidates.find(idx => {
       if (usedSaldos.has(idx)) return false
       const sMoneda = (filteredSaldos[idx].moneda || 'MXN').toString().toUpperCase()
       return sMoneda === gMoneda
     })
+    if (saldosIdx === undefined) {
+      saldosIdx = candidates.find(idx => !usedSaldos.has(idx))
+    }
 
     if (saldosIdx === undefined) {
       sinMatchGastos.push(g)
@@ -3890,7 +3897,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.66</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.67</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
