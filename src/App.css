@@ -273,6 +273,75 @@ body::before {
 }
 
 /* ═══════════════════════════════════════════
+   SEARCH BAR (universal)
+═══════════════════════════════════════════ */
+.search-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 32px 14px;
+  padding: 9px 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.search-bar:focus-within {
+  border-color: rgba(10,132,255,0.5);
+  background: rgba(10,132,255,0.06);
+  box-shadow: 0 0 0 3px rgba(10,132,255,0.12);
+}
+.search-icon { color: rgba(255,255,255,0.45); flex-shrink: 0; }
+.search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255,255,255,0.92);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.search-input::placeholder { color: rgba(255,255,255,0.35); font-weight: 400; }
+.search-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #59D39B;
+  padding: 3px 8px;
+  background: rgba(89,211,155,0.12);
+  border-radius: 5px;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+.search-clear {
+  width: 22px; height: 22px;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.65);
+  border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.search-clear:hover { background: rgba(255,69,58,0.15); color: #FF453A; border-color: rgba(255,69,58,0.3); }
+.search-kbd {
+  flex-shrink: 0;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: rgba(255,255,255,0.4);
+  padding: 3px 7px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.03);
+}
+@media (max-width: 640px) {
+  .search-bar { margin: 0 16px 12px; padding: 8px 12px; }
+  .search-kbd { display: none; }
+}
+
+/* ═══════════════════════════════════════════
    TABLE
 ═══════════════════════════════════════════ */
 .table-wrap {

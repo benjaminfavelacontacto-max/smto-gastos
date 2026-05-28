@@ -2171,6 +2171,22 @@ export default function App() {
     const t = setTimeout(() => setToast(null), 2500)
     return () => clearTimeout(t)
   }, [toast])
+
+  // Cmd/Ctrl+K → enfoca el buscador universal. Escape → cierra/clear.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+      } else if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+        setBusqueda('')
+        searchInputRef.current?.blur()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   // Index-based fixed pixel widths — order matches COLUMNS positions:
   // [0] checkbox, [1] estado, [2] fecha factura, [3] fecha cobro,
   // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
@@ -2178,6 +2194,8 @@ export default function App() {
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
   const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
+  const [busqueda,      setBusqueda]      = useState('')
+  const searchInputRef = useRef(null)
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
@@ -2213,12 +2231,36 @@ export default function App() {
   }, [lista])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
+  // ── Búsqueda universal — substring (case + accent-insensitive) sobre
+  //    todos los campos significativos del gasto. Se aplica ANTES del sort
+  //    para que el orden actuál actúe sobre el subset filtrado.
+  const filteredLista = useMemo(() => {
+    const q = busqueda.trim()
+    if (!q) return lista
+    const nq = q.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
+    return lista.filter(g => {
+      const haystack = [
+        g.rfc, g.proveedor, g.noFactura, g.concepto, g.tipo,
+        g.fechaFac, g.fechaCobro, g.formaPago, g.polizaNumero,
+        g.importe, g.iva, g.retenciones, g.totalCFDI,
+        g.montoUSD, g.tipoCambio, g.moneda, g.monedaCodigo,
+        g.uuid,
+      ]
+        .filter(v => v !== null && v !== undefined && v !== '')
+        .join(' ')
+        .normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '')
+        .toLowerCase()
+      return haystack.includes(nq)
+    })
+  }, [lista, busqueda])
+
   // ── Sort — three-state cycle (asc → desc → unsorted), null-safe, with
   //          date detection that accepts both YYYY-MM-DD and DD/MM/YYYY.
   const sortedLista = useMemo(() => {
-    if (!sort.field) return lista
+    if (!sort.field) return filteredLista
     const col = COLUMNS.find(c => c.key === sort.field)
-    if (!col) return lista
+    if (!col) return filteredLista
     const get = col.getValue || (g => g[sort.field])
     const toDate = s => {
       if (typeof s !== 'string' || !s) return 0
@@ -2229,7 +2271,7 @@ export default function App() {
       }
       return 0
     }
-    return [...lista].sort((a, b) => {
+    return [...filteredLista].sort((a, b) => {
       const va = get(a), vb = get(b)
       // Null/undefined/empty → push to the end regardless of direction
       const aEmpty = va == null || va === ''
@@ -2243,7 +2285,7 @@ export default function App() {
       else                            cmp = String(va).localeCompare(String(vb), 'es')
       return sort.dir === 'asc' ? cmp : -cmp
     })
-  }, [lista, sort])
+  }, [filteredLista, sort])
 
   // TIPO dropdown list — depends on the selected colaborador's categoría.
   // Ventas/Socio get the sales-flavored list; Admin/Servicio get the
@@ -3897,7 +3939,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.67</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.68</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4028,6 +4070,38 @@ export default function App() {
           <div className="metric-value">{metrics.sinCobrar}</div>
         </div>
       </div>
+
+      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {lista.length > 0 && (
+        <div className="search-bar">
+          <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="search-input"
+            value={busqueda}
+            onChange={e => setBusqueda(e.target.value)}
+            placeholder="Buscar por proveedor, factura, fecha, RFC, concepto, póliza..."
+          />
+          {busqueda && (
+            <span className="search-count">
+              {filteredLista.length} de {lista.length}
+            </span>
+          )}
+          {busqueda && (
+            <button
+              className="search-clear"
+              onClick={() => { setBusqueda(''); searchInputRef.current?.focus() }}
+              title="Limpiar búsqueda"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          )}
+          <span className="search-kbd">⌘K</span>
+        </div>
+      )}
 
       {/* Inputs de archivo ocultos */}
       <input
