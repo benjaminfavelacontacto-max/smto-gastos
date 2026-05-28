@@ -3563,6 +3563,7 @@ export default function App() {
       importeUSD:       Number(g.importeUSD) || 0,
       ivaUSD:           Number(g.ivaUSD) || 0,
       retencionesUSD:   Number(g.retencionesUSD) || 0,
+      banco:            g.banco || '',
       polizaNumero:     g.polizaNumero || '',
     }))
     try {
@@ -3836,10 +3837,15 @@ export default function App() {
         const m = result.matched.find(x => x.gastoId === g.id)
         if (!m) return g
         const fechaCobro = saldosFechaToIso(m.saldosRow.fecha) || g.fechaCobro
+        // El "banco" es la primera palabra del nombre de la pestaña Saldos
+        // donde apareció la fila (e.g. "BBVA MXN Cheques" → "BBVA"). Se
+        // muestra en la columna BANCO del Excel exportado.
+        const banco = String(m.saldosRow.sheet || '').trim().split(/\s+/)[0] || ''
         return {
           ...g,
           polizaNumero: m.saldosRow.folio || 'N/A',
           fechaCobro,
+          banco,
         }
       }))
       setCotejoModal({ result, decisions: {} })
@@ -3995,6 +4001,7 @@ export default function App() {
             esTicket:    false,
             esNomina:    true,
             polizaNumero: folio,
+            banco:       String(r.sheet || '').trim().split(/\s+/)[0] || '',
             isNew: true,
           })
         }
@@ -4059,6 +4066,12 @@ export default function App() {
   const aplicarDecisionesCotejo = () => {
     if (!cotejoModal) return
     const { result, decisions } = cotejoModal
+    const matchedCount    = result.matched.length
+    const discrepancias   = result.matched.filter(m => m.tipoDiffers)
+    const tiposActualizados = discrepancias.filter(m => decisions[m.gasto.id] === 'saldos').length
+    const tiposMantenidos   = discrepancias.length - tiposActualizados
+    const sinMatchG       = result.sinMatchGastos.length
+    const sinMatchS       = result.sinMatchSaldos.length
     setLista(prev => prev.map(g => {
       const m = result.matched.find(x => x.gastoId === g.id)
       if (!m || !m.tipoDiffers) return g
@@ -4067,6 +4080,19 @@ export default function App() {
       return g
     }))
     setCotejoModal(null)
+    showModal({
+      type: 'success',
+      title: 'Cotejo aplicado',
+      subtitle: `${matchedCount} factura${matchedCount === 1 ? '' : 's'} vinculada${matchedCount === 1 ? '' : 's'} al Saldos.`,
+      stats: [
+        { value: matchedCount,       label: 'Matches',           color: '#59D39B' },
+        ...(tiposActualizados > 0 ? [{ value: tiposActualizados, label: 'Tipos actualizados', color: 'rgba(255,255,255,0.85)' }] : []),
+        ...(tiposMantenidos   > 0 ? [{ value: tiposMantenidos,   label: 'Tipos mantenidos',   color: 'rgba(255,255,255,0.85)' }] : []),
+        ...(sinMatchG > 0 ? [{ value: sinMatchG, label: 'Gastos sin match', color: '#FF9F0A' }] : []),
+        ...(sinMatchS > 0 ? [{ value: sinMatchS, label: 'Saldos sin match', color: 'rgba(255,255,255,0.65)' }] : []),
+      ],
+      primaryLabel: 'Continuar',
+    })
   }
 
   const exportarExcel = async () => {
@@ -4100,6 +4126,7 @@ export default function App() {
         importeUSD:       Number(g.importeUSD) || 0,
         ivaUSD:           Number(g.ivaUSD) || 0,
         retencionesUSD:   Number(g.retencionesUSD) || 0,
+        banco:            g.banco || '',
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
@@ -4188,7 +4215,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.77</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.78</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
