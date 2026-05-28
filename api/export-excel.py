@@ -65,6 +65,16 @@ BADGE_AMBER_FG = '92400E'
 BADGE_PURPLE_BG = 'F3E8FF'
 BADGE_PURPLE_FG = '6B21A8'
 
+# Colaboradores especiales — replica de COLABORADORES_ESPECIALES en App.jsx.
+# Estos colaboradores reciben una celda editable de Tipo de Cambio en su Excel
+# para convertir filas en USD a MXN sobre la marcha.
+COLABORADORES_ESPECIALES = {
+    'Alejandro Olivar',
+    'Victor Aceves',
+    'Miranda Navarro',
+    'Olivia Gil',
+}
+
 def crop_logo(pil_img):
     """Remove excess whitespace/transparent padding around the logo so it
     visually aligns with surrounding type, regardless of the source PNG's
@@ -348,8 +358,52 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             left=MED_GREEN, right=MED_GREEN, top=THIN_LIGHT, bottom=MED_GREEN,
         )
 
-    # Row 7 small gap + Row 8 pre-table spacer
-    ws.row_dimensions[7].height = 8
+    # ═══ TIPO DE CAMBIO EDITABLE (solo colaboradores especiales) ═══
+    # Una sola celda en N7 que el usuario puede editar libremente. Las filas
+    # de gastos en USD usan formulas =(monto USD)*$N$7 en IMPORTE / IVA /
+    # RETENCIÓN, y =$N$7 en la columna T/C. Cambiar este valor recalcula
+    # automáticamente todas las filas USD y los KPI / totales que las suman.
+    is_especial = (colaborador or '').strip() in COLABORADORES_ESPECIALES
+    tc_ref = None
+
+    if is_especial:
+        ws.row_dimensions[7].height = 30
+
+        # Label en K7:M7 — alineado a la derecha, fondo ámbar suave.
+        ws.merge_cells('K7:M7')
+        lbl_tc = ws['K7']
+        lbl_tc.value = 'TIPO DE CAMBIO USD →'
+        lbl_tc.font = Font(name='Aptos', size=11, bold=True, color=BADGE_AMBER_FG)
+        lbl_tc.alignment = Alignment(horizontal='right', vertical='center', indent=1)
+        lbl_tc.fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
+        # Pintar el resto de la celda combinada para que se vea uniforme
+        for col_letter in ('L', 'M'):
+            ws[f'{col_letter}7'].fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
+
+        # Input editable en N7 — fondo ámbar más vivo, borde grueso naranja.
+        tc_input = ws['N7']
+        default_tc = 17.50
+        for g in gastos:
+            m = (g.get('monedaCodigo') or g.get('moneda') or 'MXN').upper()
+            rate = g.get('tipoCambio') or 0
+            if m != 'MXN' and rate > 0:
+                default_tc = round(float(rate), 4)
+                break
+        tc_input.value = default_tc
+        tc_input.number_format = '#,##0.0000'
+        tc_input.font = Font(name='Aptos', size=16, bold=True, color=BADGE_AMBER_FG)
+        tc_input.alignment = Alignment(horizontal='center', vertical='center')
+        tc_input.fill = PatternFill('solid', start_color='FDE68A')  # amber-200
+        amber_side = Side(style='medium', color='F59E0B')
+        tc_input.border = Border(
+            left=amber_side, right=amber_side, top=amber_side, bottom=amber_side,
+        )
+
+        tc_ref = '$N$7'
+
+    # Row 7 (cuando NO es especial) small gap + Row 8 pre-table spacer
+    if not is_especial:
+        ws.row_dimensions[7].height = 8
     ws.row_dimensions[8].height = 14
 
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
@@ -424,6 +478,27 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             importe   = importe_raw
             monto_usd = monto_usd_raw
 
+        # USD passthrough: si el colaborador es especial y la factura viene
+        # en moneda extranjera, IMPORTE / IVA / RETENCIÓN / T/C usan formulas
+        # que multiplican el valor en USD por la celda editable $N$7. Cambiar
+        # esa celda recalcula toda la fila al instante.
+        is_usd_row = (
+            is_especial
+            and tc_ref is not None
+            and (moneda_code or 'MXN').upper() not in ('MXN', '', 'XXX')
+            and (importe_raw > 0 or iva > 0 or ret > 0)
+        )
+        if is_usd_row:
+            importe_val = f'={importe_raw}*{tc_ref}'
+            iva_val     = f'={iva}*{tc_ref}'
+            ret_val     = f'={ret}*{tc_ref}'
+            tc_val      = f'={tc_ref}'
+        else:
+            importe_val = importe
+            iva_val     = iva
+            ret_val     = ret
+            tc_val      = tipo_cambio
+
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
         cells = [
@@ -435,17 +510,17 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
             (7,  fecha_fac,              'center', 'normal'),
             (8,  fecha_cobro,            'center', 'normal'),
             (9,  g.get('concepto', ''),  'left',   'normal'),
-            (10, importe,                  'center', 'currency'),
-            (11, iva,                      'center', 'currency'),
-            (12, ret,                      'center', 'currency'),
+            (10, importe_val,              'center', 'currency'),
+            (11, iva_val,                  'center', 'currency'),
+            (12, ret_val,                  'center', 'currency'),
             # TOTAL is a true Excel formula so the column re-sums correctly
-            # if the user edits Importe/IVA/Retención manually — also kills
-            # the green "inconsistent formula" triangle Excel shows when a
-            # column has static derived values next to formula candidates.
+            # if the user edits Importe/IVA/Retención manually — también
+            # recalcula automáticamente cuando IMPORTE/IVA/RET son fórmulas
+            # de USD apuntando a la celda editable de T/C.
             (13, f'=J{row}+K{row}-L{row}', 'center', 'currency_bold'),
             (14, forma,                  'center', 'badge_pago'),
             (15, monto_usd,              'center', 'currency'),
-            (16, tipo_cambio,            'center', 'tipocambio'),
+            (16, tc_val,                 'center', 'tipocambio'),
         ]
 
         for col, val, align, style_type in cells:

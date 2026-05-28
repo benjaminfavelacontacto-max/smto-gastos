@@ -775,6 +775,13 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
   const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
+  // Moneda + tipo de cambio del CFDI. Si el comprobante viene en USD u otra
+  // divisa, los campos importe / iva / retenciones / totalCFDI quedan en esa
+  // moneda extranjera (tal como los emite el SAT). El backend de Excel para
+  // colaboradores especiales convierte esos valores a MXN vía celda editable.
+  const monedaXML      = (ga(comp, 'Moneda', 'moneda') || 'MXN').toUpperCase()
+  const tipoCambioXML  = parseFloat(ga(comp, 'TipoCambio', 'tipocambio') || '0') || 0
+  const esExtranjera   = monedaXML !== 'MXN' && monedaXML !== 'XXX'
   return {
     id: genId(),
     rfc,
@@ -812,9 +819,12 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     xmlContent: xmlText,
     hizoMatch: false,
     validado: false,
-    montoUSD: 0,
-    tipoCambio: 0,
-    moneda: 'MXN',
+    montoUSD:           esExtranjera ? totalCFDI : 0,
+    montoExtranjero:    esExtranjera ? totalCFDI : 0,
+    tipoCambio:         esExtranjera ? tipoCambioXML : 0,
+    moneda:             monedaXML,
+    monedaCodigo:       monedaXML,
+    esMonedaExtranjera: esExtranjera,
   }
 }
 
@@ -3651,7 +3661,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.59</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.60</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
