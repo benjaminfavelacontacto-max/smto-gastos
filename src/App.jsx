@@ -2105,6 +2105,7 @@ export default function App() {
   const photoRef  = useRef(null)
   const saldosRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
+  const [duplicadosModal, setDuplicadosModal] = useState(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -2243,29 +2244,48 @@ export default function App() {
       }
     }
 
-    setLista(nueva)
-    setLoading(false)
+    const applyBatch = (batch) => {
+      setLista(batch)
+      setLoading(false)
+      if (batch.length > 0) {
+        const linkedPDFs = batch.filter(g => g.tienePDF).length
+        showModal({
+          type: 'success',
+          title: 'Carpeta cargada',
+          subtitle: `Procesamos ${xmls.length} archivo${xmls.length === 1 ? '' : 's'} correctamente.`,
+          stats: [
+            { value: `+${batch.length}`,                label: 'Facturas nuevas', color: '#59D39B' },
+            { value: xmls.length,                       label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
+            ...(linkedPDFs > 0 ? [{ value: linkedPDFs, label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
+          ],
+          primaryLabel: 'Continuar',
+        })
+        setCarpetaSuccess(true)
+        setTimeout(() => setCarpetaSuccess(false), 2500)
+      }
+    }
 
-    // Surface a premium success modal + flash the toolbar button green for
-    // 2.5s. Skipped on a zero-result load (empty folder / all parses failed)
-    // — the empty-state onboarding card already explains what's needed.
-    if (nueva.length > 0) {
-      const linkedPDFs = nueva.filter(g => g.tienePDF).length
-      const ocrCount = 0  // processFiles does not run OCR; only handleDrop does.
-      showModal({
-        type: 'success',
-        title: 'Carpeta cargada',
-        subtitle: `Procesamos ${xmls.length} archivo${xmls.length === 1 ? '' : 's'} correctamente.`,
-        stats: [
-          { value: `+${nueva.length}`,                 label: 'Facturas nuevas', color: '#59D39B' },
-          { value: xmls.length,                        label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
-          ...(linkedPDFs > 0 ? [{ value: linkedPDFs,   label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
-          ...(ocrCount   > 0 ? [{ value: ocrCount,     label: 'OCR IA',          color: '#f59e0b' }] : []),
-        ],
-        primaryLabel: 'Continuar',
+    // Detect duplicate RFC+noFactura keys within this batch
+    const seenKeys = new Map()
+    const batchDupes = []
+    for (const g of nueva) {
+      const key = `${g.rfc}|${g.noFactura}`
+      if (seenKeys.has(key)) batchDupes.push(g)
+      else seenKeys.set(key, true)
+    }
+
+    if (batchDupes.length > 0) {
+      setLoading(false)
+      setDuplicadosModal({
+        items: batchDupes,
+        incoming: nueva,
+        onConfirm: (kept) => {
+          setDuplicadosModal(null)
+          applyBatch(kept)
+        },
       })
-      setCarpetaSuccess(true)
-      setTimeout(() => setCarpetaSuccess(false), 2500)
+    } else {
+      applyBatch(nueva)
     }
   }
 
@@ -2585,47 +2605,48 @@ export default function App() {
       }
     }
 
-    // STEP 5 — single setLista commit, then surface the premium drop modal.
-    setLista(prev => {
-      const merged = [...prev]
-      const existingKeys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
-      let added = 0
-      let updated = 0
-
-      for (const newG of allNewGastos) {
-        const key = `${newG.rfc}|${newG.noFactura}`
-        if (existingKeys.has(key)) {
-          const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
-          if (idx !== -1) {
-            // Refresh existing row with whatever the new payload carries
-            // (xmlFile, pdfFile, fresher fields), keep isNew for the flash.
-            merged[idx] = { ...merged[idx], ...newG, isNew: true }
-            updated++
+    // STEP 5 — detect duplicates, show modal if any, then merge.
+    const applyDropMerge = (incoming) => {
+      setLista(prev => {
+        const merged = [...prev]
+        const keys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
+        let added = 0
+        let updated = 0
+        for (const newG of incoming) {
+          const key = `${newG.rfc}|${newG.noFactura}`
+          if (keys.has(key)) {
+            const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
+            if (idx !== -1) { merged[idx] = { ...merged[idx], ...newG, isNew: true }; updated++ }
+          } else {
+            merged.push(newG); keys.add(key); added++
           }
-        } else {
-          merged.push(newG)
-          existingKeys.add(key)
-          added++
         }
-      }
+        if (added > 0 || updated > 0 || pdfFiles.length > 0) {
+          setTimeout(() => setDropSummary({ added, updated, pdfs: pdfFiles.length }), 100)
+        }
+        return merged
+      })
+      setTimeout(() => {
+        setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+      }, 1500)
+    }
 
-      // Premium glass result modal — only opens when something actually changed.
-      if (added > 0 || updated > 0 || pdfFiles.length > 0) {
-        setTimeout(() => setDropSummary({
-          added,
-          updated,
-          pdfs: pdfFiles.length,
-        }), 100)
-      }
+    const dropDupes = allNewGastos.filter(g =>
+      lista.some(e => e.rfc === g.rfc && e.noFactura === g.noFactura)
+    )
 
-      return merged
-    })
-
-    // Clear isNew flags after the row entrance animation finishes so
-    // subsequent renders don't replay it.
-    setTimeout(() => {
-      setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
-    }, 1500)
+    if (dropDupes.length > 0) {
+      setDuplicadosModal({
+        items: dropDupes,
+        incoming: allNewGastos,
+        onConfirm: (kept) => {
+          setDuplicadosModal(null)
+          applyDropMerge(kept)
+        },
+      })
+    } else {
+      applyDropMerge(allNewGastos)
+    }
   }
 
   // ── Validar estado de cuenta bancario ──
@@ -4006,6 +4027,58 @@ export default function App() {
           </div>
         )
       })()}
+
+      {/* ─── MODAL DUPLICADOS ─── */}
+      {duplicadosModal && (
+        <div className="premium-overlay" onClick={() => setDuplicadosModal(null)}>
+          <div className="premium-modal" style={{ maxWidth: 540 }} onClick={e => e.stopPropagation()}>
+            <div className="premium-icon-wrap" style={{ background: 'rgba(255,159,10,0.15)', border: '1px solid rgba(255,159,10,0.25)' }}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FF9F0A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+            </div>
+            <h2 className="premium-title">Duplicados detectados</h2>
+            <p className="premium-subtitle">
+              {duplicadosModal.items.length > 0
+                ? `${duplicadosModal.items.length} factura${duplicadosModal.items.length === 1 ? '' : 's'} ya exist${duplicadosModal.items.length === 1 ? 'e' : 'en'} en el reporte. Elimina las que no quieras reemplazar.`
+                : 'Sin duplicados pendientes. Puedes continuar.'}
+            </p>
+            {duplicadosModal.items.length > 0 && (
+              <div className="dup-list">
+                {duplicadosModal.items.map(g => (
+                  <div key={g.uuid} className="dup-item">
+                    <div className="dup-item-info">
+                      <span className="dup-item-proveedor">{g.proveedor || '—'}</span>
+                      <span className="dup-item-meta">
+                        {g.noFactura && <> · {g.noFactura}</>}
+                        {g.fechaFac && <> · {g.fechaFac}</>}
+                        {' · '}${Number(g.total || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <button
+                      className="dup-item-remove"
+                      title="Eliminar este duplicado"
+                      onClick={() => setDuplicadosModal(prev => ({
+                        ...prev,
+                        items:    prev.items.filter(x => x.uuid !== g.uuid),
+                        incoming: prev.incoming.filter(x => x.uuid !== g.uuid),
+                      }))}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="premium-actions" style={{ marginTop: 20 }}>
+              <button className="premium-btn-secondary" onClick={() => setDuplicadosModal(null)}>Cancelar</button>
+              <button className="premium-btn-primary" onClick={() => duplicadosModal.onConfirm(duplicadosModal.incoming)}>
+                Continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── MODAL CONCILIACIÓN BANCARIA (premium glass) ─── */}
       <AnimatePresence>

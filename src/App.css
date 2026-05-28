@@ -1046,6 +1046,37 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
 .premium-actions {
   display: flex; gap: 10px; margin-top: 8px;
 }
+
+/* ── Duplicados modal list ── */
+.dup-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 280px; overflow-y: auto;
+  margin-top: 16px;
+  padding-right: 2px;
+}
+.dup-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: rgba(255, 159, 10, 0.06);
+  border: 1px solid rgba(255, 159, 10, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+  animation: modalSlideUp 0.2s ease;
+}
+.dup-item-info { display: flex; flex-direction: column; gap: 2px; text-align: left; overflow: hidden; }
+.dup-item-proveedor { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dup-item-meta { font-size: 11px; color: rgba(255,255,255,0.45); }
+.dup-item-remove {
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,69,58,0.12);
+  color: #FF453A;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.dup-item-remove:hover { background: rgba(255,69,58,0.25); border-color: rgba(255,69,58,0.4); }
 .premium-btn-primary,
 .premium-btn-secondary {
   flex: 1;
