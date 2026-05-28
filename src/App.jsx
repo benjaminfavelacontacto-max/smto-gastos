@@ -116,6 +116,29 @@ const TIPOS_ESPECIALES = [
 
 const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda Navarro', 'Olivia Gil']
 
+// Bancos disponibles para el dropdown de la columna BANCO (solo especiales).
+// Coinciden con los nombres de las pestañas del archivo de Saldos.
+const BANCOS_DISPONIBLES = [
+  'BBVA MXN Cheques',
+  'BBVA MXN Concent',
+  'BBVA USD Cheques',
+  'Clara MXN Credito',
+  'Monex USD Cheques',
+  'Monex MXN Cheques',
+  'Monex Fondo Ahorro',
+  'Kapital MXN Cheques',
+  'Kapital MXN Flex',
+]
+// Banco por default para colaboradores NO especiales (tarjeta corporativa).
+const DEFAULT_BANCO_NO_ESPECIAL = 'Clara MXN Credito'
+
+// Helper: regresa el banco que se le debe asignar a un gasto nuevo, según
+// si el colaborador es especial. Los especiales arrancan sin banco (se
+// asigna después al cotejar con Saldos o manualmente). Los demás caen al
+// default fijo.
+const defaultBancoFor = (colaborador) =>
+  COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? '' : DEFAULT_BANCO_NO_ESPECIAL
+
 /* Folio Clara de 4 dígitos por colaborador. Aparece en la columna "PÓLIZA"
    del Excel exportado. Quien no tenga tarjeta Clara queda en 'N/A'. Los
    especiales (Olivar, Aceves, Miranda, Olivia) manejan múltiples cuentas y
@@ -245,6 +268,9 @@ const COLUMNS = [
   { key: 'retenciones',       label: 'Reten.',       width: 110, sortable: true,  type: 'number' },
   { key: 'totalCFDI',         label: 'Total Fac.',   width: 125, sortable: true,  type: 'number' },
   { key: 'formaPago',         label: 'Forma de Pago', width: 160, sortable: true,  type: 'string' },
+  // BANCO sólo se muestra para colaboradores especiales (Alejandro, Victor,
+  // Miranda, Olivia). El render del header y del row la salta cuando no aplica.
+  { key: 'banco',             label: 'Banco',        width: 195, sortable: true,  type: 'string', specialOnly: true },
   { key: 'propinaPorcentaje', label: 'Prop. %',      width: 95,  sortable: true,  type: 'number' },
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
@@ -947,6 +973,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     moneda:             monedaXML,
     monedaCodigo:       monedaXML,
     esMonedaExtranjera: esExtranjera,
+    banco:              defaultBancoFor(colaborador),
   }
 }
 
@@ -971,7 +998,7 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
+function GastoRow({ g, upd, openPDF, onDelete, tiposList, isSpecial }) {
   // Display ↔ storage: app-wide formatDateDisplay/parseDateDisplay handle
   // the DD-MM-YYYY ↔ YYYY-MM-DD round-trip.
   const dateDisplay  = formatDateDisplay(g.fechaFac)
@@ -1174,8 +1201,27 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList }) {
           <option value="02">02 - Efectivo</option>
           <option value="03">03 - Transferencia</option>
           <option value="01">01 - Efectivo (otro)</option>
+          <option value="99">99 - Por Definir</option>
         </select>
       </td>
+
+      {/* Banco — solo visible para colaboradores especiales. Dropdown con
+          las cuentas conocidas. Permite ajustar manualmente el banco
+          después del cotejo con Saldos. */}
+      {isSpecial && (
+        <td>
+          <select
+            className="cell-select"
+            value={g.banco || ''}
+            onChange={e => upd('banco', e.target.value)}
+          >
+            <option value="">—</option>
+            {BANCOS_DISPONIBLES.map(b => (
+              <option key={b} value={b}>{b}</option>
+            ))}
+          </select>
+        </td>
+      )}
 
       {/* Propina % — compact: rounds to 2 decimals, drops trailing zeros for typing comfort */}
       <td><NumCell field="propinaPorcentaje" suffix="%" compact /></td>
@@ -2273,7 +2319,9 @@ export default function App() {
   // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
   // [9] iva, [10] isr/ish/ieps, [11] ret.isr, [12] ret.iva, [13] reten,
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 95, 105, 130, 110, 80])
+  // 22 columnas: ...formaPago(15), banco(16, solo especiales), prop%(17),
+  // prop$(18), totalFinal(19), montoUSD(20), tipoCambio(21)
+  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
   const [busqueda,      setBusqueda]      = useState('')
   const searchInputRef = useRef(null)
@@ -2382,6 +2430,7 @@ export default function App() {
   // operational list; null (modal still open) falls back to a merged
   // sorted union so existing rows can still render their saved tipo.
   const tiposList = useMemo(() => getTiposForColaborador(colaborador), [colaborador])
+  const esColaboradorEspecial = COLABORADORES_ESPECIALES.includes(colaborador?.nombre)
 
   // Three-state cycle: first click → asc, second → desc, third → unsorted.
   const toggleSort = field => setSort(s => {
@@ -2712,6 +2761,7 @@ export default function App() {
         propinaSugerida18:  0,
         propinaSugerida20:  0,
         propinaSugerida22:  0,
+        banco:              defaultBancoFor(colaborador),
       }
     }
 
@@ -2770,6 +2820,7 @@ export default function App() {
       propinaSugerida18,
       propinaSugerida20,
       propinaSugerida22,
+      banco:              defaultBancoFor(colaborador),
     }
   }
 
@@ -3476,7 +3527,7 @@ export default function App() {
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, validado: false,
-      montoUSD: 0, tipoCambio: 0, moneda: 'MXN',
+      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador),
     }])
   }
 
@@ -4256,7 +4307,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.80</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.81</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4517,24 +4568,28 @@ export default function App() {
           }}>
             <thead>
               <tr>
-                {COLUMNS.map((col, idx) => (
-                  <th
-                    key={col.key}
-                    className={col.key === 'status' ? 'th-status' : col.key === 'proveedor' ? 'th-proveedor' : undefined}
-                    style={{ width: colWidths[idx], cursor: col.sortable ? 'pointer' : undefined }}
-                    onClick={col.sortable ? () => toggleSort(col.key) : undefined}
-                  >
-                    {col.label}
-                    {sort.field === col.key && sort.dir && (
-                      <span className="sort-arrow">{sort.dir === 'asc' ? '▲' : '▼'}</span>
-                    )}
-                    <div
-                      className="col-resizer"
-                      onMouseDown={e => startResize(idx, e)}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  </th>
-                ))}
+                {COLUMNS.map((col, idx) => {
+                  // Oculta columnas specialOnly (banco) para no-especiales.
+                  if (col.specialOnly && !esColaboradorEspecial) return null
+                  return (
+                    <th
+                      key={col.key}
+                      className={col.key === 'status' ? 'th-status' : col.key === 'proveedor' ? 'th-proveedor' : undefined}
+                      style={{ width: colWidths[idx], cursor: col.sortable ? 'pointer' : undefined }}
+                      onClick={col.sortable ? () => toggleSort(col.key) : undefined}
+                    >
+                      {col.label}
+                      {sort.field === col.key && sort.dir && (
+                        <span className="sort-arrow">{sort.dir === 'asc' ? '▲' : '▼'}</span>
+                      )}
+                      <div
+                        className="col-resizer"
+                        onMouseDown={e => startResize(idx, e)}
+                        onClick={e => e.stopPropagation()}
+                      />
+                    </th>
+                  )
+                })}
                 {/* Eliminar — sticky-right action column, no label, fixed 40px width */}
                 <th className="th-delete" style={{ width: 40 }} />
               </tr>
@@ -4548,6 +4603,7 @@ export default function App() {
                   onDelete={() => setLista(prev => prev.filter(x => x.id !== g.id))}
                   openPDF={openPDF}
                   tiposList={tiposList}
+                  isSpecial={esColaboradorEspecial}
                 />
               ))}
             </tbody>
