@@ -2172,6 +2172,26 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
+  // Auto-fit del ancho de la columna FACTURA (colWidths[4]) al folio más
+  // largo presente en la lista, para que folios como "F103069-141757" o
+  // "FAC102026491" nunca se corten con elipsis. Se recalcula cuando cambia
+  // la lista; respeta un mínimo de 120px.
+  useEffect(() => {
+    if (lista.length === 0) return
+    const longest = lista.reduce((max, g) => {
+      const len = String(g.noFactura || '').length
+      return len > max ? len : max
+    }, 0)
+    // ~8.5px por char en Inter 13px + ~30px de padding/borders
+    const fitted = Math.max(120, Math.ceil(longest * 8.5) + 30)
+    setColWidths(prev => {
+      if (prev[4] === fitted) return prev
+      const next = [...prev]
+      next[4] = fitted
+      return next
+    })
+  }, [lista])
+
   // Cmd/Ctrl+K → enfoca el buscador universal. Escape → cierra/clear.
   useEffect(() => {
     const onKey = (e) => {
@@ -2221,12 +2241,19 @@ export default function App() {
   // ── Métricas (cards en el encabezado de la tabla) ──
   const metrics = useMemo(() => {
     const sum = field => lista.reduce((s, g) => s + (g[field] || 0), 0)
+    // totalUSD: suma de montos en USD. Usa montoExtranjero si está, si no
+    // cae a montoUSD para mantener compat con rows OCR previos.
+    const totalUSD = lista.reduce(
+      (s, g) => s + (Number(g.montoExtranjero) || Number(g.montoUSD) || 0),
+      0
+    )
     return {
       totalFacturado:   sum('totalCFDI'),
       ivaTotal:         sum('iva'),
       retencionesTotal: sum('retenciones'),
       sinCobrar:        lista.filter(g => !g.fechaCobro).length,
       count:            lista.length,
+      totalUSD,
     }
   }, [lista])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -3939,7 +3966,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.68</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.69</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4060,6 +4087,10 @@ export default function App() {
         <div className="metric-card" style={{ '--accent': '#FF9500' }}>
           <div className="metric-label">Retenciones</div>
           <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
+        </div>
+        <div className="metric-card" style={{ '--accent': '#59D39B' }}>
+          <div className="metric-label">Total USD</div>
+          <div className="metric-value">{fmtMoney(metrics.totalUSD)}</div>
         </div>
         <div className="metric-card" style={{ '--accent': '#30D158' }}>
           <div className="metric-label">Registros</div>
