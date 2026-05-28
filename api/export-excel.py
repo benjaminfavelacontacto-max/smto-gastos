@@ -168,7 +168,7 @@ def fill_row_bg(ws, row, start_col, end_col, color):
     for c in range(start_col, end_col + 1):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=color)
 
-def build_workbook(gastos, colaborador=''):
+def build_workbook(gastos, colaborador='', poliza_numero='N/A'):
     wb = Workbook()
     # Protección a nivel libro EXPLÍCITAMENTE deshabilitada. Sin esto, algunos
     # usuarios de Windows ven el diálogo "es un archivo de solo lectura" al
@@ -192,9 +192,9 @@ def build_workbook(gastos, colaborador=''):
     # N = MONTO USD, O = T/C, P = right spacer. N + O sized equal so the
     # new "USD" KPI card (N5:O5) reads as a tidy 2-column tile above them.
     col_widths = {
-        'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 14, 'F': 11, 'G': 11,
-        'H': 28, 'I': 12, 'J': 11, 'K': 11, 'L': 18, 'M': 15,
-        'N': 13, 'O': 13, 'P': 3,
+        'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
+        'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 18, 'N': 15,
+        'O': 13, 'P': 13, 'Q': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -203,7 +203,7 @@ def build_workbook(gastos, colaborador=''):
     # outer spacer cols past the totals/footer still inherit BG_PAGE.
     nrows_painted = max(80, 40 + len(gastos))
     for r in range(1, nrows_painted):
-        fill_row_bg(ws, r, 1, 16, BG_PAGE)
+        fill_row_bg(ws, r, 1, 17, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
     ws.row_dimensions[1].height = 50
@@ -257,7 +257,7 @@ def build_workbook(gastos, colaborador=''):
     ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
-    for c in range(2, 16):
+    for c in range(2, 17):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(
@@ -286,11 +286,11 @@ def build_workbook(gastos, colaborador=''):
     # All five cards share a medium EXCEL_GREEN frame; TOTAL FACTURADO and
     # USD are tinted brand-green, the rest stay SMTO_BLACK.
     kpis = [
-        ('B', 'D', 'TOTAL FACTURADO', f'=SUM(L{data_first}:L{data_last})', '"$"#,##0.00', SMTO_GREEN),
-        ('E', 'G', 'IVA TOTAL',       f'=SUM(J{data_first}:J{data_last})', '"$"#,##0.00', SMTO_BLACK),
-        ('H', 'J', 'RETENCIONES',     f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('B', 'D', 'TOTAL FACTURADO', f'=SUM(M{data_first}:M{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('E', 'G', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('H', 'J', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})', '"$"#,##0.00', SMTO_BLACK),
         ('K', 'M', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
-        ('N', 'O', 'USD',             f'=SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('N', 'P', 'USD',             f'=SUM(O{data_first}:O{data_last})', '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -340,7 +340,7 @@ def build_workbook(gastos, colaborador=''):
     # inside the cards even though the anchor + end cells have borders.
     MED_GREEN  = Side(style='medium', color=EXCEL_GREEN)
     THIN_LIGHT = Side(style='thin',   color=BORDER_LIGHT)
-    for col_letter in ('C', 'F', 'I', 'L'):
+    for col_letter in ('C', 'F', 'I', 'L', 'O'):
         ws[f'{col_letter}5'].border = Border(
             left=MED_GREEN, right=MED_GREEN, top=MED_GREEN, bottom=THIN_LIGHT,
         )
@@ -355,7 +355,7 @@ def build_workbook(gastos, colaborador=''):
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
     ws.row_dimensions[9].height = 28
 
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'MONTO USD', 'T/C']
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'MONTO USD', 'T/C']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -376,7 +376,7 @@ def build_workbook(gastos, colaborador=''):
             top=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
             left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
-            right=Side(style='medium', color=EXCEL_GREEN) if col == 15 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 16 else None,
         )
 
     # ═══ DATA ROWS (row 10+) ═══
@@ -426,21 +426,22 @@ def build_workbook(gastos, colaborador=''):
             (2,  g.get('rfc', ''),       'left',   'rfc'),
             (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
             (4,  tipo,                   'center', 'badge_tipo'),
-            (5,  g.get('noFactura', ''), 'center', 'normal'),
-            (6,  fecha_fac,              'center', 'normal'),
-            (7,  fecha_cobro,            'center', 'normal'),
-            (8,  g.get('concepto', ''),  'left',   'normal'),
-            (9,  importe,                  'center', 'currency'),
-            (10, iva,                      'center', 'currency'),
-            (11, ret,                      'center', 'currency'),
+            (5,  poliza_numero,          'center', 'normal'),
+            (6,  g.get('noFactura', ''), 'center', 'normal'),
+            (7,  fecha_fac,              'center', 'normal'),
+            (8,  fecha_cobro,            'center', 'normal'),
+            (9,  g.get('concepto', ''),  'left',   'normal'),
+            (10, importe,                  'center', 'currency'),
+            (11, iva,                      'center', 'currency'),
+            (12, ret,                      'center', 'currency'),
             # TOTAL is a true Excel formula so the column re-sums correctly
             # if the user edits Importe/IVA/Retención manually — also kills
             # the green "inconsistent formula" triangle Excel shows when a
             # column has static derived values next to formula candidates.
-            (12, f'=I{row}+J{row}-K{row}', 'center', 'currency_bold'),
-            (13, forma,                  'center', 'badge_pago'),
-            (14, monto_usd,              'center', 'currency'),
-            (15, tipo_cambio,            'center', 'tipocambio'),
+            (13, f'=J{row}+K{row}-L{row}', 'center', 'currency_bold'),
+            (14, forma,                  'center', 'badge_pago'),
+            (15, monto_usd,              'center', 'currency'),
+            (16, tipo_cambio,            'center', 'tipocambio'),
         ]
 
         for col, val, align, style_type in cells:
@@ -480,7 +481,7 @@ def build_workbook(gastos, colaborador=''):
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-        ws.cell(row=row, column=16).fill = PatternFill('solid', start_color=BG_PAGE)
+        ws.cell(row=row, column=17).fill = PatternFill('solid', start_color=BG_PAGE)
 
         row += 1
 
@@ -494,7 +495,7 @@ def build_workbook(gastos, colaborador=''):
 
             # Paint the whole band first so per-cell font/border calls below
             # only need to touch the cells that carry content.
-            for c in range(1, 16):
+            for c in range(1, 17):
                 pcell = ws.cell(row=row, column=c)
                 pcell.fill = PatternFill('solid', start_color=propina_bg)
                 pcell.border = Border(bottom=Side(style='hair', color=BORDER_LIGHT))
@@ -505,9 +506,9 @@ def build_workbook(gastos, colaborador=''):
             label.font = Font(name='Aptos', size=9, italic=True, color=SMTO_GREEN)
             label.alignment = Alignment(horizontal='left', vertical='center', indent=2)
 
-            # Col H — concepto detail. For foreign currency, include the
+            # Col I — concepto detail. For foreign currency, include the
             # native symbol + amount so the row reads as the original tip.
-            concepto_p = ws.cell(row=row, column=8)
+            concepto_p = ws.cell(row=row, column=9)
             if propina_ext > 0 and moneda_code != 'MXN':
                 symbol = CURRENCY_SYMBOLS.get(moneda_code, moneda_code + ' ')
                 concepto_p.value = f'Propina {symbol}{propina_ext:,.2f} {moneda_code}'
@@ -516,30 +517,30 @@ def build_workbook(gastos, colaborador=''):
             concepto_p.font = Font(name='Aptos', size=9, italic=True, color=TEXT_SECONDARY)
             concepto_p.alignment = Alignment(horizontal='left', vertical='center', indent=2)
 
-            # Col I (IMPORTE), col L (TOTAL) — the tip in MXN, brand-green
-            # italic. Col J / K stay at 0 so the TOTAL formula on adjacent
+            # Col J (IMPORTE), col M (TOTAL) — the tip in MXN, brand-green
+            # italic. Col K / L stay at 0 so the TOTAL formula on adjacent
             # rows isn't affected (this row writes a literal, not a formula).
-            for col, val, bold in [(9, propina_mxn, False), (12, propina_mxn, True)]:
+            for col, val, bold in [(10, propina_mxn, False), (13, propina_mxn, True)]:
                 c = ws.cell(row=row, column=col, value=val)
                 c.number_format = '"$"#,##0.00'
                 c.font = Font(name='Aptos', size=9, italic=True, bold=bold, color=SMTO_GREEN)
                 c.alignment = Alignment(horizontal='right', vertical='center', indent=1)
 
-            for col in (10, 11):  # IVA / RETENCIÓN — explicit 0 so SUM works
+            for col in (11, 12):  # IVA / RETENCIÓN — explicit 0 so SUM works
                 c = ws.cell(row=row, column=col, value=0)
                 c.number_format = '"$"#,##0.00'
                 c.font = Font(name='Aptos', size=9, italic=True, color=TEXT_SECONDARY)
                 c.alignment = Alignment(horizontal='right', vertical='center', indent=1)
 
-            # Col M — FORMA PAGO mirror from the parent, lighter style.
-            forma_p = ws.cell(row=row, column=13)
+            # Col N — FORMA PAGO mirror from the parent, lighter style.
+            forma_p = ws.cell(row=row, column=14)
             forma_p.value = forma
             forma_p.font = Font(name='Aptos', size=9, italic=True, color=BADGE_GRAY_FG)
             forma_p.alignment = Alignment(horizontal='center', vertical='center')
 
-            # Col N — foreign tip amount (only when the parent is foreign).
+            # Col O — foreign tip amount (only when the parent is foreign).
             if propina_ext > 0 and moneda_code != 'MXN':
-                ext_c = ws.cell(row=row, column=14, value=propina_ext)
+                ext_c = ws.cell(row=row, column=15, value=propina_ext)
                 ext_c.number_format = '#,##0.00'
                 ext_c.font = Font(name='Aptos', size=9, italic=True, color=SMTO_GREEN)
                 ext_c.alignment = Alignment(horizontal='right', vertical='center', indent=1)
@@ -547,7 +548,7 @@ def build_workbook(gastos, colaborador=''):
             # Outer spacers stay on page bg so the propina band fits inside
             # the table boundary like every other data row.
             ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-            ws.cell(row=row, column=16).fill = PatternFill('solid', start_color=BG_PAGE)
+            ws.cell(row=row, column=17).fill = PatternFill('solid', start_color=BG_PAGE)
 
             row += 1
 
@@ -556,12 +557,12 @@ def build_workbook(gastos, colaborador=''):
     row += 1
 
     ws.row_dimensions[row].height = 32
-    for c in range(2, 16):
+    for c in range(2, 17):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
         cell.border = Border()
 
-    ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
+    ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=9)
     lbl = ws.cell(row=row, column=2, value='TOTAL CUENTA')
     lbl.font = Font(name='Aptos', size=12, bold=True, color=WHITE)
     lbl.alignment = Alignment(horizontal='right', vertical='center', indent=2)
@@ -573,11 +574,11 @@ def build_workbook(gastos, colaborador=''):
     # loop inserted. T/C (col O) intentionally has no total — a sum of
     # exchange rates is not meaningful.
     totals = [
-        (9,  f'=SUM(I{data_first}:I{data_last})', False),
         (10, f'=SUM(J{data_first}:J{data_last})', False),
         (11, f'=SUM(K{data_first}:K{data_last})', False),
-        (12, f'=SUM(L{data_first}:L{data_last})', True),
-        (14, f'=SUM(N{data_first}:N{data_last})', False),
+        (12, f'=SUM(L{data_first}:L{data_last})', False),
+        (13, f'=SUM(M{data_first}:M{data_last})', True),
+        (15, f'=SUM(O{data_first}:O{data_last})', False),
     ]
     for col, val, is_main in totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -591,17 +592,17 @@ def build_workbook(gastos, colaborador=''):
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # FORMA PAGO (M) and T/C (O) inside the totals band get the black fill
+    # FORMA PAGO (N) and T/C (P) inside the totals band get the black fill
     # but no value (FORMA is non-aggregatable text; T/C is per-row).
-    ws.cell(row=row, column=13).fill = PatternFill('solid', start_color=SMTO_BLACK)
-    ws.cell(row=row, column=15).fill = PatternFill('solid', start_color=SMTO_BLACK)
+    ws.cell(row=row, column=14).fill = PatternFill('solid', start_color=SMTO_BLACK)
+    ws.cell(row=row, column=16).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
-    ws.merge_cells(start_row=row, start_column=10, end_row=row, end_column=15)
-    ft = ws.cell(row=row, column=10)
-    ft.value = 'SMTO Engineering · v7.18'
+    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=16)
+    ft = ws.cell(row=row, column=11)
+    ft.value = 'SMTO Engineering · v7.50'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
@@ -657,12 +658,15 @@ class handler(BaseHTTPRequestHandler):
             if isinstance(data, dict):
                 gastos = data.get('gastos', [])
                 colaborador = data.get('colaborador', '')
+                poliza_numero = data.get('polizaNumero', 'N/A')
             else:
                 gastos = data
                 colaborador = ''
+                poliza_numero = 'N/A'
             gastos = sanitize(gastos)
             colaborador = sanitize(colaborador)
-            wb = build_workbook(gastos, colaborador)
+            poliza_numero = sanitize(poliza_numero)
+            wb = build_workbook(gastos, colaborador, poliza_numero)
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)

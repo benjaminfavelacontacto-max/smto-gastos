@@ -112,6 +112,52 @@ const TIPOS_ESPECIALES = [
 
 const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda Navarro', 'Olivia Gil']
 
+/* Folio Clara de 4 dígitos por colaborador. Aparece en la columna "PÓLIZA"
+   del Excel exportado. Quien no tenga tarjeta Clara queda en 'N/A'. Los
+   especiales (Olivar, Aceves, Miranda, Olivia) manejan múltiples cuentas y
+   su mapeo vendrá de un Excel separado en una iteración posterior. */
+const POLIZAS_CLARA = {
+  'Daniel Covarrubias': '3789',
+  'Edie Haro': '0610',
+  'David Delgado': '0045',
+  'Isaias Valencia': '1836',
+  'Sigifredo Olivas': '6961',
+  'Rosy Corral': '3136',
+  'Heriberto Chacón': '3371',
+  'Eduardo Carranco': '7507',
+  'Daniel Gutierrez': '6839',
+  'James Tisoto': '1295',
+  'Misael Cruz': '1812',
+  'Benjamin Favela': '4487',
+  'Viviana Perez': '8571',
+  'Juan Francisco Cuellar': '3269',
+  'Juan Carlos Virgen': '4398',
+  'David de Jesus Delgado': '4104',
+  'Omar Monclova': '4454',
+  'Antonio Uribe': '3588',
+  'Natividad Garcia': '8847',
+  'Raydel Baltazar': '3783',
+  'Miguel Castillo': '2817',
+  'David Lopez': '6985',
+  'David Castillo': '8740',
+  'Dario Lopez': '3891',
+  'Moises Padilla': '7201',
+  'Ricardo Pacheco Glez.': '1608',
+  'Emmanuel Navarro': '9251',
+  'Carlos Ponce': '1023',
+  'Armando Torres': '0259',
+  'Juan Carlos Santoyo': '9153',
+  'Ricardo Pacheco': '1548',
+  'Mariana Gonzalez': '1229',
+  'Julio Torres': '9218',
+  'Mauricio Rodriguez': '5168',
+  'Hector Duarte': '5967',
+  'Juan Sotomayor': '5277',
+  'Marco Alvarado': '9481',
+  'Marco Sanchez': '1159',
+  'Juan Alfaro': '6660',
+}
+
 const getTiposForColaborador = (colaborador) => {
   if (!colaborador) return TIPOS_NORMALES
   if (COLABORADORES_ESPECIALES.includes(colaborador.nombre)) return TIPOS_ESPECIALES
@@ -173,6 +219,7 @@ const COLABORADORES = [
   { categoria: 'Ventas', nombre: 'Marco Alvarado' },
   { categoria: 'Admin', nombre: 'Miranda Navarro' },
   { categoria: 'Ventas', nombre: 'Marco Sanchez' },
+  { categoria: 'Ventas', nombre: 'Juan Alfaro' },
 ]
 
 /* Single source of truth for table columns.
@@ -3029,7 +3076,7 @@ export default function App() {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '' }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A' }),
       })
       if (response.ok) {
         const excelBlob = await response.blob()
@@ -3292,7 +3339,7 @@ export default function App() {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '' }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A' }),
       })
       if (!response.ok) {
         try {
@@ -3376,7 +3423,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.49</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.50</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
