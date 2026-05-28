@@ -779,7 +779,15 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     id: genId(),
     rfc,
     proveedor,
-    noFactura: (ga(comp, 'Serie', 'serie') || '') + (ga(comp, 'Folio', 'folio') || 'SN'),
+    noFactura: (() => {
+      const serie = ga(comp, 'Serie', 'serie') || ''
+      const folio = ga(comp, 'Folio', 'folio') || ''
+      if (serie || folio) return serie + folio
+      // CFDI sin Serie ni Folio: usar últimos 4 chars del UUID para que cada
+      // factura tenga un identificador único y no colisione en la dedup.
+      const uuidSuffix = (uuid || '').replace(/-/g, '').slice(-4).toUpperCase()
+      return uuidSuffix ? `SN-${uuidSuffix}` : `SN-${genId().slice(0, 4).toUpperCase()}`
+    })(),
     fechaFac,
     concepto:   conceptoClasif,
     tipo: autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria, claveProdServ),
@@ -2631,9 +2639,16 @@ export default function App() {
       }, 1500)
     }
 
-    const dropDupes = allNewGastos.filter(g =>
-      lista.some(e => e.rfc === g.rfc && e.noFactura === g.noFactura)
-    )
+    // Duplicates against existing lista AND within the incoming batch itself
+    const dropDupes = []
+    const seenInBatch = new Set()
+    for (const g of allNewGastos) {
+      const key = `${g.rfc}|${g.noFactura}`
+      const inLista = lista.some(e => e.rfc === g.rfc && e.noFactura === g.noFactura)
+      const inBatch = seenInBatch.has(key)
+      if (inLista || inBatch) dropDupes.push(g)
+      seenInBatch.add(key)
+    }
 
     if (dropDupes.length > 0) {
       setDuplicadosModal({
@@ -3636,7 +3651,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.57</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.58</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
