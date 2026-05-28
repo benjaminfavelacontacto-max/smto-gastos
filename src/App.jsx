@@ -846,7 +846,13 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     proveedor,
     noFactura: (() => {
       const serie = ga(comp, 'Serie', 'serie') || ''
-      const folio = ga(comp, 'Folio', 'folio') || ''
+      let   folio = ga(comp, 'Folio', 'folio') || ''
+      // REFIEL pad: el CFDI viene con folio sin zero-padding (e.g. 1406)
+      // pero el PDF y el archivo de Saldos lo usan padeado a 5 dígitos
+      // (E01406). Sin este pad, el cotejo con Saldos no matchea.
+      if (rfc === 'REF2208125E6' && /^\d{1,5}$/.test(folio)) {
+        folio = folio.padStart(5, '0')
+      }
       if (serie || folio) return serie + folio
       // CFDI sin Serie ni Folio: usar últimos 4 chars del UUID para que cada
       // factura tenga un identificador único y no colisione en la dedup.
@@ -3966,7 +3972,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.69</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.70</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
