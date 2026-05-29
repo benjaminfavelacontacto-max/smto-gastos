@@ -1067,6 +1067,10 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     // queda intacto para exponer la diferencia 'cobrado vs facturado' en
     // la columna DIFERENCIA del Excel (solo Clara MXN Credito).
     montoFacturado:     totalCFDI,
+    // CFDIs no traen propina, así que la propina "esperada" es 0. Si el
+    // usuario agrega propina manualmente después, aparece como DIFERENCIA
+    // (= montoPropina actual - montoPropinaOriginal = todo lo agregado).
+    montoPropinaOriginal: 0,
   }
 }
 
@@ -2856,6 +2860,7 @@ export default function App() {
         propinaSugerida22:  0,
         banco:              defaultBancoFor(colaborador),
         montoFacturado:     importePagado,
+        montoPropinaOriginal: 0,
       }
     }
 
@@ -2915,11 +2920,14 @@ export default function App() {
       propinaSugerida20,
       propinaSugerida22,
       banco:              defaultBancoFor(colaborador),
-      // Snapshot del total al momento del OCR. El backend de Excel suma la
-      // montoPropina al renderizar FACTURADO para evitar falsas
-      // discrepancias por tip — el delta verdadero solo aparece si
-      // validarBanco sobreescribió totalCFDI.
+      // Snapshot del total al momento del OCR (sin tip).
       montoFacturado:     isExtranjera ? 0 : total,
+      // Snapshot de la propina detectada por OCR — congelada al inicio.
+      // Si el usuario después edita montoPropina manualmente, ese cambio
+      // genera DIFERENCIA en el Excel. Para CFDIs/manual donde no hay
+      // propina al crear, queda en 0 y cualquier propina agregada después
+      // aparece como discrepancia.
+      montoPropinaOriginal: isExtranjera ? 0 : propina,
     }
   }
 
@@ -3626,7 +3634,7 @@ export default function App() {
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, validado: false,
-      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador), montoFacturado: 0,
+      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador), montoFacturado: 0, montoPropinaOriginal: 0,
     }])
   }
 
@@ -3754,6 +3762,7 @@ export default function App() {
       retencionesUSD:   Number(g.retencionesUSD) || 0,
       banco:            g.banco || '',
       montoFacturado:   Number(g.montoFacturado) || 0,
+      montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
       polizaNumero:     g.polizaNumero || '',
     }))
     try {
@@ -4209,6 +4218,7 @@ export default function App() {
             polizaNumero: folio,
             banco:       String(r.sheet || '').trim().replace(/\s+/g, ' '),
             montoFacturado: importe,
+            montoPropinaOriginal: 0,
             isNew: true,
           })
         }
@@ -4335,6 +4345,7 @@ export default function App() {
         retencionesUSD:   Number(g.retencionesUSD) || 0,
         banco:            g.banco || '',
         montoFacturado:   Number(g.montoFacturado) || 0,
+        montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
@@ -4423,7 +4434,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.89</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.90</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

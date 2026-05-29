@@ -550,10 +550,15 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # post-validación bancaria.
         es_clara = banco.lower() == 'clara mxn credito'
         if es_clara:
-            propina_actual = round(g.get('montoPropina', 0) or 0, 2)
-            facturado_base = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
-            facturado = round(facturado_base + propina_actual, 2)
-            cobrado = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
+            propina_actual   = round(g.get('montoPropina', 0) or 0, 2)
+            # propina_original = snapshot al crear el gasto. Para OCR tickets
+            # captura la propina detectada por el OCR; para CFDIs, manual y
+            # nóminas vale 0. Si el usuario edita montoPropina en la UI, la
+            # diferencia con propina_original aparece como discrepancia.
+            propina_original = round(g.get('montoPropinaOriginal', 0) or 0, 2)
+            facturado_base   = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
+            facturado = round(facturado_base + propina_original, 2)
+            cobrado   = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
             # DIFERENCIA se escribe como fórmula viva =S{row}-T{row} para que
             # el usuario pueda hacer clic y ver la procedencia. El valor
             # numérico calculado (diff_num) se usa solo para decidir el color
