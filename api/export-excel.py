@@ -554,10 +554,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             facturado_base = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
             facturado = round(facturado_base + propina_actual, 2)
             cobrado = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
-            diferencia = round(cobrado - facturado, 2)
+            # DIFERENCIA se escribe como fórmula viva =S{row}-T{row} para que
+            # el usuario pueda hacer clic y ver la procedencia. El valor
+            # numérico calculado (diff_num) se usa solo para decidir el color
+            # del texto (verde / rojo / neutro) en el estilo 'diff'.
+            diff_num = round(cobrado - facturado, 2)
+            diferencia = f'=S{row}-T{row}'
         else:
             facturado = ''
             cobrado = ''
+            diff_num = None
             diferencia = ''
         cells = [
             (2,  g.get('rfc', ''),       'left',   'rfc'),
@@ -617,14 +623,15 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 cell.number_format = '#,##0.00'
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
             elif style_type == 'diff':
-                # DIFERENCIA: rojo si negativo, verde si positivo, neutro si
-                # cero o vacío. Solo Clara MXN Credito carga valor; otros
-                # bancos llegan con val='' y se renderan como celda vacía.
+                # DIFERENCIA: la celda lleva la fórmula viva =S{row}-T{row}.
+                # El color se decide por el valor numérico precalculado en
+                # diff_num (del scope del gasto): verde si > 0, rojo si < 0,
+                # neutro si 0 o si no aplica (banco != Clara MXN Credito).
                 cell.number_format = '"$"#,##0.00'
-                if isinstance(val, (int, float)):
-                    if val > 0:
+                if isinstance(diff_num, (int, float)):
+                    if diff_num > 0:
                         cell.font = Font(name='Calibri', size=10, bold=True, color='15803D')  # green-700
-                    elif val < 0:
+                    elif diff_num < 0:
                         cell.font = Font(name='Calibri', size=10, bold=True, color='B91C1C')  # red-700
                     else:
                         cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
