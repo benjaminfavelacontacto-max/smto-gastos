@@ -2915,7 +2915,11 @@ export default function App() {
       propinaSugerida20,
       propinaSugerida22,
       banco:              defaultBancoFor(colaborador),
-      montoFacturado:     isExtranjera ? 0 : total,
+      // Para tickets OCR, el "facturado" debe incluir la propina ya que el
+      // bank charge real (cobrado) la incluye también. Si solo se usara
+      // `total` (subtotal+iva sin tip), DIFERENCIA aparecería con el monto
+      // de la propina aunque no hay discrepancia real.
+      montoFacturado:     isExtranjera ? 0 : (total + propina),
     }
   }
 
@@ -4419,7 +4423,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.86</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.87</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

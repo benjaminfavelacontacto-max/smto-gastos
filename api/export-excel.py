@@ -309,9 +309,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         ('H', 'J', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})', '"$"#,##0.00', SMTO_BLACK),
         ('K', 'M', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
         ('N', 'P', 'USD',             f'=SUM(P{data_first}:P{data_last})', '"$"#,##0.00', SMTO_GREEN),
-        # DIFERENCIA cobrado vs facturado — la suma SOLO incluye renglones
-        # Clara MXN Credito (los demás escriben '' en col U, ignorados por SUM).
-        ('S', 'U', 'DIFERENCIA',      f'=SUM(U{data_first}:U{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        # DIFERENCIA cobrado vs facturado — span Q:U (5 cols) para que no
+        # quede espacio vacío entre la tarjeta USD (N:P) y el borde derecho.
+        # La suma SOLO incluye renglones Clara MXN Credito (los demás
+        # escriben '' en col U, ignorados por SUM).
+        ('Q', 'U', 'DIFERENCIA',      f'=SUM(U{data_first}:U{data_last})', '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -361,7 +363,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # inside the cards even though the anchor + end cells have borders.
     MED_GREEN  = Side(style='medium', color=EXCEL_GREEN)
     THIN_LIGHT = Side(style='thin',   color=BORDER_LIGHT)
-    for col_letter in ('C', 'F', 'I', 'L', 'O', 'T'):
+    # Middle cells por tarjeta: B-D→C, E-G→F, H-J→I, K-M→L, N-P→O,
+    # Q-U (DIFERENCIA, 5 cols) → R, S, T
+    for col_letter in ('C', 'F', 'I', 'L', 'O', 'R', 'S', 'T'):
         ws[f'{col_letter}5'].border = Border(
             left=MED_GREEN, right=MED_GREEN, top=MED_GREEN, bottom=THIN_LIGHT,
         )
