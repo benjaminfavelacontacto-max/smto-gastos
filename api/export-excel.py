@@ -549,27 +549,27 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # Kapital, USD), las 3 celdas quedan vacías (no se reconcilian con
         # Clara CSV en este flujo).
         #
-        # IMPORTANTE: FACTURADO incluye la propina ACTUAL (montoPropina),
-        # no solo el snapshot del totalCFDI original. Si no se sumara, una
-        # propina agregada después (por OCR, edición manual, o detección de
-        # tip por validarBanco) aparecería como "discrepancia" en DIFERENCIA
-        # aunque sea un cargo esperado. Con la suma, DIFERENCIA solo refleja
-        # el delta verdadero entre el monto original del CFDI y el monto
-        # post-validación bancaria.
+        # IMPORTANTE: FACTURADO muestra el monto de la factura SIN propina
+        # (el CFDI no incluye el tip). La propina se contempla en la fórmula
+        # de DIFERENCIA: cobrado − (facturado + propina). Así un tip legítimo
+        # nunca aparece como discrepancia, y sólo se marca en rojo cuando el
+        # banco cargó más que factura + propina.
         es_clara = banco.lower() == 'clara mxn credito'
         if es_clara:
-            propina_actual   = round(g.get('montoPropina', 0) or 0, 2)
-            facturado_base   = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
-            # FACTURADO incluye la propina actual para que el tip no aparezca
-            # como discrepancia cuando el banco cargó exactamente factura+propina.
-            facturado = round(facturado_base + propina_actual, 2)
+            propina_actual = round(g.get('montoPropina', 0) or 0, 2)
+            # FACTURADO = monto de la factura SIN propina (el CFDI no incluye el
+            # tip). COBRADO = lo que la tarjeta cargó = factura + propina.
+            facturado = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
             cobrado   = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
-            # DIFERENCIA se escribe como fórmula viva =S{row}-T{row} para que
-            # el usuario pueda hacer clic y ver la procedencia. El valor
-            # numérico calculado (diff_num) se usa solo para decidir el color
-            # del texto (verde / rojo / neutro) en el estilo 'diff'.
-            diff_num = round(cobrado - facturado, 2)
-            diferencia = f'=S{row}-T{row}'
+            # DIFERENCIA = cobrado − (facturado + propina). La propina se resta
+            # como literal en la fórmula viva SÓLO cuando existe — no todas las
+            # facturas la tienen — para que el tip legítimo no aparezca como
+            # discrepancia y sólo se marque en rojo un cargo realmente excedente.
+            diff_num = round(cobrado - facturado - propina_actual, 2)
+            if propina_actual > 0:
+                diferencia = f'=S{row}-T{row}-{propina_actual}'
+            else:
+                diferencia = f'=S{row}-T{row}'
         else:
             facturado = ''
             cobrado = ''
@@ -633,7 +633,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 cell.number_format = '#,##0.00'
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
             elif style_type == 'diff':
-                # DIFERENCIA: la celda lleva la fórmula viva =S{row}-T{row}.
+                # DIFERENCIA: la celda lleva la fórmula viva =S-T(-propina).
                 # El color se decide por diff_num: rojo si cobrado > facturado+propina
                 # (banco cargó más de lo esperado), verde si cobrado < facturado+propina,
                 # neutro si igual o si banco != Clara MXN Credito.
