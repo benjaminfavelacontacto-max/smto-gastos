@@ -1092,6 +1092,54 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: CELDA NUMÉRICA EDITABLE
+   Mantiene un "draft" (texto crudo) mientras el input tiene
+   foco: muestra exactamente lo que se teclea, sin reformatear
+   en cada tecla, así no salta el cursor ni se snapea a 0.
+   Sólo al perder el foco vuelve al valor formateado. Vive a
+   nivel de módulo (no dentro de GastoRow) para que su estado
+   sobreviva los re-renders del padre.
+═══════════════════════════════════════════════════ */
+
+function NumCell({ g, upd, field, prefix, suffix, format = true, compact = false }) {
+  const v = g[field]
+  const [draft, setDraft] = useState(null)
+  const formatted = v
+    ? compact ? String(+Number(v).toFixed(2))
+    : format  ? Number(v).toFixed(2)
+    :           String(v)
+    : ''
+  const display = draft !== null ? draft : formatted
+  return (
+    <div className="num-cell">
+      {prefix && <span className="sym">{prefix}</span>}
+      <input
+        type="text"
+        inputMode="decimal"
+        className="cell-in"
+        value={display}
+        placeholder="0"
+        onFocus={e => {
+          const el = e.target
+          setDraft(v ? String(+Number(v).toFixed(2)) : '')
+          requestAnimationFrame(() => el.select())
+        }}
+        onChange={e => {
+          const raw = e.target.value
+          // Permite vacío y números parciales ("1.", ".5", "10"); rechaza
+          // cualquier otro carácter para que la edición fluya sin pelear.
+          if (raw !== '' && !/^-?\d*\.?\d*$/.test(raw)) return
+          setDraft(raw)
+          upd(field, parseFloat(raw) || 0)
+        }}
+        onBlur={() => setDraft(null)}
+      />
+      {suffix && <span className="sym">{suffix}</span>}
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
@@ -1114,32 +1162,6 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList, isSpecial }) {
     }
     return g.fechaCobro
   })()
-
-  const NumCell = ({ field, prefix, suffix, format = true, compact = false }) => {
-    const v = g[field]
-    // Money fields render as toFixed(2) (e.g. 13.07). `compact` rounds to 2
-    // decimals but drops trailing zeros (e.g. 13 instead of 13.00) — used for
-    // propinaPorcentaje and montoPropina so editing feels natural. 0 → '' for
-    // cleanliness.
-    const display = v
-      ? compact ? +Number(v).toFixed(2)
-      : format  ? Number(v).toFixed(2)
-      :           v
-      : ''
-    return (
-      <div className="num-cell">
-        {prefix && <span className="sym">{prefix}</span>}
-        <input
-          type="number"
-          className="cell-in"
-          value={display}
-          placeholder="0"
-          onChange={e => upd(field, parseFloat(e.target.value) || 0)}
-        />
-        {suffix && <span className="sym">{suffix}</span>}
-      </div>
-    )
-  }
 
   return (
     <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new'].filter(Boolean).join(' ')}>
@@ -1267,25 +1289,25 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList, isSpecial }) {
       </td>
 
       {/* Subtotal */}
-      <td><NumCell field="importe"     prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="importe"     prefix="$" /></td>
 
       {/* IVA */}
-      <td><NumCell field="iva"         prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="iva"         prefix="$" /></td>
 
       {/* ISR trasladado */}
-      <td><NumCell field="isrTrasladado" prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="isrTrasladado" prefix="$" /></td>
 
       {/* Ret. ISR */}
-      <td><NumCell field="retencionISR" prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="retencionISR" prefix="$" /></td>
 
       {/* Ret. IVA */}
-      <td><NumCell field="retencionIVA" prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="retencionIVA" prefix="$" /></td>
 
       {/* Retenciones (total) */}
-      <td><NumCell field="retenciones" prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="retenciones" prefix="$" /></td>
 
       {/* Total Factura */}
-      <td><NumCell field="totalCFDI"   prefix="$" /></td>
+      <td><NumCell g={g} upd={upd} field="totalCFDI"   prefix="$" /></td>
 
       {/* Forma de Pago */}
       <td>
@@ -1321,10 +1343,10 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList, isSpecial }) {
       )}
 
       {/* Propina % — compact: rounds to 2 decimals, drops trailing zeros for typing comfort */}
-      <td><NumCell field="propinaPorcentaje" suffix="%" compact /></td>
+      <td><NumCell g={g} upd={upd} field="propinaPorcentaje" suffix="%" compact /></td>
 
       {/* Propina $ */}
-      <td><NumCell field="montoPropina" prefix="$" compact /></td>
+      <td><NumCell g={g} upd={upd} field="montoPropina" prefix="$" compact /></td>
 
       {/* Total Final */}
       <td>
@@ -4434,7 +4456,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.93</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.94</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
