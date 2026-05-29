@@ -540,11 +540,20 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # cuya tarjeta es Clara MXN Credito. Para los demás (BBVA, Monex,
         # Kapital, USD), las 3 celdas quedan vacías (no se reconcilian con
         # Clara CSV en este flujo).
+        #
+        # IMPORTANTE: FACTURADO incluye la propina ACTUAL (montoPropina),
+        # no solo el snapshot del totalCFDI original. Si no se sumara, una
+        # propina agregada después (por OCR, edición manual, o detección de
+        # tip por validarBanco) aparecería como "discrepancia" en DIFERENCIA
+        # aunque sea un cargo esperado. Con la suma, DIFERENCIA solo refleja
+        # el delta verdadero entre el monto original del CFDI y el monto
+        # post-validación bancaria.
         es_clara = banco.lower() == 'clara mxn credito'
         if es_clara:
-            facturado = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
-            # Cobrado = total efectivamente pagado (matchea la columna TOTAL).
-            cobrado = round((g.get('totalCFDI', 0) or 0) + (g.get('montoPropina', 0) or 0), 2)
+            propina_actual = round(g.get('montoPropina', 0) or 0, 2)
+            facturado_base = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
+            facturado = round(facturado_base + propina_actual, 2)
+            cobrado = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
             diferencia = round(cobrado - facturado, 2)
         else:
             facturado = ''
