@@ -531,6 +531,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
         banco = (g.get('banco') or '').strip()
+        # Fallback de banco: si el gasto NO tiene banco asignado (típico de
+        # data legacy creada antes de v7.81 o cuando el colaborador no es
+        # especial y nunca cotejó con Saldos) y el colaborador NO es especial,
+        # defaultea a Clara MXN Credito (misma lógica que el frontend en
+        # defaultBancoFor). Sin esto, la reconciliación cobrado vs facturado
+        # quedaba vacía aunque el colaborador usa Clara por default.
+        if not banco and colaborador and colaborador not in COLABORADORES_ESPECIALES:
+            banco = 'Clara MXN Credito'
         # USUARIO se resuelve por el folio (poliza_row) usando el mapa
         # invertido de POLIZAS_CLARA. Si el folio del Saldos no matchea
         # ningún colaborador del mapa, cae al nombre del colaborador dueño
