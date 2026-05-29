@@ -198,7 +198,7 @@ const EMPLEADOS_RFC = [
   { rfc: 'VALI8107064Z0',  nombre: 'JOSÉ ISAÍAS VALENCIA LUNA' },
   { rfc: 'OIGS750803UF5',  nombre: 'SIGIFREDO OLIVAS GONZALEZ' },
   { rfc: 'OICA721231DB6',  nombre: 'ALEJANDRO OLIVAR CERVANTES' },
-  { rfc: 'COMR690829TL1',  nombre: 'ROSA MARÍA CORRAL MARTÍNEZ' },
+  { rfc: 'COMR690829TL1',  nombre: 'ROSA MARÍA CORRAL MARTÍNEZ', aliases: ['Rosy Corral'] },
   { rfc: 'CAUH880306JH0',  nombre: 'HERIBERTO CHACÓN URTIZ' },
   { rfc: 'CASR870808CM3',  nombre: 'RAMÓN EDUARDO CARRANCO SALINAS' },
   { rfc: 'GURD880220KG8',  nombre: 'DANIEL FERNANDO GUTIERREZ RAMÍREZ' },
@@ -241,7 +241,7 @@ const EMPLEADOS_RFC = [
   { rfc: 'NANM060324KG2', nombre: 'MIRANDA XIMENA NAVARRO NUÑO' },
   { rfc: 'SATM800303IN5', nombre: 'MARCO ANTONIO SANCHEZ TABAREZ' },
   { rfc: 'AANJ851122MM0', nombre: 'JUAN ALBERTO ALFARO NUÑEZ' },
-  { rfc: 'PAGR051125AM7', nombre: 'RICARDO PACHECO GONZALEZ' },
+  { rfc: 'PAGR051125AM7', nombre: 'RICARDO PACHECO GONZALEZ', aliases: ['Ricardo Pacheco Glez', 'Ricardo Pacheco Glez.'] },
   { rfc: 'COTL980719GD0', nombre: 'LUIS DANIEL COVARRUBIAS TORRES' },
   { rfc: 'RORJ9407238M1', nombre: 'JESUS ERNESTO RODRIGUEZ RODRIGUEZ' },
   { rfc: 'CAGL9208034V7', nombre: 'LUIS ENRIQUE CASTILLO GOMEZ' },
@@ -249,16 +249,27 @@ const EMPLEADOS_RFC = [
 
 // Matchea un nombre corto (extraído del concepto de Saldos, ej. "Rosalba
 // Olivar") contra EMPLEADOS_RFC. Devuelve {rfc, nombre} si todas las
-// palabras del nombre corto aparecen en el nombre completo del empleado.
-// Sin acentos, mayúsculas, en cualquier orden.
+// palabras del nombre corto aparecen en el nombre completo del empleado
+// O en alguno de sus aliases registrados. Sin acentos, mayúsculas,
+// puntuación strippeada, en cualquier orden.
 const matchEmpleadoByShortName = (shortName) => {
   if (!shortName) return null
-  const norm = s => String(s || '').toUpperCase().normalize('NFD').replace(/\p{Diacritic}/gu, '')
+  const norm = s => String(s || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[.,;:'"]/g, '')
   const shortWords = norm(shortName).split(/\s+/).filter(Boolean)
   if (shortWords.length === 0) return null
+  const wordsOf = (s) => new Set(norm(s).split(/\s+/).filter(Boolean))
   return EMPLEADOS_RFC.find(emp => {
-    const fullWords = new Set(norm(emp.nombre).split(/\s+/).filter(Boolean))
-    return shortWords.every(w => fullWords.has(w))
+    if (shortWords.every(w => wordsOf(emp.nombre).has(w))) return true
+    if (emp.aliases) {
+      for (const alias of emp.aliases) {
+        if (shortWords.every(w => wordsOf(alias).has(w))) return true
+      }
+    }
+    return false
   }) || null
 }
 
@@ -4398,7 +4409,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.83</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.84</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
