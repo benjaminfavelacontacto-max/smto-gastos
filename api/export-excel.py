@@ -199,6 +199,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         workbookPassword=None,
         revisionsPassword=None,
     )
+    # Forzar recálculo de TODAS las fórmulas al abrir (KPIs, TOTAL, SUM). openpyxl
+    # no precalcula valores; sin esto, un visor que respeta el caché muestra 0.
+    wb.calculation.fullCalcOnLoad = True
     ws = wb.active
     ws.title = 'Reporte SMTO'
     ws.sheet_view.showGridLines = False
@@ -566,15 +569,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             # que cuadra → DIFERENCIA 0 hasta que se concilie con el banco.
             monto_cobrado = round(g.get('montoCobrado', 0) or 0, 2)
             cobrado = monto_cobrado if monto_cobrado > 0 else round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
-            # DIFERENCIA = cobrado − (facturado + propina). La propina se resta
-            # como literal en la fórmula viva SÓLO cuando existe — no todas las
-            # facturas la tienen — para que el tip legítimo no aparezca como
-            # discrepancia y sólo se marque en rojo un cargo realmente excedente.
+            # DIFERENCIA = cobrado − (facturado + propina). Se escribe el VALOR
+            # calculado (NO una fórmula viva) para que la celda muestre el número
+            # correcto en CUALQUIER visor — Excel, Numbers, Quick Look, Google
+            # Sheets — sin depender de que recalcule fórmulas. openpyxl no
+            # precalcula fórmulas, así que un visor que no recalcula mostraba 0
+            # o vacío. Resta la propina sólo cuando existe (no todas la tienen).
             diff_num = round(cobrado - facturado - propina_actual, 2)
-            if propina_actual > 0:
-                diferencia = f'=S{row}-T{row}-{propina_actual}'
-            else:
-                diferencia = f'=S{row}-T{row}'
+            diferencia = diff_num
         else:
             facturado = ''
             cobrado = ''
@@ -638,10 +640,10 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 cell.number_format = '#,##0.00'
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
             elif style_type == 'diff':
-                # DIFERENCIA: la celda lleva la fórmula viva =S-T(-propina).
-                # El color se decide por diff_num: rojo si cobrado > facturado+propina
-                # (banco cargó más de lo esperado), verde si cobrado < facturado+propina,
-                # neutro si igual o si banco != Clara MXN Credito.
+                # DIFERENCIA: la celda lleva el VALOR calculado (diff_num).
+                # El color: rojo si cobrado > facturado+propina (banco cargó más de
+                # lo esperado), verde si cobrado < facturado+propina, neutro si
+                # igual o si banco != Clara MXN Credito.
                 cell.number_format = '"$"#,##0.00'
                 if isinstance(diff_num, (int, float)):
                     if diff_num > 0:
@@ -781,7 +783,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=21)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v7.95'
+    ft.value = 'SMTO Engineering · v7.96'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
