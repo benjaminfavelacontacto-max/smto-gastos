@@ -641,15 +641,13 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
             elif style_type == 'diff':
                 # DIFERENCIA: la celda lleva el VALOR calculado (diff_num).
-                # El color: rojo si cobrado > facturado+propina (banco cargó más de
-                # lo esperado), verde si cobrado < facturado+propina, neutro si
-                # igual o si banco != Clara MXN Credito.
+                # El color: rojo si es negativo, verde si es positivo, neutro si
+                # es 0 o si banco != Clara MXN Credito.
                 cell.number_format = '"$"#,##0.00'
                 if isinstance(diff_num, (int, float)):
-                    if diff_num > 0:
-                        # cobrado > facturado+propina → banco cargó más de lo esperado
+                    if diff_num < 0:
                         cell.font = Font(name='Calibri', size=10, bold=True, color='B91C1C')  # red-700
-                    elif diff_num < 0:
+                    elif diff_num > 0:
                         cell.font = Font(name='Calibri', size=10, bold=True, color='15803D')  # green-700
                     else:
                         cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
@@ -783,7 +781,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=21)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v7.96'
+    ft.value = 'SMTO Engineering · v7.97'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
