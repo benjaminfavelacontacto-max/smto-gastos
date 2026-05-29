@@ -3272,6 +3272,11 @@ export default function App() {
     // continues to mutate as later passes run).
     const snapshotMatch = (idx, row, pass, method, confidence) => {
       const g = nl[idx]
+      // COBRADO real: el monto que efectivamente cargó la tarjeta según el CSV
+      // del banco (en pesos). Se guarda independiente de factura+propina para
+      // que la columna DIFERENCIA del Excel pueda detectar un excedente real
+      // (cargo > factura+propina), no sólo reconstruir factura+propina.
+      g.montoCobrado = row.montoMXN || 0
       matchedRows.push({
         pass,
         method,
@@ -3656,7 +3661,7 @@ export default function App() {
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, validado: false,
-      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador), montoFacturado: 0, montoPropinaOriginal: 0,
+      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador), montoFacturado: 0, montoPropinaOriginal: 0, montoCobrado: 0,
     }])
   }
 
@@ -3785,6 +3790,7 @@ export default function App() {
       banco:            g.banco || '',
       montoFacturado:   Number(g.montoFacturado) || 0,
       montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
+      montoCobrado:     Number(g.montoCobrado) || 0,
       polizaNumero:     g.polizaNumero || '',
     }))
     try {
@@ -4368,6 +4374,7 @@ export default function App() {
         banco:            g.banco || '',
         montoFacturado:   Number(g.montoFacturado) || 0,
         montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
+        montoCobrado:     Number(g.montoCobrado) || 0,
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
@@ -4456,7 +4463,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.94</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.95</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

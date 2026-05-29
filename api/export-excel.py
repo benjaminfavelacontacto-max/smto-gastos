@@ -557,10 +557,15 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         es_clara = banco.lower() == 'clara mxn credito'
         if es_clara:
             propina_actual = round(g.get('montoPropina', 0) or 0, 2)
-            # FACTURADO = monto de la factura SIN propina (el CFDI no incluye el
-            # tip). COBRADO = lo que la tarjeta cargó = factura + propina.
+            # FACTURADO = monto de la factura SIN propina (el CFDI no incluye el tip).
             facturado = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
-            cobrado   = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
+            # COBRADO = monto REAL que cargó la tarjeta (del CSV de Clara, guardado
+            # al validar banco). Es INDEPENDIENTE de factura+propina, por eso
+            # DIFERENCIA puede detectar un excedente real. Si la fila no se validó
+            # contra el banco (montoCobrado=0), cae al estimado factura+propina,
+            # que cuadra → DIFERENCIA 0 hasta que se concilie con el banco.
+            monto_cobrado = round(g.get('montoCobrado', 0) or 0, 2)
+            cobrado = monto_cobrado if monto_cobrado > 0 else round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
             # DIFERENCIA = cobrado − (facturado + propina). La propina se resta
             # como literal en la fórmula viva SÓLO cuando existe — no todas las
             # facturas la tienen — para que el tip legítimo no aparezca como
@@ -776,7 +781,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=21)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v7.93'
+    ft.value = 'SMTO Engineering · v7.95'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
