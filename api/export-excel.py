@@ -206,11 +206,13 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.protection.enabled = False  # belt-and-suspenders: also drop the element
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates).
-    # Layout: A spacer, B-N data, O BANCO, P MONTO USD, Q T/C, R USUARIO, S spacer.
+    # Layout: A spacer, B-N data, O BANCO, P MONTO USD, Q T/C, R USUARIO,
+    # S COBRADO, T FACTURADO, U DIFERENCIA (solo Clara MXN Credito), V spacer.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
         'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 18, 'N': 15,
-        'O': 22, 'P': 13, 'Q': 13, 'R': 24, 'S': 3,
+        'O': 22, 'P': 13, 'Q': 13, 'R': 24,
+        'S': 14, 'T': 14, 'U': 14, 'V': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -219,7 +221,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # outer spacer cols past the totals/footer still inherit BG_PAGE.
     nrows_painted = max(80, 40 + len(gastos))
     for r in range(1, nrows_painted):
-        fill_row_bg(ws, r, 1, 19, BG_PAGE)
+        fill_row_bg(ws, r, 1, 22, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
     ws.row_dimensions[1].height = 50
@@ -273,7 +275,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
-    for c in range(2, 19):
+    for c in range(2, 22):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(
@@ -415,7 +417,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
     ws.row_dimensions[9].height = 28
 
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO']
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO', 'DIFERENCIA']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -436,7 +438,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             top=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
             left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
-            right=Side(style='medium', color=EXCEL_GREEN) if col == 18 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 21 else None,
         )
 
     # ═══ DATA ROWS (row 10+) ═══
@@ -527,6 +529,20 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # ningún colaborador del mapa, cae al nombre del colaborador dueño
         # del reporte (e.g., 'Alejandro Olivar' para sus propias facturas).
         usuario = usuario_por_poliza.get(str(poliza_row).strip()) or colaborador or ''
+        # Reconciliación cobrado vs facturado — solo aplica para renglones
+        # cuya tarjeta es Clara MXN Credito. Para los demás (BBVA, Monex,
+        # Kapital, USD), las 3 celdas quedan vacías (no se reconcilian con
+        # Clara CSV en este flujo).
+        es_clara = banco.lower() == 'clara mxn credito'
+        if es_clara:
+            facturado = round(g.get('montoFacturado', 0) or g.get('totalCFDI', 0) or 0, 2)
+            # Cobrado = total efectivamente pagado (matchea la columna TOTAL).
+            cobrado = round((g.get('totalCFDI', 0) or 0) + (g.get('montoPropina', 0) or 0), 2)
+            diferencia = round(cobrado - facturado, 2)
+        else:
+            facturado = ''
+            cobrado = ''
+            diferencia = ''
         cells = [
             (2,  g.get('rfc', ''),       'left',   'rfc'),
             (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
@@ -549,6 +565,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             (16, monto_usd,              'center', 'currency'),
             (17, tc_val,                 'center', 'tipocambio'),
             (18, usuario,                'center', 'normal'),
+            (19, cobrado,                'center', 'currency'),
+            (20, facturado,              'center', 'currency'),
+            (21, diferencia,             'center', 'diff'),
         ]
 
         for col, val, align, style_type in cells:
@@ -581,12 +600,26 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             elif style_type == 'tipocambio':
                 cell.number_format = '#,##0.00'
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
+            elif style_type == 'diff':
+                # DIFERENCIA: rojo si negativo, verde si positivo, neutro si
+                # cero o vacío. Solo Clara MXN Credito carga valor; otros
+                # bancos llegan con val='' y se renderan como celda vacía.
+                cell.number_format = '"$"#,##0.00'
+                if isinstance(val, (int, float)):
+                    if val > 0:
+                        cell.font = Font(name='Calibri', size=10, bold=True, color='15803D')  # green-700
+                    elif val < 0:
+                        cell.font = Font(name='Calibri', size=10, bold=True, color='B91C1C')  # red-700
+                    else:
+                        cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
+                else:
+                    cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
             else:  # 'normal'
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-        ws.cell(row=row, column=19).fill = PatternFill('solid', start_color=BG_PAGE)
+        ws.cell(row=row, column=22).fill = PatternFill('solid', start_color=BG_PAGE)
 
         row += 1
 
@@ -600,7 +633,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
             # Paint the whole band first so per-cell font/border calls below
             # only need to touch the cells that carry content.
-            for c in range(1, 19):
+            for c in range(1, 22):
                 pcell = ws.cell(row=row, column=c)
                 pcell.fill = PatternFill('solid', start_color=propina_bg)
                 pcell.border = Border(bottom=Side(style='hair', color=BORDER_LIGHT))
@@ -654,7 +687,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             # Outer spacers stay on page bg so the propina band fits inside
             # the table boundary like every other data row.
             ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-            ws.cell(row=row, column=19).fill = PatternFill('solid', start_color=BG_PAGE)
+            ws.cell(row=row, column=22).fill = PatternFill('solid', start_color=BG_PAGE)
 
             row += 1
 
@@ -663,7 +696,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     row += 1
 
     ws.row_dimensions[row].height = 32
-    for c in range(2, 19):
+    for c in range(2, 22):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
         cell.border = Border()
@@ -698,17 +731,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # FORMA PAGO (N), BANCO (O), T/C (Q) y USUARIO (R) en la banda de
-    # totales sólo llevan el fill negro (no son agregables).
-    ws.cell(row=row, column=14).fill = PatternFill('solid', start_color=SMTO_BLACK)
-    ws.cell(row=row, column=15).fill = PatternFill('solid', start_color=SMTO_BLACK)
-    ws.cell(row=row, column=17).fill = PatternFill('solid', start_color=SMTO_BLACK)
-    ws.cell(row=row, column=18).fill = PatternFill('solid', start_color=SMTO_BLACK)
+    # FORMA PAGO (N), BANCO (O), T/C (Q), USUARIO (R), COBRADO (S),
+    # FACTURADO (T) y DIFERENCIA (U) en la banda de totales sólo llevan el
+    # fill negro (no son agregables o sólo aplican a Clara MXN Credito).
+    for c in (14, 15, 17, 18, 19, 20, 21):
+        ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
-    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=18)
+    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=21)
     ft = ws.cell(row=row, column=11)
     ft.value = 'SMTO Engineering · v7.78'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)

@@ -1062,6 +1062,11 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     monedaCodigo:       monedaXML,
     esMonedaExtranjera: esExtranjera,
     banco:              defaultBancoFor(colaborador),
+    // Snapshot del total facturado al momento de leer el CFDI. validarBanco
+    // sobreescribe totalCFDI con el monto real del banco; este campo se
+    // queda intacto para exponer la diferencia 'cobrado vs facturado' en
+    // la columna DIFERENCIA del Excel (solo Clara MXN Credito).
+    montoFacturado:     totalCFDI,
   }
 }
 
@@ -2850,6 +2855,7 @@ export default function App() {
         propinaSugerida20:  0,
         propinaSugerida22:  0,
         banco:              defaultBancoFor(colaborador),
+        montoFacturado:     importePagado,
       }
     }
 
@@ -2909,6 +2915,7 @@ export default function App() {
       propinaSugerida20,
       propinaSugerida22,
       banco:              defaultBancoFor(colaborador),
+      montoFacturado:     isExtranjera ? 0 : total,
     }
   }
 
@@ -3615,7 +3622,7 @@ export default function App() {
       retencionISR: 0, retencionIVA: 0, retenciones: 0, totalCFDI: 0,
       propinaPorcentaje: 0, montoPropina: 0, fechaCobro: hoy, formaPago: '01', uuid: 'MANUAL',
       tienePDF: false, pdfFile: null, xmlFile: null, hizoMatch: false, validado: false,
-      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador),
+      montoUSD: 0, tipoCambio: 0, moneda: 'MXN', banco: defaultBancoFor(colaborador), montoFacturado: 0,
     }])
   }
 
@@ -3742,6 +3749,7 @@ export default function App() {
       ivaUSD:           Number(g.ivaUSD) || 0,
       retencionesUSD:   Number(g.retencionesUSD) || 0,
       banco:            g.banco || '',
+      montoFacturado:   Number(g.montoFacturado) || 0,
       polizaNumero:     g.polizaNumero || '',
     }))
     try {
@@ -4196,6 +4204,7 @@ export default function App() {
             esNomina:    true,
             polizaNumero: folio,
             banco:       String(r.sheet || '').trim().replace(/\s+/g, ' '),
+            montoFacturado: importe,
             isNew: true,
           })
         }
@@ -4321,6 +4330,7 @@ export default function App() {
         ivaUSD:           Number(g.ivaUSD) || 0,
         retencionesUSD:   Number(g.retencionesUSD) || 0,
         banco:            g.banco || '',
+        montoFacturado:   Number(g.montoFacturado) || 0,
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
@@ -4409,7 +4419,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.84</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.85</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
