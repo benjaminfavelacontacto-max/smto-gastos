@@ -185,6 +185,83 @@ const POLIZAS_CLARA = {
   'Juan Alfaro': '6660',
 }
 
+// Roster fiscal de empleados — fuente: RFC Empleados.xlsx. Se usa para
+// llenar RFC + nombre completo en los renglones de nómina (botón
+// 'Agregar Nómina' de Alejandro Olivar). El concepto del Saldos trae solo
+// el nombre corto (e.g. 'Rosalba Olivar', 'PTU Rosalba Olivar 25'); el
+// matcher convierte a 'ROSALBA BEATRIZ OLIVAR CERVANTES' + RFC OICR420107MR5.
+const EMPLEADOS_RFC = [
+  { rfc: 'OICR420107MR5',  nombre: 'ROSALBA BEATRIZ OLIVAR CERVANTES' },
+  { rfc: 'GILO690915CD5',  nombre: 'OLIVIA YOLANDA GIL LOPEZ' },
+  { rfc: 'HAGE750515RA5',  nombre: 'EDIE HARO GUZMÁN' },
+  { rfc: 'DECD7508312C4',  nombre: 'DAVID EDUARDO DELGADO CORONA' },
+  { rfc: 'VALI8107064Z0',  nombre: 'JOSÉ ISAÍAS VALENCIA LUNA' },
+  { rfc: 'OIGS750803UF5',  nombre: 'SIGIFREDO OLIVAS GONZALEZ' },
+  { rfc: 'OICA721231DB6',  nombre: 'ALEJANDRO OLIVAR CERVANTES' },
+  { rfc: 'COMR690829TL1',  nombre: 'ROSA MARÍA CORRAL MARTÍNEZ' },
+  { rfc: 'CAUH880306JH0',  nombre: 'HERIBERTO CHACÓN URTIZ' },
+  { rfc: 'CASR870808CM3',  nombre: 'RAMÓN EDUARDO CARRANCO SALINAS' },
+  { rfc: 'GURD880220KG8',  nombre: 'DANIEL FERNANDO GUTIERREZ RAMÍREZ' },
+  { rfc: 'NARE7911283U5',  nombre: 'EMMANUEL NAVARRO RUVALCABA' },
+  { rfc: 'TIRJ841005U2A',  nombre: 'JAMES TISOTO ROLDÁN' },
+  { rfc: 'CUCM910507S91',  nombre: 'MISAEL CRUZ CASTAÑEDA' },
+  { rfc: 'FAGA920705NUA',  nombre: 'ALEJANDRO BENJAMIN FAVELA GIL' },
+  { rfc: 'PESG830329JZ2',  nombre: 'GUISELA VIVIANA PEREZ SEPULVEDA' },
+  { rfc: 'PORC790703R46',  nombre: 'CARLOS ANDRES PONCE RAMIREZ' },
+  { rfc: 'GOGG920529U36',  nombre: 'GEMMA GONZALEZ GOMEZ' },
+  { rfc: 'CUGJ7909041M9',  nombre: 'JUAN FRANCISCO CUELLAR GAMEZ' },
+  { rfc: 'VIIJ8504073E0',  nombre: 'JUAN CARLOS VIRGEN IBARRA' },
+  { rfc: 'GUSP9109057E4',  nombre: 'PAOLA VIRIDIANA GUTIERREZ SANCHEZ' },
+  { rfc: 'TOAA701020IP3',  nombre: 'ARMANDO TORRES ALFARO' },
+  { rfc: 'SADJ8305029P2',  nombre: 'JUAN CARLOS SANTOYO DURON' },
+  { rfc: 'DEMD000526AY7',  nombre: 'DAVID DE JESUS DELGADO MARQUEZ' },
+  { rfc: 'MOOO880930NI9',  nombre: 'OMAR MONCLOVA ORENDAIN' },
+  { rfc: 'PARR820325BP9',  nombre: 'RICARDO PACHECO ROMÁN' },
+  { rfc: 'UIVA670201II0',  nombre: 'JOSÉ ANTONIO URIBE VASQUEZ' },
+  { rfc: 'GAGN870908AA3',  nombre: 'NATIVIDAD GARCÍA GARCÍA' },
+  { rfc: 'SOML720529STA',  nombre: 'LETICIA GUADALUPE SOLIS MENDOZA' },
+  { rfc: 'BARA861202368',  nombre: 'ANGEL RAYDEL BALTAZAR RIOS' },
+  { rfc: 'CARM830418FM6',  nombre: 'MIGUEL ANGEL CASTILLO RODRIGUEZ' },
+  { rfc: 'LOCD9004018C9',  nombre: 'DAVID ALEJANDRO LOPEZ CAMARENA' },
+  { rfc: 'CACD9203055Q6',  nombre: 'DAVID ELISEO CASTILLO CHAVEZ' },
+  { rfc: 'LORD970609TR9',  nombre: 'DAVID DARIO LOPEZ ROSAS' },
+  { rfc: 'GORM910221GD7',  nombre: 'MARIANA GONZALEZ RODRIGUEZ' },
+  { rfc: 'AEVV840602128',  nombre: 'VICTOR MANUEL ACEVES VARGAS' },
+  { rfc: 'DIVC900105330',  nombre: 'CYNTHIA YOALI DÍAZ VILLANUEVA' },
+  { rfc: 'FAAL9306111TA', nombre: 'JOSE LUIS FALCON AMARO' },
+  { rfc: 'TOIJ790819988',  nombre: 'JULIO CESAR TORRES IBARRA' },
+  { rfc: 'ROHM9111232C7', nombre: 'MAURICIO RODRIGUEZ HERNANDEZ' },
+  { rfc: 'MOBC910417CI0', nombre: 'CINDY MARITZA MONTAÑO BENITEZ' },
+  { rfc: 'PAMM971124B39', nombre: 'MOISES ALEJANDRO PADILLA MORA' },
+  { rfc: 'DUMH890817S35', nombre: 'HECTOR ALIM DUARTE MARTINEZ' },
+  { rfc: 'SOBJ750419RW3', nombre: 'JUAN ANTONIO SOTOMAYOR BETANCOUT' },
+  { rfc: 'VALM840128S14', nombre: 'MARCO ANTONIO VALENCIA LUNA' },
+  { rfc: 'AASM8706127N1', nombre: 'MARCO ANTONIO ALVARADO SILVA' },
+  { rfc: 'HACE030127BB1', nombre: 'EDIE EMMANUEL HARO CASTAÑEDA' },
+  { rfc: 'NANM060324KG2', nombre: 'MIRANDA XIMENA NAVARRO NUÑO' },
+  { rfc: 'SATM800303IN5', nombre: 'MARCO ANTONIO SANCHEZ TABAREZ' },
+  { rfc: 'AANJ851122MM0', nombre: 'JUAN ALBERTO ALFARO NUÑEZ' },
+  { rfc: 'PAGR051125AM7', nombre: 'RICARDO PACHECO GONZALEZ' },
+  { rfc: 'COTL980719GD0', nombre: 'LUIS DANIEL COVARRUBIAS TORRES' },
+  { rfc: 'RORJ9407238M1', nombre: 'JESUS ERNESTO RODRIGUEZ RODRIGUEZ' },
+  { rfc: 'CAGL9208034V7', nombre: 'LUIS ENRIQUE CASTILLO GOMEZ' },
+]
+
+// Matchea un nombre corto (extraído del concepto de Saldos, ej. "Rosalba
+// Olivar") contra EMPLEADOS_RFC. Devuelve {rfc, nombre} si todas las
+// palabras del nombre corto aparecen en el nombre completo del empleado.
+// Sin acentos, mayúsculas, en cualquier orden.
+const matchEmpleadoByShortName = (shortName) => {
+  if (!shortName) return null
+  const norm = s => String(s || '').toUpperCase().normalize('NFD').replace(/\p{Diacritic}/gu, '')
+  const shortWords = norm(shortName).split(/\s+/).filter(Boolean)
+  if (shortWords.length === 0) return null
+  return EMPLEADOS_RFC.find(emp => {
+    const fullWords = new Set(norm(emp.nombre).split(/\s+/).filter(Boolean))
+    return shortWords.every(w => fullWords.has(w))
+  }) || null
+}
+
 const getTiposForColaborador = (colaborador) => {
   if (!colaborador) return TIPOS_NORMALES
   if (COLABORADORES_ESPECIALES.includes(colaborador.nombre)) return TIPOS_ESPECIALES
@@ -4030,35 +4107,49 @@ export default function App() {
       const applyNominasForMonth = (selectedYM) => {
         const bucket = months.find(m => m.ym === selectedYM)
         if (!bucket) return
-        const existingKeys = new Set(lista.map(g => `${g.rfc}|${g.noFactura}`))
+        // Dedup compound key para nóminas (los gastos no-nómina usan
+        // rfc|noFactura como antes). Necesario porque varios empleados
+        // comparten el mismo cheque (folio) y noFactura ahora son solo
+        // dígitos del folio.
+        const nominaDedupKey = (g) => `NOM|${g.rfc || ''}|${g.polizaNumero || ''}|${g.proveedor || ''}|${g.fechaFac || ''}`
+        const existingKeys = new Set(
+          lista.map(g => g.esNomina ? nominaDedupKey(g) : `${g.rfc}|${g.noFactura}`)
+        )
         const newGastos = []
         let dupesSkipped = 0
 
         for (const r of bucket.rows) {
           const fechaIso = saldosFechaToIso(r.fecha) || ''
           const conceptoStr = String(r.concepto || '').trim()
-          const proveedor = conceptoStr
-            .replace(/^n[óo]mina\s+/i, '')
+          // Cleanup del concepto: quita prefijos de beneficio (Nómina/PTU/
+          // Aguinaldo/Prima) y sufijos de período. Soporta:
+          //   "Nómina Rosalba Olivar 1a Ene 26" → "Rosalba Olivar"
+          //   "PTU Rosalba Olivar 25"           → "Rosalba Olivar"
+          //   "Aguinaldo Edie Haro 25"          → "Edie Haro"
+          const shortName = conceptoStr
+            .replace(/^(?:n[óo]mina|ptu|aguinaldo|prima\s+vacacional)\s+/i, '')
             .replace(/\s+\d+a?\s+\w+\s+\d+\s*$/i, '')
+            .replace(/\s+\d{2,4}\s*$/, '')
             .trim() || conceptoStr
-          const personaNorm = proveedor
-            .normalize('NFD')
-            .replace(/\p{Diacritic}/gu, '')
-            .toUpperCase()
-            .replace(/[^A-Z0-9]/g, '')
-            .slice(0, 16)
-          const fechaCompact = fechaIso.replace(/-/g, '').slice(2)
+          // Lookup empleado: si matchea, usa RFC + nombre completo del
+          // roster fiscal. Si no, deja short name como proveedor sin RFC.
+          const emp = matchEmpleadoByShortName(shortName)
+          const proveedor = emp?.nombre || shortName
+          const empRfc    = emp?.rfc    || ''
           const folio = String(r.folio || '').trim()
-          const noFactura = `NOM-${folio || 'X'}-${personaNorm}-${fechaCompact}`
+          // noFactura ahora son solo dígitos del folio del cheque.
+          const noFactura = folio
 
-          const key = `|${noFactura}`
-          if (existingKeys.has(key)) { dupesSkipped++; continue }
-          existingKeys.add(key)
+          // Dedup compuesto para evitar colisión cuando varios empleados
+          // comparten folio.
+          const dedupKey = `NOM|${empRfc}|${folio}|${proveedor}|${fechaIso}`
+          if (existingKeys.has(dedupKey)) { dupesSkipped++; continue }
+          existingKeys.add(dedupKey)
 
           const importe = Number(r.egreso) || 0
           newGastos.push({
             id: genId(),
-            rfc: '',
+            rfc: empRfc,
             proveedor,
             tipo: String(r.tipo || '').trim(),
             noFactura,
@@ -4307,7 +4398,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.82</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.83</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
