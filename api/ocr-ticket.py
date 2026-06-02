@@ -151,6 +151,30 @@ def _shrink_image(img):
             max_dim = int(max_dim * 0.8)
 
 
+def _extract_fni_folio(raw_pdf_bytes):
+    '''Fondo Nacional de Infraestructura (peaje): su CFDI XML no trae Serie/Folio,
+    pero el PDF SÍ los imprime en texto ("Folio: 73123541 Serie: FNPE"). Los
+    extraemos de forma determinista del texto embebido (más confiable que la
+    visión). Devuelve "SERIEFOLIO" (p.ej. "FNPE73123541") o None.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = doc.load_page(0).get_text()
+        doc.close()
+    except Exception:
+        return None
+    up = text.upper()
+    if 'FONDO NACIONAL DE INFRAESTRUCTURA' not in up and 'FNI970829JR9' not in up:
+        return None
+    # "Folio: 73123541 Serie: FNPE" — el colon distingue del "Folio fiscal" (UUID).
+    folio_m = re.search(r'Folio:\s*([A-Za-z0-9\-]+)', text)
+    serie_m = re.search(r'Serie:\s*([A-Za-z0-9]+)', text)
+    if folio_m and serie_m:
+        return (serie_m.group(1) + folio_m.group(1)).strip()
+    if folio_m:
+        return folio_m.group(1).strip()
+    return None
+
+
 def _to_image_data_url(base64_data, media_type):
     '''Devuelve un data URL de imagen JPEG listo para Groq.
     Convierte PDFs (página 1) a imagen y reescala lo que exceda 4MB.'''
@@ -261,6 +285,18 @@ class handler(BaseHTTPRequestHandler):
             text = groq_json['choices'][0]['message']['content']
             clean = text.replace('```json', '').replace('```', '').strip()
             result = json.loads(clean)
+
+            # FNI (peaje): sobrescribe el folio con el Serie+Folio leído del texto
+            # del PDF (determinista). La visión a veces devuelve solo el número o
+            # lo confunde; el texto embebido siempre trae "Folio: N Serie: FNPE".
+            if media_type == 'application/pdf':
+                try:
+                    fni_folio = _extract_fni_folio(base64.b64decode(base64_data))
+                    if fni_folio:
+                        result['folio'] = fni_folio
+                        result['proveedor'] = 'Fondo Nacional de Infraestructura'
+                except Exception:
+                    pass
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
