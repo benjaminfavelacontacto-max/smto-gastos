@@ -624,8 +624,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             cobrado = ''
             diff_num = None
             diferencia = ''
+        # RFC de facturas extranjeras (sin RFC mexicano): se muestra "N/A"
+        # centrado. Los RFC reales van alineados a la izquierda como siempre.
+        rfc_raw = g.get('rfc', '')
+        rfc_is_na = str(rfc_raw).strip().upper() in ('NA', 'N/A')
+        rfc_disp = 'N/A' if rfc_is_na else rfc_raw
+        rfc_align = 'center' if rfc_is_na else 'left'
         cells = [
-            (2,  g.get('rfc', ''),       'left',   'rfc'),
+            (2,  rfc_disp,               rfc_align, 'rfc'),
             (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
             (4,  tipo,                   'center', 'badge_tipo'),
             (5,  poliza_row,             'center', 'normal'),

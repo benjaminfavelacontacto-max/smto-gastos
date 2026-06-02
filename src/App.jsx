@@ -3845,7 +3845,7 @@ export default function App() {
     const rfcParaExcel = (g) => {
       if (g.rfc) return g.rfc
       const m = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
-      return (m !== 'MXN' && m !== 'XXX') ? 'NA' : ''
+      return (m !== 'MXN' && m !== 'XXX') ? 'N/A' : ''
     }
     const gastosSlim = lista.map(g => ({
       rfc:              rfcParaExcel(g),
