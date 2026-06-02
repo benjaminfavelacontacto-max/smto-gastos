@@ -3001,10 +3001,13 @@ export default function App() {
     // (precio de lista) o descuento (pronto pago) y NO cuadran con el banco.
     const esTotalPlay = /TOTAL\s*PLAY|TOTALPLAY/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
     let proveedorFinal = parsed.proveedor || ''
+    let rfcFinal = ''
     let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
     if (esITESO) {
       proveedorFinal = 'ITESO'
       tipoFinal = 'Renta Oficina'
+      // El recibo de ITESO no imprime su RFC; lo forzamos al oficial.
+      rfcFinal = 'ITE570731PS9'
       if (!total && subtotal) total = subtotal
       if (!subtotal && total) subtotal = total
     } else if (esISN) {
@@ -3026,7 +3029,7 @@ export default function App() {
 
     return {
       id: genId(),
-      rfc: '',
+      rfc: rfcFinal,
       proveedor: proveedorFinal,
       // Prefer the merchant's own folio when present, fall back to the card
       // approval code so it lines up with the bank statement's "Código de
@@ -4633,7 +4636,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.10</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.11</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
