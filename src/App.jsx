@@ -2786,6 +2786,13 @@ export default function App() {
       }
     }
 
+    // FNI (peaje, RFC FNI970829JR9): su CFDI XML NO trae Serie/Folio — el
+    // número de factura (p.ej. FNPE72984235) solo aparece impreso en el PDF.
+    // Para las facturas FNI que entraron por XML con PDF adjunto, leemos el PDF
+    // por OCR y sustituimos el folio (que de otro modo cae al NoIdentificacion)
+    // por el Serie+Folio real. Solo para FNI y solo si aún no lo tenemos.
+    await enrichFniFoliosDesdePDF(nueva)
+
     const applyBatch = (batch, ocrCount = 0) => {
       setLista(batch)
       setLoading(false)
@@ -2962,6 +2969,28 @@ export default function App() {
     // it crosses into a child element.
     if (!e.currentTarget.contains(e.relatedTarget)) {
       setIsDraggingOver(false)
+    }
+  }
+
+  // FNI (peaje): completa el Serie+Folio leyendo el PDF adjunto por OCR cuando
+  // el CFDI XML no lo trae. Muta cada gasto FNI in-place. Acotado a FNI: en
+  // otros emisores no aplica y evitamos llamadas OCR innecesarias.
+  const enrichFniFoliosDesdePDF = async (gastos) => {
+    // Serie+Folio de FNI: letras de serie + dígitos (p.ej. FNPE72984235). El
+    // NoIdentificacion (p.ej. JKZY7DSB79M6XD9UHQ) mezcla letras y dígitos y NO
+    // calza este patrón, así que no lo confundimos con un folio válido.
+    const esSerieFolio = (s) => /^[A-Za-z]{2,6}\d{3,}$/.test((s || '').trim())
+    for (const g of gastos) {
+      if (g.rfc !== 'FNI970829JR9') continue
+      if (esSerieFolio(g.noFactura)) continue   // ya tiene Serie+Folio
+      if (!g.pdfFile) continue                   // sin PDF no hay de dónde sacarlo
+      try {
+        const base64 = await fileToBase64(g.pdfFile)
+        const r = await extractReceiptData(base64, 'application/pdf', g.pdfFile.name)
+        if (r && esSerieFolio(r.noFactura)) g.noFactura = String(r.noFactura).trim()
+      } catch (err) {
+        console.warn('FNI folio OCR falló:', g.pdfFile?.name, err)
+      }
     }
   }
 
@@ -3270,6 +3299,10 @@ export default function App() {
     // los de nombre/UUID exacto; esto completa folio/RFC/substring sin
     // duplicar. Lo que quede sin pareja son candidatos a OCR.
     const unmatchedPDFs = linkPdfsExclusive(allNewGastos, pdfFiles)
+
+    // FNI (peaje): completa el Serie+Folio desde el PDF cuando el XML no lo trae
+    // (ver enrichFniFoliosDesdePDF). Mismo arreglo que en la carga de carpeta.
+    await enrichFniFoliosDesdePDF(allNewGastos)
 
     // STEP 3 — OCR pass for unmatched PDFs + dropped images. Asks before
     // spending money. Errors per file route through the plain alerta modal.
@@ -4725,7 +4758,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.16</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.17</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
