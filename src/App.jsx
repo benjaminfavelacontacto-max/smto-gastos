@@ -3037,7 +3037,7 @@ export default function App() {
     const confirmed = await askConfirm({
       type: 'confirm',
       title: 'Procesar con OCR',
-      subtitle: `Se procesarán ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} con IA. Esto consume créditos de Claude API. ¿Continuar?`,
+      subtitle: `Se procesarán ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} con OCR. El OCR es gratuito (Groq). ¿Continuar?`,
       primaryLabel: 'Continuar',
       secondaryLabel: 'Cancelar',
     })
