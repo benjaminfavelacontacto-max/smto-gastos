@@ -54,7 +54,7 @@ const TIPOS_NORMALES = [
   'Marketing',
   'No Comprobado',
   'Papelería',
-  'PC (Equipo)',
+  'PC',
   'Rechazada',
   'Renta Auto',
   'Renta Oficina',
@@ -3812,9 +3812,18 @@ export default function App() {
 
     // 1) Pull the Excel report from the server-side renderer. Payload slim
     //    para no rebasar el límite de 4.5 MB de Vercel con muchas facturas.
+    // RFC — facturas extranjeras solo-PDF (OCR) no traen RFC mexicano, así que
+    // en el Excel se muestran como "NA". Los CFDI (incluidas las extranjeras
+    // con RFC genérico XEXX010101000) conservan su RFC real.
+    const rfcParaExcel = (g) => {
+      if (g.rfc) return g.rfc
+      const m = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
+      return (m !== 'MXN' && m !== 'XXX') ? 'NA' : ''
+    }
     const gastosSlim = lista.map(g => ({
-      rfc:              g.rfc || '',
-      proveedor:        g.proveedor || '',
+      rfc:              rfcParaExcel(g),
+      // PROVEEDOR siempre en MAYÚSCULAS en el Excel.
+      proveedor:        (g.proveedor || '').toUpperCase(),
       tipo:             g.tipo || '',
       noFactura:        g.noFactura || '',
       fechaFac:         g.fechaFac || '',
@@ -4557,7 +4566,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.02</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.04</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
