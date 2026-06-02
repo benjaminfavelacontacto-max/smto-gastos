@@ -2994,18 +2994,28 @@ export default function App() {
     // NoIdentificacion (p.ej. JKZY7DSB79M6XD9UHQ) mezcla letras y dígitos y NO
     // calza este patrón, así que no lo confundimos con un folio válido.
     const esSerieFolio = (s) => /^[A-Za-z]{2,6}\d{3,}$/.test((s || '').trim())
-    for (const g of gastos) {
-      if (g.rfc !== 'FNI970829JR9') continue
-      if (esSerieFolio(g.noFactura)) continue   // ya tiene Serie+Folio
-      if (!g.pdfFile) continue                   // sin PDF no hay de dónde sacarlo
+    const pendientes = gastos.filter(g =>
+      g.rfc === 'FNI970829JR9' && !esSerieFolio(g.noFactura) && g.pdfFile
+    )
+    // En PARALELO y con folioOnly: el server lee el Serie+Folio del TEXTO del
+    // PDF sin llamar a Groq (sin visión ni rate limit). Así una carpeta con
+    // varias FNI ya no se traba — antes eran N llamadas OCR secuenciales, cada
+    // una con su retry de rate limit (hasta 30s), = minutos de spinner.
+    await Promise.all(pendientes.map(async (g) => {
       try {
         const base64 = await fileToBase64(g.pdfFile)
-        const r = await extractReceiptData(base64, 'application/pdf', g.pdfFile.name)
-        if (r && esSerieFolio(r.noFactura)) g.noFactura = String(r.noFactura).trim()
+        const resp = await fetch('/api/ocr-ticket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, mediaType: 'application/pdf', folioOnly: true }),
+        })
+        if (!resp.ok) return
+        const j = await resp.json()
+        if (j && esSerieFolio(j.folio)) g.noFactura = String(j.folio).trim()
       } catch (err) {
-        console.warn('FNI folio OCR falló:', g.pdfFile?.name, err)
+        console.warn('FNI folio falló:', g.pdfFile?.name, err)
       }
-    }
+    }))
   }
 
   // Posts a base64 image/PDF to /api/ocr-ticket and shapes the parsed
@@ -4779,7 +4789,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.20</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.21</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

@@ -211,6 +211,27 @@ class handler(BaseHTTPRequestHandler):
 
             base64_data = data.get('base64')
             media_type = data.get('mediaType', 'image/jpeg')
+            # folioOnly: el cliente solo quiere el Serie+Folio de una factura FNI
+            # (peaje) cuyo XML no lo trae. Lo sacamos del TEXTO del PDF y
+            # respondemos al instante, SIN llamar a Groq (sin visión, sin rate
+            # limit). Evita que cargar una carpeta con varias FNI se trabe.
+            folio_only = bool(data.get('folioOnly', False))
+            if folio_only:
+                fni_folio = None
+                if media_type == 'application/pdf':
+                    try:
+                        fni_folio = _extract_fni_folio(base64.b64decode(base64_data))
+                    except Exception:
+                        fni_folio = None
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'folio': fni_folio or '',
+                    'proveedor': 'Fondo Nacional de Infraestructura' if fni_folio else '',
+                }).encode())
+                return
 
             api_key = os.environ.get('SMTO_GROQ_API_KEY', '')
             if not api_key:
