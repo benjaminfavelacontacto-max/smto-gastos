@@ -2684,6 +2684,32 @@ export default function App() {
     })
   })
 
+  // Aviso visible cuando hay PDFs muy grandes entre los que se mandarán al OCR.
+  // Le explica al usuario que se comprimirán (rasterizar 1ª página a JPEG chico)
+  // para procesarlos rápido, sin tocar el PDF original que se exporta. Devuelve
+  // true si el usuario acepta continuar; false si cancela. Si no hay PDFs
+  // grandes, no muestra nada y sigue de largo.
+  const avisarPdfsGrandes = async (archivos) => {
+    const grandes = (archivos || []).filter(f =>
+      f && f.name && f.name.toLowerCase().endsWith('.pdf') && f.size > LARGE_PDF_BYTES
+    )
+    if (grandes.length === 0) return true
+    const detalle = grandes
+      .map(f => `• ${f.name}  (${(f.size / 1024 / 1024).toFixed(1)} MB)`)
+      .join('\n')
+    return await askConfirm({
+      type: 'warning',
+      title: grandes.length === 1 ? 'PDF demasiado grande' : `${grandes.length} PDFs demasiado grandes`,
+      subtitle: `Para que el OCR sea rápido y no se trabe, ${grandes.length === 1 ? 'lo comprimiremos' : 'los comprimiremos'} automáticamente antes de procesar${grandes.length === 1 ? 'lo' : 'los'}. El archivo original NO se altera (se exporta igual en el ZIP).\n\n${detalle}`,
+      stats: [
+        { value: grandes.length, label: grandes.length === 1 ? 'PDF pesado' : 'PDFs pesados' },
+        { value: 'Automático', label: 'Compresión' },
+      ],
+      primaryLabel: grandes.length === 1 ? 'Comprimir y continuar' : 'Comprimir todos y continuar',
+      secondaryLabel: 'Cancelar',
+    })
+  }
+
   // ── Métricas (cards en el encabezado de la tabla) ──
   const metrics = useMemo(() => {
     const sum = field => lista.reduce((s, g) => s + (g[field] || 0), 0)
@@ -2976,6 +3002,9 @@ export default function App() {
         items: candidates.map(f => ({ file: f, selected: false })),
         onConfirm: async (selectedFiles) => {
           setOcrSelectionModal(null)
+          // Si hay PDFs muy grandes, avisa que se comprimirán antes de procesar.
+          const continuar = await avisarPdfsGrandes(selectedFiles)
+          if (!continuar) { applyBatch(xmlBatch); return }
           const { results: ocrResults, failed } = await runOcrOnSelection(selectedFiles)
           applyBatch([...xmlBatch, ...ocrResults], ocrResults.length)
           if (failed.length > 0) {
@@ -3318,6 +3347,10 @@ export default function App() {
     })
     if (!confirmed) { e.target.value = ''; return }
 
+    // Si hay PDFs muy grandes, avisa que se comprimirán antes de procesar.
+    const continuarGrandes = await avisarPdfsGrandes(files)
+    if (!continuarGrandes) { e.target.value = ''; return }
+
     setOcrLoading(true)
     const newGastos = []
     for (const file of files) {
@@ -3427,7 +3460,9 @@ export default function App() {
         secondaryLabel: 'Cancelar',
       })
 
-      if (userConfirmed) {
+      // Si hay PDFs muy grandes, avisa que se comprimirán antes de procesar.
+      const continuarGrandes = userConfirmed ? await avisarPdfsGrandes(ocrFiles) : false
+      if (userConfirmed && continuarGrandes) {
         setOcrLoading(true)
         for (const file of ocrFiles) {
           try {
@@ -4872,7 +4907,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.23</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.24</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
