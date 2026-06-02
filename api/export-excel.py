@@ -183,17 +183,39 @@ FORMA_PAGO_MAP = {
 }
 
 def get_tipo_badge_colors(tipo):
-    """Return (bg, fg) for the tipo badge."""
-    t = (tipo or '').lower()
-    if any(k in t for k in ['hotel', 'avión', 'avion', 'taxi', 'consumo']):
-        return BADGE_BLUE_BG, BADGE_BLUE_FG
-    if any(k in t for k in ['gasolina', 'caseta', 'estacionamiento', 'manto']):
-        return BADGE_AMBER_BG, BADGE_AMBER_FG
-    if any(k in t for k in ['it & sw', 'marketing', 'celular']):
+    """Return (bg, fg) for the tipo badge.
+
+    Paleta acordada (archivo 'Colores para tipos.xlsx'):
+      VERDE    → nómina, impuestos y costos fijos recurrentes
+      AZUL     → operación, viáticos y servicios (default)
+      MORADO   → mantenimiento, herramientas y tecnología
+      AMARILLO → papelería, uniformes, banca, préstamos y no comprobado
+      GRIS     → traspasos / rechazadas (neutro)
+    """
+    t = (tipo or '').lower().strip()
+
+    # ── MORADO: mantenimiento, herramientas, tecnología ──
+    if any(k in t for k in ['manto', 'herramienta', 'it & sw', 'it&sw']):
         return BADGE_PURPLE_BG, BADGE_PURPLE_FG
-    if any(k in t for k in ['rechazada', 'devolución', 'no comprobado']):
+
+    # ── AMARILLO: papelería, uniformes, banca, préstamos, no comprobado ──
+    if any(k in t for k in ['papelería', 'papeleria', 'uniforme', 'comisión banco',
+                            'comision banco', 'préstamo', 'prestamo', 'crédito',
+                            'credito', 'no comprobado']):
+        return BADGE_AMBER_BG, BADGE_AMBER_FG
+
+    # ── GRIS: neutros (traspasos, rechazadas) ──
+    if any(k in t for k in ['rechazada', 'devolución', 'devolucion', 'traspaso']):
         return BADGE_GRAY_BG, BADGE_GRAY_FG
-    return BADGE_GREEN_BG, BADGE_GREEN_FG
+
+    # ── VERDE: nómina, impuestos y costos fijos ──
+    if any(k in t for k in ['nómina', 'nomina', 'fondo de ahorro', 'regalía', 'regalia',
+                            'seguro', 'celular', 'renta oficina', 'imss', 'infonavit',
+                            'isr', 'iva', 'isn']):
+        return BADGE_GREEN_BG, BADGE_GREEN_FG
+
+    # ── AZUL: operación, viáticos y servicios (default) ──
+    return BADGE_BLUE_BG, BADGE_BLUE_FG
 
 def s_border(bottom=None, top=None, left=None, right=None):
     sides = {}
