@@ -654,7 +654,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         rfc_align = 'center' if rfc_is_na else 'left'
         cells = [
             (2,  rfc_disp,               rfc_align, 'rfc'),
-            (3,  g.get('proveedor', ''), 'left',   'normal_bold'),
+            # PROVEEDOR: SIEMPRE en MAYÚSCULAS en el Excel, sin importar la fuente
+            # (XML emisor, OCR, manual) ni el usuario de la plantilla.
+            (3,  str(g.get('proveedor', '') or '').upper(), 'left', 'normal_bold'),
             (4,  tipo,                   'center', 'badge_tipo'),
             (5,  poliza_row,             'center', 'normal'),
             (6,  g.get('noFactura', ''), 'center', 'normal'),

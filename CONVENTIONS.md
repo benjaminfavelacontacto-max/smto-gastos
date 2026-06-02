@@ -20,6 +20,13 @@ Examples:
 - `Fideicomiso Irrevocable DB1616 CUUMXA110440 Hotel 03-19-26.pdf`
 - `Grupo Ferreteria Calzada FAC102026491 Herramienta 03-20-26.pdf`
 
+## Excel export (api/export-excel.py)
+
+- **PROVEEDOR siempre en MAYÚSCULAS** en el Excel exportado (`.upper()` en la
+  celda), sin importar la fuente (XML emisor, OCR, manual) ni el usuario de la
+  plantilla. Esto NO afecta el Title Case del nombre de archivo del ZIP (ver
+  arriba), que es una regla distinta.
+
 ## fechaCobro
 
 - New gasto (CFDI / OCR / manual) → `fechaCobro = fechaFac`
