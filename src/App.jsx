@@ -855,6 +855,13 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // each row shows the actual product description from the XML.
   let descripcionRaw = conceptoEl ? (ga(conceptoEl, 'Descripcion', 'descripcion') || '') : ''
   let claveProdServ  = conceptoEl ? (ga(conceptoEl, 'ClaveProdServ', 'claveprodserv') || '') : ''
+  // NoIdentificacion del concepto: identificador único de la transacción (p.ej.
+  // el ID de cruce/peaje del Fondo Nacional de Infraestructura). Se usa como
+  // número de factura cuando el CFDI no trae Serie/Folio (ver noFactura abajo).
+  let noIdentificacion = conceptoEl ? (ga(conceptoEl, 'NoIdentificacion', 'noidentificacion') || '') : ''
+  if (!noIdentificacion) {
+    const nm = xmlText.match(/NoIdentificacion="([^"]+)"/i); if (nm) noIdentificacion = nm[1]
+  }
   // Fallback por regex: cuando la Descripcion contiene comillas literales (ej. 15.6" FHD...)
   // el atributo XML queda truncado en el DOM pero el texto crudo sí lo tiene.
   if (!descripcionRaw) {
@@ -1111,8 +1118,15 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
         folio = folio.padStart(5, '0')
       }
       if (serie || folio) return serie + folio
-      // CFDI sin Serie ni Folio: usar últimos 4 chars del UUID para que cada
-      // factura tenga un identificador único y no colisione en la dedup.
+      // Peaje del Fondo Nacional de Infraestructura (RFC FNI970829JR9): su CFDI
+      // no trae Serie/Folio y el único identificador de factura es el
+      // NoIdentificacion del concepto (único por cruce). Lo usamos como número
+      // de factura en vez del placeholder SN-xxxx. Acotado a FNI a propósito:
+      // en otros emisores el NoIdentificacion puede ser un SKU repetido entre
+      // facturas y colisionaría en la dedup (rfc|noFactura).
+      if (rfc === 'FNI970829JR9' && noIdentificacion) return noIdentificacion
+      // Sin Serie/Folio ni NoIdentificacion: usar últimos 4 chars del UUID para
+      // que cada factura tenga un identificador único y no colisione en la dedup.
       const uuidSuffix = (uuid || '').replace(/-/g, '').slice(-4).toUpperCase()
       return uuidSuffix ? `SN-${uuidSuffix}` : `SN-${genId().slice(0, 4).toUpperCase()}`
     })(),
@@ -4711,7 +4725,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.15</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.16</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

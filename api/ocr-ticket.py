@@ -117,6 +117,13 @@ REGLA ESPECIAL — FACTURAS DE MICROSOFT (logo de Microsoft / "Billing Summary" 
 REGLA ESPECIAL — FACTURAS DE GW INSTEK / INSTEK AMERICA CORP:
 - Si el documento tiene el logo "GW INSTEK" o el encabezado "INSTEK AMERICA CORP" → proveedor: "INSTEK AMERICA CORP" (NO uses "GW Instek" del logo). El RFC "SEN..." que aparece en "Bill To" es de SMTO, NO del proveedor; ignoralo.
 
+REGLA ESPECIAL — FACTURAS DE PEAJE / FONDO NACIONAL DE INFRAESTRUCTURA (FNI, "SERVICIO DE PEAJE Y CRUCE CARRETERO"):
+- Si el documento es un CFDI con emisor "FONDO NACIONAL DE INFRAESTRUCTURA" (RFC FNI970829JR9) o el concepto dice "SERVICIO DE PEAJE Y CRUCE CARRETERO" → aplica estas reglas:
+- proveedor: "Fondo Nacional de Infraestructura".
+- folio: concatena la "Serie" y el "Folio" que aparecen arriba en el recuadro del CFDI, TAL CUAL, en ese orden. Ejemplo: Serie "FNPE" + Folio "72984235" -> "FNPE72984235". NO uses el "Folio fiscal" (UUID) ni el "No. de certificado".
+- moneda: "MXN".
+- formaPago: "01".
+
 REGLA GENERAL DE FECHA (facturas/recibos de EE.UU.):
 - Si un documento de EE.UU. imprime la fecha con numeros ambiguos, recuerda: si algun componente es > 12 ese es el DIA. Devuelve siempre "fecha" en formato YYYY-MM-DD ya desambiguado.'''
 
