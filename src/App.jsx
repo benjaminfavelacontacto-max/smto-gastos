@@ -3756,14 +3756,14 @@ export default function App() {
     .trim()
 
   const buildFileName = (g) => {
-    // Proveedor \u2014 Title Case, max 40 chars, brackets stripped
+    // Proveedor \u2014 Title Case, nombre completo (sin recorte), brackets stripped
     const prov = toTitleCase(
       (g.proveedor || 'Proveedor')
         .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
         .replace(/[-_]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-    ).slice(0, 40)
+    )
 
     // Folio \u2014 preserved exactly as detected
     const folio = (g.noFactura || 'SN')
@@ -3771,14 +3771,14 @@ export default function App() {
       .trim()
 
     // Concepto \u2014 primera l\u00ednea de la descripci\u00f3n del CFDI (g.concepto ya viene
-    // recortado a la primera l\u00ednea desde parseCFDI). Title Case, m\u00e1x 25 chars
+    // recortado a la primera l\u00ednea desde parseCFDI). Title Case, m\u00e1x 30 chars
     // para que el renombre no se haga gigante. Reemplaza al antiguo "tipo"
     // (categor\u00eda) en el nombre del archivo.
     const rawConcepto = (g.concepto || g.tipo || 'Gasto')
       .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
-    let concepto = toTitleCase(rawConcepto).slice(0, 25).trim()
+    let concepto = toTitleCase(rawConcepto).slice(0, 30).trim()
     // Si el corte deja un guion / coma final, lo limpiamos para que el nombre
     // no termine con caracter colgante.
     concepto = concepto.replace(/[\s\-,.;:]+$/, '') || 'Gasto'
@@ -4557,7 +4557,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.01</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.02</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

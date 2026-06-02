@@ -8,7 +8,7 @@ The single source of truth is `buildFileName()` in `src/App.jsx`. NEVER duplicat
 
 **Format:** `Proveedor Folio Tipo MM-DD-YY`
 
-- Proveedor → Title Case, max 40 chars, brackets stripped, no double dashes
+- Proveedor → Title Case, full name (not truncated), brackets stripped, no double dashes
 - Folio → preserved EXACTLY as-is from CFDI (DB1616, CUUMXA110440, FAC102026491). Never upper/lower-case.
 - Tipo → gasto type (Vuelo, Hotel, Transporte, Herramienta, Consumo, etc.) from `g.tipo`, Title Case. Falls back to concepto if tipo missing.
 - Fecha → `MM-DD-YY` derived from `fechaFac`
