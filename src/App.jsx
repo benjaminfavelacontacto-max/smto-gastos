@@ -2966,11 +2966,22 @@ export default function App() {
     // si el total vino en cero.
     const esITESO = /ITESO|universidad jesuita/i.test(parsed.proveedor || '') ||
                     /ADEUDO\s+DEP[OÓ]SITO\s+GARANT[IÍ]A/i.test(parsed.concepto || '')
+    // Recibo oficial de ISN (Impuesto Sobre Nómina) de la Secretaría de la
+    // Hacienda Pública (Jalisco). El recibo pone a SMTO en "Nombre", así que el
+    // modelo suele devolver SMTO como proveedor; lo forzamos a Hacienda y el
+    // tipo al existente '3% ISN'.
+    const textoISN = `${parsed.proveedor || ''} ${parsed.concepto || ''}`
+    const esISN = /IMPUESTO SOBRE N[OÓ]MINA|\(ISN\)|SECRETAR[IÍ]A DE (LA )?HACIENDA|HACIENDA P[UÚ]BLICA/i.test(textoISN)
     let proveedorFinal = parsed.proveedor || ''
     let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
     if (esITESO) {
       proveedorFinal = 'ITESO'
       tipoFinal = 'Renta Oficina'
+      if (!total && subtotal) total = subtotal
+      if (!subtotal && total) subtotal = total
+    } else if (esISN) {
+      proveedorFinal = 'Secretaria de la Hacienda Pública'
+      tipoFinal = '3% ISN'
       if (!total && subtotal) total = subtotal
       if (!subtotal && total) subtotal = total
     }

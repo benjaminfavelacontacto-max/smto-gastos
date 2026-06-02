@@ -78,6 +78,17 @@ REGLA ESPECIAL — RECIBOS DE ITESO (Universidad Jesuita de Guadalajara):
 - iva: 0
 - propina: 0
 - moneda: "MXN"
+- formaPago: "03"
+
+REGLA ESPECIAL — RECIBOS DE ISN / SECRETARIA DE LA HACIENDA PUBLICA (Jalisco, "SET Jalisco", "RECIBO OFICIAL FORMA UNIVERSAL UNICA"):
+- Si el documento es un recibo oficial de impuesto estatal con encabezado "Secretaria de la Hacienda Publica" o tramite "Impuesto Sobre Nomina (ISN)" → aplica estas reglas:
+- proveedor: "Secretaria de la Hacienda Publica" (NO uses el nombre del contribuyente, p.ej. "SMTO ENGINEERING", ese es el cliente).
+- concepto: la descripcion del concepto, p.ej. "Impuesto Sobre Nomina (ISN)".
+- total: el importe que aparece en "TOTAL" / "Sub Total" / columna "IMPORTE" (p.ej. 105533.00). NUNCA uses la cifra de "Base gravable" (es la nomina base, no el impuesto a pagar). Quita comas de miles.
+- subtotal: mismo valor que total.
+- iva: 0
+- folio: el numero grande de "Folio" (p.ej. 48297279), no el "Folio Banco".
+- moneda: "MXN"
 - formaPago: "03"'''
 
 
