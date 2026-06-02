@@ -1011,6 +1011,30 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     conceptoClasif  = 'Combustible'
   }
 
+  // ── Regla especial: facturas de Total Play (RFC TPT890516JP5) ──
+  // El CFDI se timbra por el total bruto de servicios (Total = 1418.64,
+  // SubTotal + IVA), pero el cargo REAL del mes — lo que cobra el banco — es el
+  // "Cargos del Mes", ya neto de descuentos/promociones. Total Play lo guarda
+  // en su Addenda propia como <tp:Cuerpo SaldoDelMes="1378.65" Subtotal="...">.
+  // Tomamos ese monto para que el cotejo cuadre con el banco y derivamos el IVA
+  // del subtotal de la Addenda (importe + IVA = total, igual que el Excel).
+  // Equivalente XML de la regla OCR de Total Play; aquí es exacto y sin OCR.
+  const esTotalPlayXML = rfc === 'TPT890516JP5' || /TOTAL\s*PLAY/i.test(proveedor || '')
+  if (esTotalPlayXML) {
+    let cuerpoTP = null
+    for (const el of doc.querySelectorAll('*')) {
+      if (!el.localName || el.localName.toLowerCase() !== 'cuerpo') continue
+      if ((parseFloat(ga(el, 'SaldoDelMes', 'saldodelmes') || '0') || 0) > 0) { cuerpoTP = el; break }
+    }
+    if (cuerpoTP) {
+      const saldoMes = parseFloat(ga(cuerpoTP, 'SaldoDelMes', 'saldodelmes') || '0') || 0
+      const subMes   = parseFloat(ga(cuerpoTP, 'Subtotal',    'subtotal')    || '0') || 0
+      totalCFDI = saldoMes
+      importe   = subMes > 0 ? subMes : importe
+      iva       = parseFloat((totalCFDI - importe).toFixed(2))
+    }
+  }
+
   // Buscar PDF asociado — AQUÍ solo señales FUERTES y exclusivas:
   //   1. Coincidencia exacta de nombre base (XML.xml ↔ XML.pdf)
   //   2. UUID del CFDI dentro del nombre del PDF
@@ -4609,7 +4633,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.08</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.09</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
