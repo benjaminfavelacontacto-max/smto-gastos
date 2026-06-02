@@ -515,6 +515,27 @@ const formatBytes = (b) => {
   return `${(b / 1024 / 1024).toFixed(2)} MB`
 }
 
+// Extrae la fecha del NOMBRE de archivo de facturas de EE.UU. (Microsoft las
+// nombra "Microsoft G160071537 Office 05-21-26.pdf", con la fecha en MM-DD-YY).
+// Es una fuente determinista que evita que el OCR invierta día/mes y mande el
+// gasto a un mes anterior equivocado. Desambiguación: si el primer número es
+// > 12 es DD-MM; si el segundo es > 12 es MM-DD; si ambos son ≤ 12 asumimos el
+// orden US (MM-DD) con el que Microsoft nombra sus archivos. Devuelve
+// 'YYYY-MM-DD' (formato interno) o '' si el nombre no trae fecha reconocible.
+function fechaDesdeNombreUS(name) {
+  const m = (name || '').match(/(\d{1,2})[-_.](\d{1,2})[-_.](\d{2,4})/)
+  if (!m) return ''
+  const a = parseInt(m[1], 10), b = parseInt(m[2], 10)
+  let y = parseInt(m[3], 10)
+  if (y < 100) y += 2000
+  let mes, dia
+  if (a > 12)      { dia = a; mes = b }   // DD-MM
+  else if (b > 12) { mes = a; dia = b }   // MM-DD
+  else             { mes = a; dia = b }   // ambiguo → MM-DD (nombre US de Microsoft)
+  if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return ''
+  return `${y}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+}
+
 function parseDateRobusto(text) {
   if (!text) return null
   const chars = text.trim().replace(/[^0-9/\-]/g, '')
@@ -3000,8 +3021,14 @@ export default function App() {
     // cobra el banco) es "Cargos del Mes"; las líneas "A PAGAR" traen redondeo
     // (precio de lista) o descuento (pronto pago) y NO cuadran con el banco.
     const esTotalPlay = /TOTAL\s*PLAY|TOTALPLAY/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
+    // Microsoft (y facturas de EE.UU. en general): la fecha suele venir en orden
+    // distinto y el OCR a veces invierte día/mes, mandando el gasto a un mes
+    // anterior equivocado. Forzamos proveedor/folio/tipo y resolvemos la fecha
+    // de forma determinista (ver fechaDesdeNombreUS más abajo).
+    const esMicrosoft = /microsoft/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
     let proveedorFinal = parsed.proveedor || ''
     let rfcFinal = ''
+    let fechaFinal = parsed.fecha || today
     let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
     if (esITESO) {
       proveedorFinal = 'ITESO'
@@ -3015,6 +3042,16 @@ export default function App() {
       tipoFinal = '3% ISN'
       if (!total && subtotal) total = subtotal
       if (!subtotal && total) subtotal = total
+    } else if (esMicrosoft) {
+      proveedorFinal = 'Microsoft'
+      tipoFinal = 'IT & SW'
+      // RFC fiscal de Microsoft México (el Billing Summary lo imprime como
+      // "RFC: MCO091123MR8"; el OCR no siempre lo captura).
+      rfcFinal = 'MCO091123MR8'
+      // Fecha determinista: Microsoft nombra sus PDF "...Office MM-DD-YY.pdf".
+      // Preferimos esa fecha sobre la del OCR para que el gasto caiga en el mes
+      // correcto y nunca en un mes anterior por un día/mes invertido.
+      fechaFinal = fechaDesdeNombreUS(fileName) || parsed.fecha || today
     } else if (esTotalPlay) {
       proveedorFinal = 'Total Play'
       tipoFinal = 'IT & SW'
@@ -3037,7 +3074,7 @@ export default function App() {
       noFactura: (parsed.folio || parsed.approval_code)
         ? String(parsed.folio || parsed.approval_code)
         : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
-      fechaFac: parsed.fecha || today,
+      fechaFac: fechaFinal,
       concepto: parsed.concepto || '',
       tipo: tipoFinal,
       // For foreign-currency tickets leave the MXN side at 0 — Pass 0 of
@@ -3052,7 +3089,7 @@ export default function App() {
       totalCFDI:      isExtranjera ? 0 : total,
       propinaPorcentaje: 0,
       montoPropina:   isExtranjera ? 0 : propina,
-      fechaCobro: parsed.fecha || today,
+      fechaCobro: fechaFinal,
       formaPago: parsed.formaPago || '04',
       uuid,
       tienePDF: false,
@@ -4636,7 +4673,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.11</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.12</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

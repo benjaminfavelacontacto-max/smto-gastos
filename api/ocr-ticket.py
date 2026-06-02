@@ -99,7 +99,23 @@ REGLA ESPECIAL — RECIBOS DE TOTAL PLAY / TOTALPLAY (estado de cuenta "Totalpla
 - iva: la diferencia "Cargos del Mes" menos "SubTotal" (NO copies el IVA impreso si no cuadra con esa resta).
 - propina: 0
 - moneda: "MXN"
-- formaPago: "03"'''
+- formaPago: "03"
+
+REGLA ESPECIAL — FACTURAS DE MICROSOFT (logo de Microsoft / "Billing Summary" / "Microsoft Corporation"):
+- Si el documento tiene el logo de Microsoft o el encabezado "Billing Summary" y/o "Microsoft Corporation" → aplica estas reglas:
+- proveedor: "Microsoft".
+- folio: el valor que aparece junto a "Billing Number" (p.ej. G160071537). Preservalo EXACTAMENTE como aparece, INCLUYENDO la letra inicial. NO lo conviertas a solo digitos ni lo confundas con el "Document Date" ni con el RFC.
+- fecha: la fecha junto a "Document Date". Microsoft la imprime en formato DD/MM/YYYY (el PRIMER numero es el DIA, el SEGUNDO es el MES). Conviertela a YYYY-MM-DD respetando ese orden. Ejemplos: "21/05/2026" -> "2026-05-21"; "02/05/2026" -> "2026-05-02" (NUNCA "2026-02-05").
+- total: el "Total Amount" (p.ej. 121.24).
+- moneda: "USD" si el monto aparece como "USD".
+- subtotal: mismo valor que total.
+- iva: 0 (el Billing Summary no desglosa IVA).
+- propina: 0
+- concepto: "Microsoft Office" o la suscripcion indicada.
+- formaPago: "04"
+
+REGLA GENERAL DE FECHA (facturas/recibos de EE.UU.):
+- Si un documento de EE.UU. imprime la fecha con numeros ambiguos, recuerda: si algun componente es > 12 ese es el DIA. Devuelve siempre "fecha" en formato YYYY-MM-DD ya desambiguado.'''
 
 
 def _shrink_image(img):
