@@ -2903,7 +2903,7 @@ export default function App() {
     const isExtranjera = !esPedimento && !!monedaCode && monedaCode !== 'MXN'
     const today = new Date().toISOString().slice(0, 10)
     let subtotal = Number(parsed.subtotal) || 0
-    const iva = Number(parsed.iva) || 0
+    let iva = Number(parsed.iva) || 0
     let total = Number(parsed.total) || 0
     const propina = esPedimento ? 0 : Number(parsed.propina) || 0
     const propinaSugerida18 = esPedimento ? 0 : Number(parsed.propinaSugerida18) || 0
@@ -2972,6 +2972,10 @@ export default function App() {
     // tipo al existente '3% ISN'.
     const textoISN = `${parsed.proveedor || ''} ${parsed.concepto || ''}`
     const esISN = /IMPUESTO SOBRE N[OÓ]MINA|\(ISN\)|SECRETAR[IÍ]A DE (LA )?HACIENDA|HACIENDA P[UÚ]BLICA/i.test(textoISN)
+    // Total Play: el estado de cuenta trae varios montos. El correcto (y el que
+    // cobra el banco) es "Cargos del Mes"; las líneas "A PAGAR" traen redondeo
+    // (precio de lista) o descuento (pronto pago) y NO cuadran con el banco.
+    const esTotalPlay = /TOTAL\s*PLAY|TOTALPLAY/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
     let proveedorFinal = parsed.proveedor || ''
     let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
     if (esITESO) {
@@ -2984,6 +2988,16 @@ export default function App() {
       tipoFinal = '3% ISN'
       if (!total && subtotal) total = subtotal
       if (!subtotal && total) subtotal = total
+    } else if (esTotalPlay) {
+      proveedorFinal = 'Total Play'
+      tipoFinal = 'IT & SW'
+      // El OCR ya extrae "Cargos del Mes" en total. Recalculamos el IVA como
+      // total − subtotal para que la fila quede consistente (importe + IVA =
+      // total, igual que la fórmula TOTAL del Excel) aunque el IVA impreso no
+      // cuadre con esa resta.
+      if (total > 0 && subtotal > 0 && total >= subtotal) {
+        iva = parseFloat((total - subtotal).toFixed(2))
+      }
     }
 
     return {
@@ -4595,7 +4609,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.07</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.08</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

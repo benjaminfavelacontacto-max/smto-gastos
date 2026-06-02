@@ -89,6 +89,16 @@ REGLA ESPECIAL — RECIBOS DE ISN / SECRETARIA DE LA HACIENDA PUBLICA (Jalisco, 
 - iva: 0
 - folio: el numero grande de "Folio" (p.ej. 48297279), no el "Folio Banco".
 - moneda: "MXN"
+- formaPago: "03"
+
+REGLA ESPECIAL — RECIBOS DE TOTAL PLAY / TOTALPLAY (estado de cuenta "Totalplay Empresarial"):
+- Si el documento tiene el logo o encabezado "Totalplay", "Total Play" o "Totalplay Empresarial" → es un estado de cuenta de Total Play. Aplica estas reglas:
+- proveedor: "Total Play".
+- total: usa SIEMPRE el importe de la linea "Cargos del Mes" (p.ej. 1,378.65). NUNCA uses las lineas "A PAGAR" — ni "Precio de lista" (viene redondeado) ni "Precio pronto pago" (trae descuento). El banco cobra el monto de "Cargos del Mes". Quita comas de miles.
+- subtotal: el importe de "SubTotal" (p.ej. 1,188.50).
+- iva: la diferencia "Cargos del Mes" menos "SubTotal" (NO copies el IVA impreso si no cuadra con esa resta).
+- propina: 0
+- moneda: "MXN"
 - formaPago: "03"'''
 
 
