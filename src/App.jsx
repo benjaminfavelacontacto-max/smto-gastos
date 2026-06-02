@@ -1180,9 +1180,18 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
       }
       if (serie || folio) return serie + folio
       // Peaje del Fondo Nacional de Infraestructura (RFC FNI970829JR9): su CFDI
-      // no trae Serie/Folio y el único identificador de factura es el
-      // NoIdentificacion del concepto (único por cruce). Lo usamos como número
-      // de factura en vez del placeholder SN-xxxx. Acotado a FNI a propósito:
+      // NO trae Serie/Folio. El Serie+Folio (p.ej. FNPE72984235) solo está
+      // impreso en el PDF, pero MUY frecuentemente también en el NOMBRE del
+      // archivo. Lo sacamos del nombre — instantáneo, SIN red — para no depender
+      // del OCR del PDF (que bloqueaba la carga). Buscamos en el nombre del XML
+      // y del PDF enlazado.
+      if (rfc === 'FNI970829JR9') {
+        const nombres = `${xmlFile?.name || ''} ${pdfFile?.name || ''}`
+        const m = nombres.match(/\bFNPE\d{4,}\b/i)
+        if (m) return m[0].toUpperCase()
+      }
+      // Si no vino en el nombre, usamos el NoIdentificacion del concepto (único
+      // por cruce) en vez del placeholder SN-xxxx. Acotado a FNI a propósito:
       // en otros emisores el NoIdentificacion puede ser un SKU repetido entre
       // facturas y colisionaría en la dedup (rfc|noFactura).
       if (rfc === 'FNI970829JR9' && noIdentificacion) return noIdentificacion
@@ -3088,14 +3097,15 @@ export default function App() {
     // PDF sin llamar a Groq (sin visión ni rate limit). Así una carpeta con
     // varias FNI ya no se traba — antes eran N llamadas OCR secuenciales, cada
     // una con su retry de rate limit (hasta 30s), = minutos de spinner.
-    await Promise.all(pendientes.map(async (g) => {
+    if (pendientes.length === 0) return
+    const trabajo = Promise.all(pendientes.map(async (g) => {
       try {
         const base64 = await fileToBase64(g.pdfFile)
         const resp = await fetchConTimeout('/api/ocr-ticket', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ base64, mediaType: 'application/pdf', folioOnly: true }),
-        }, 30_000)
+        }, 10_000)
         if (!resp.ok) return
         const j = await resp.json()
         if (j && esSerieFolio(j.folio)) g.noFactura = String(j.folio).trim()
@@ -3103,6 +3113,10 @@ export default function App() {
         console.warn('FNI folio falló:', g.pdfFile?.name, err)
       }
     }))
+    // Tope DURO de tiempo: pase lo que pase con la red, seguimos en ≤12s para
+    // que la carga NUNCA se quede trabada. Lo que no alcanzó a resolver queda
+    // con su NoIdentificacion (el usuario lo puede editar).
+    await Promise.race([trabajo, new Promise(r => setTimeout(r, 12_000))])
   }
 
   // Posts a base64 image/PDF to /api/ocr-ticket and shapes the parsed
@@ -4907,7 +4921,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.24</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.25</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
