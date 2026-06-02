@@ -434,6 +434,19 @@ const parseDateDisplay = (s) => {
 // la extracción de texto del server (CFDI normales, FNI ~45KB).
 const LARGE_PDF_BYTES = 600_000
 
+// fetch con timeout (AbortController). Sin esto, una llamada OCR que se cuelga
+// (red lenta, Groq atorado) dejaría el spinner girando para siempre = sistema
+// trabado. Con timeout falla limpio, reintenta y/o se reporta al usuario.
+const fetchConTimeout = async (url, opts = {}, ms = 90_000) => {
+  const ctrl = new AbortController()
+  const id = setTimeout(() => ctrl.abort(), ms)
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal })
+  } finally {
+    clearTimeout(id)
+  }
+}
+
 const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
   if (!file.type.startsWith('image/')) return file
   return new Promise((resolve, reject) => {
@@ -3049,11 +3062,11 @@ export default function App() {
     await Promise.all(pendientes.map(async (g) => {
       try {
         const base64 = await fileToBase64(g.pdfFile)
-        const resp = await fetch('/api/ocr-ticket', {
+        const resp = await fetchConTimeout('/api/ocr-ticket', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ base64, mediaType: 'application/pdf', folioOnly: true }),
-        })
+        }, 30_000)
         if (!resp.ok) return
         const j = await resp.json()
         if (j && esSerieFolio(j.folio)) g.noFactura = String(j.folio).trim()
@@ -3069,11 +3082,11 @@ export default function App() {
   // land montoUSD with importe/totalCFDI = 0 (the user fills the MXN side
   // from their card statement later).
   const extractReceiptData = async (base64, mediaType, fileName) => {
-    const response = await fetch('/api/ocr-ticket', {
+    const response = await fetchConTimeout('/api/ocr-ticket', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base64, mediaType }),
-    })
+    }, 90_000)
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
       throw new Error(err.error || `OCR ${response.status}`)
@@ -4859,7 +4872,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.22</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.23</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

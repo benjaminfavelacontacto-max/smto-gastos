@@ -132,8 +132,10 @@ def _shrink_image(img):
     '''Reescala/recomprime una PIL.Image a JPEG <= MAX_IMG_BYTES.'''
     if img.mode not in ('RGB', 'L'):
         img = img.convert('RGB')
-    quality = 85
-    max_dim = 2400
+    quality = 82
+    # Borde largo máx 1800px: legible para tickets y mantiene la imagen chica
+    # para que Groq responda rápido y use menos tokens (menos rate limit).
+    max_dim = 1800
     while True:
         w, h = img.size
         if max(w, h) > max_dim:
@@ -183,8 +185,14 @@ def _to_image_data_url(base64_data, media_type):
     if media_type == 'application/pdf':
         doc = fitz.open(stream=raw, filetype='pdf')
         page = doc.load_page(0)
-        # zoom 2.0 ≈ 144 DPI: buena lectura sin reventar el tamaño.
-        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+        # Renderizamos apuntando a un borde largo de ~1600px (suficiente para
+        # leer texto de tickets) en vez de un zoom fijo. Así una página grande no
+        # genera un pixmap enorme: imagen más chica → Groq responde más rápido y
+        # consume menos tokens (menos rate limit). Cap a 2.0 para no agrandar
+        # tickets chiquitos de más.
+        long_pt = max(page.rect.width, page.rect.height) or 1
+        zoom = min(2.0, max(1.0, 1600.0 / long_pt))
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
         img = Image.open(io.BytesIO(pix.tobytes('png')))
         doc.close()
         jpeg = _shrink_image(img)
