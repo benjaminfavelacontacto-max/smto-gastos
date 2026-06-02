@@ -48,6 +48,7 @@ export const TIPO_RULES = [
   ['PROVISOR',                 'COGS'],
   ['TEKTRONIX',                'COGS'],
   ['ROHDE',                    'COGS'],
+  ['INSTEK',                   'COGS'],    // GW Instek / Instek America Corp (equipo de medición)
   ['GASNGO',                   'Gasolina'],
   ['ILIANA ALV',               'Renta Oficina'],
   ['ILIANA ALVAREZ',           'Renta Oficina'],
