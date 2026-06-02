@@ -967,34 +967,33 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     conceptoClasif  = 'Combustible'
   }
 
-  // Buscar PDF asociado — 3 estrategias en orden:
-  //   1. Coincidencia exacta de nombre base
-  //   2. UUID dentro del nombre del PDF
-  //   3. Coincidencia "fuzzy": tras normalizar (lowercase + solo alfanuméricos),
-  //      uno contiene al otro, o comparten los primeros 15 caracteres.
-  // Normaliza nombres a NFD + lower + sin acentos para que XMLs/PDFs con
-  // distinta codificación Unicode (e.g., PDF descargado desde Safari/Whats
-  // queda en NFC; XML emitido en NFD por algunos sistemas) matchéen igual.
-  // Sin esta normalización, "Representación.pdf" (NFC) no matchea
-  // "Representación.xml" (NFD) aunque visualmente sean idénticos.
+  // Buscar PDF asociado — AQUÍ solo señales FUERTES y exclusivas:
+  //   1. Coincidencia exacta de nombre base (XML.xml ↔ XML.pdf)
+  //   2. UUID del CFDI dentro del nombre del PDF
+  // Las heurísticas "fuzzy" (substring / prefijo / folio / RFC) se aplican
+  // DESPUÉS en linkPdfsExclusive(), de forma exclusiva (un PDF → un gasto).
+  //
+  // ⚠️ Por qué NO se hace fuzzy aquí: parseCFDI corre por-XML y devuelve el
+  // PRIMER PDF que pasa. El viejo match por "primeros 15 caracteres" tomaba
+  // el prefijo del NOMBRE DEL PROVEEDOR ("aeroenlacesnaci…"), así que con
+  // 2+ facturas del mismo proveedor en el mes (Aeroenlaces, Aerovías, …)
+  // TODOS los XML robaban el PDF de la primera factura → un PDF duplicado en
+  // varias filas y los PDFs reales perdidos. El nombre base exacto ya
+  // distingue cada factura por su folio, que es lo correcto.
+  //
+  // stripDiacritics: NFD + lower + sin acentos para que XMLs/PDFs con
+  // distinta codificación Unicode (PDF de Safari/WhatsApp en NFC vs XML en
+  // NFD) matchéen igual ("Representación.pdf" ↔ "Representación.xml").
   const stripDiacritics = s => (s || '')
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
   const base    = stripDiacritics(xmlFile.name.replace(/\.xml$/i, '').toLowerCase())
-  const norm    = s => stripDiacritics(s.toLowerCase()).replace(/[^a-z0-9]/g, '')
-  const xmlNorm = norm(base)
   const pdfFile = pdfFiles.find(f => {
     const pdfBase = stripDiacritics(f.name.replace(/\.pdf$/i, '').toLowerCase())
     if (pdfBase === base) return true
     if (uuid && stripDiacritics(f.name.toUpperCase()).includes(uuid.toUpperCase())) return true
-    const pdfNorm = norm(pdfBase)
-    if (xmlNorm.length >= 6 && pdfNorm.length >= 6) {
-      if (xmlNorm.includes(pdfNorm) || pdfNorm.includes(xmlNorm)) return true
-    }
-    if (xmlNorm.length >= 15 && pdfNorm.length >= 15 && xmlNorm.slice(0, 15) === pdfNorm.slice(0, 15)) return true
     return false
   }) || null
-  console.log('[parseCFDI]', xmlFile.name, '— PDF match:', pdfFile ? pdfFile.name : 'NONE')
 
   const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
   // Moneda + tipo de cambio del CFDI. Para CFDIs en USD / otra divisa:
@@ -1072,6 +1071,57 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     // (= montoPropina actual - montoPropinaOriginal = todo lo agregado).
     montoPropinaOriginal: 0,
   }
+}
+
+/* ═══════════════════════════════════════════════════
+   VINCULACIÓN EXCLUSIVA PDF ↔ GASTO
+═══════════════════════════════════════════════════ */
+// Asigna cada PDF a UN SOLO gasto y cada gasto a UN SOLO PDF, por niveles
+// de confianza (fuerte → débil). Un PDF reclamado en un nivel sale del pool,
+// así una heurística débil NUNCA puede robar un PDF que una señal fuerte ya
+// reclamó. Esto reemplaza las "segundas pasadas" por-PDF (no exclusivas) que
+// duplicaban un PDF en varias filas cuando un proveedor tenía 2+ facturas en
+// el mes. Muta gasto.pdfFile / gasto.tienePDF. Devuelve los PDFs sin pareja
+// (candidatos a OCR).
+function linkPdfsExclusive(gastos, pdfFiles) {
+  const norm     = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '')
+  const baseName = name => norm(String(name || '').replace(/\.(pdf|xml)$/i, ''))
+
+  // Pool de PDFs aún sin reclamar (respeta asignaciones previas por nombre).
+  const pool = pdfFiles.filter(p => !gastos.some(g => g.pdfFile?.name === p.name))
+  const claim = (g, p) => {
+    g.pdfFile  = p
+    g.tienePDF = true
+    const i = pool.indexOf(p)
+    if (i >= 0) pool.splice(i, 1)
+  }
+  // Un nivel: para cada gasto aún sin PDF, toma el PRIMER PDF del pool que
+  // cumpla `ok`. Exclusivo — el PDF reclamado abandona el pool de inmediato.
+  const tier = ok => {
+    for (const g of gastos) {
+      if (g.pdfFile) continue
+      const p = pool.find(pf => ok(g, pf))
+      if (p) claim(g, p)
+    }
+  }
+
+  // 1. Nombre base idéntico (la señal más fuerte; distingue por folio).
+  tier((g, p) => { const b = baseName(g.xmlFile?.name); return !!b && b === baseName(p.name) })
+  // 2. UUID del CFDI dentro del nombre del PDF.
+  tier((g, p) => { const u = norm(g.uuid); return u.length >= 16 && norm(p.name).includes(u) })
+  // 3. Folio (noFactura) dentro del nombre del PDF — único por factura.
+  tier((g, p) => { const f = norm(g.noFactura); return f.length >= 4 && norm(p.name).includes(f) })
+  // 4. Un nombre base contiene al otro (PDF renombrado/truncado por el usuario).
+  tier((g, p) => {
+    const b = baseName(g.xmlFile?.name), pb = baseName(p.name)
+    return b.length >= 8 && pb.length >= 8 && (b.includes(pb) || pb.includes(b))
+  })
+  // 5. RFC en el nombre del PDF — señal DÉBIL (igual para todo el proveedor),
+  //    por eso va al final: solo enlaza un PDF huérfano a un gasto aún suelto.
+  tier((g, p) => { const r = norm(g.rfc); return r.length >= 10 && norm(p.name).includes(r) })
+
+  return pool
 }
 
 /* ═══════════════════════════════════════════════════
@@ -2604,6 +2654,9 @@ export default function App() {
     if (!files.length) return
     const xmls = files.filter(f => f.name.toLowerCase().endsWith('.xml'))
     const pdfs = files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
+    // Normaliza nombres (NFD + lower + sin acentos) para comparaciones de
+    // nombre base; usado por detectOcrCandidates más abajo.
+    const normName = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
     setCarpetaNombre(folderName)
     setLoading(true)
     const nueva = []
@@ -2614,35 +2667,11 @@ export default function App() {
         if (g) nueva.push(g)
       } catch {}
     }
-    // Segunda pasada de matching XML↔PDF: parseCFDI es estricto (nombre
-    // exacto, UUID, o substring normalizado). Aquí cubrimos PDFs renombrados
-    // por el usuario que contienen el folio o RFC del XML en su nombre
-    // ("Proveedor 1189 Gastos.pdf" ↔ XML cuyo folio es 1189). Misma lógica
-    // que handleDrop para que ambos caminos sean consistentes.
-    const normName = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
-    const linkedPdfNamesAfterParse = new Set(
-      nueva.filter(g => g.pdfFile).map(g => g.pdfFile.name)
-    )
-    for (const pdf of pdfs) {
-      if (linkedPdfNamesAfterParse.has(pdf.name)) continue
-      const pdfBase = normName(pdf.name.replace(/\.pdf$/i, ''))
-      const match = nueva.find(g => {
-        const xmlBase = normName((g.xmlFile?.name || '').replace(/\.xml$/i, ''))
-        const folio   = normName(g.noFactura || '')
-        const rfc     = normName(g.rfc || '')
-        return (
-          pdfBase === xmlBase ||
-          (folio && folio.length >= 3 && pdfBase.includes(folio)) ||
-          (rfc   && rfc.length   >= 4 && pdfBase.includes(rfc))   ||
-          (xmlBase && xmlBase.includes(pdfBase))
-        )
-      })
-      if (match && !match.pdfFile) {
-        match.pdfFile = pdf
-        match.tienePDF = true
-        linkedPdfNamesAfterParse.add(pdf.name)
-      }
-    }
+    // Segunda pasada de matching XML↔PDF: parseCFDI solo enlaza por nombre
+    // base exacto o UUID. Aquí completamos los PDFs renombrados por el usuario
+    // (folio/RFC/substring en el nombre) de forma EXCLUSIVA: cada PDF se asigna
+    // a un solo gasto, con prioridad por confianza. Misma lógica que handleDrop.
+    linkPdfsExclusive(nueva, pdfs)
 
     // Persist PDF bytes as data URLs so the ZIP export survives even if
     // the original File reference goes stale. XMLs already carry their
@@ -3035,36 +3064,11 @@ export default function App() {
       }
     }
 
-    // STEP 2 — figure out which dropped PDFs are still loose. parseCFDI's
-    // built-in matcher already attached the obvious ones (g.pdfFile is set);
-    // try a second pass against folio/RFC for the rest.
-    const unmatchedPDFs = []
-    for (const pdfFile of pdfFiles) {
-      const pdfBase = pdfFile.name.replace(/\.pdf$/i, '').toLowerCase()
-
-      // Already attached by parseCFDI?
-      if (allNewGastos.some(g => g.pdfFile && g.pdfFile.name.toLowerCase() === pdfFile.name.toLowerCase())) {
-        continue
-      }
-
-      const matched = allNewGastos.find(g => {
-        const xmlBase = (g.xmlFile?.name || '').replace(/\.xml$/i, '').toLowerCase()
-        const folio   = (g.noFactura || '').toLowerCase()
-        const rfc     = (g.rfc || '').toLowerCase()
-        return (
-          pdfBase === xmlBase ||
-          (folio   && pdfBase.includes(folio)) ||
-          (rfc     && pdfBase.includes(rfc))   ||
-          (xmlBase && xmlBase.includes(pdfBase))
-        )
-      })
-      if (matched) {
-        matched.pdfFile  = pdfFile
-        matched.tienePDF = true
-      } else {
-        unmatchedPDFs.push(pdfFile)
-      }
-    }
+    // STEP 2 — vincular los PDFs sueltos a su gasto de forma EXCLUSIVA
+    // (un PDF → un gasto, por prioridad de confianza). parseCFDI ya enlazó
+    // los de nombre/UUID exacto; esto completa folio/RFC/substring sin
+    // duplicar. Lo que quede sin pareja son candidatos a OCR.
+    const unmatchedPDFs = linkPdfsExclusive(allNewGastos, pdfFiles)
 
     // STEP 3 — OCR pass for unmatched PDFs + dropped images. Asks before
     // spending money. Errors per file route through the plain alerta modal.
@@ -4463,7 +4467,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.97</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.98</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
