@@ -1,5 +1,5 @@
 from http.server import BaseHTTPRequestHandler
-import json, os, base64, io, traceback
+import json, os, base64, io, traceback, re, time
 import urllib.request, urllib.error
 
 # Groq es 100% gratuito (capa free con límites de uso) y reemplaza a la API
@@ -215,12 +215,40 @@ class handler(BaseHTTPRequestHandler):
                 },
                 method='POST',
             )
-            try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    groq_raw = resp.read().decode()
-            except urllib.error.HTTPError as he:
-                detail = he.read().decode(errors='replace')
-                raise RuntimeError(f'Groq API {he.code}: {detail}')
+            # Groq (tier gratuito) limita por tokens/minuto. Al subir varias
+            # facturas seguidas las últimas llamadas chocan con un 429 y antes
+            # se perdía la factura. Reintentamos respetando el tiempo que Groq
+            # indica (header Retry-After o el "try again in Xs" del mensaje).
+            # Vercel permite hasta 300s, así que esperar unos segundos aquí es
+            # seguro y deja que la factura entre en vez de desaparecer.
+            groq_raw = None
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        groq_raw = resp.read().decode()
+                    break
+                except urllib.error.HTTPError as he:
+                    detail = he.read().decode(errors='replace')
+                    # Solo reintentamos en 429 (rate limit). El resto es fatal.
+                    if he.code != 429 or attempt == max_retries - 1:
+                        raise RuntimeError(f'Groq API {he.code}: {detail}')
+                    wait = None
+                    ra = he.headers.get('Retry-After') if he.headers else None
+                    if ra:
+                        try: wait = float(ra)
+                        except ValueError: wait = None
+                    if wait is None:
+                        m = re.search(r'try again in\s*([0-9.]+)\s*s', detail, re.I)
+                        if m: wait = float(m.group(1))
+                    # Fallback con backoff si Groq no dio un tiempo explícito.
+                    if wait is None:
+                        wait = 3.0 * (attempt + 1)
+                    # Margen + tope para no exceder el límite de la función.
+                    wait = min(wait + 0.5, 30.0)
+                    time.sleep(wait)
+            if groq_raw is None:
+                raise RuntimeError('Groq API: sin respuesta tras reintentos')
 
             groq_json = json.loads(groq_raw)
             text = groq_json['choices'][0]['message']['content']
