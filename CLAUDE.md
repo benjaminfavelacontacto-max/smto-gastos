@@ -9,14 +9,14 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v7.20
+Current version: v8.05
 
 ## Stack
 
 - Frontend: React 18, Vite, JSZip, SheetJS (XLSX)
 - Backend: Python serverless functions on Vercel (api/*.py)
 - Python: pinned to 3.11 via .python-version
-- Deps: openpyxl, Pillow, numpy, anthropic
+- Deps: openpyxl, Pillow, numpy, PyMuPDF
 - No tests, linter, or TypeScript configured
 
 ## Commands
@@ -36,7 +36,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 - `src/components/` — PremiumModal, PremiumButton, and other small UI pieces
 - `src/App.css` — full stylesheet
 - `api/export-excel.py` — generates the premium .xlsx via openpyxl
-- `api/ocr-ticket.py` — receipt OCR via Anthropic API
+- `api/ocr-ticket.py` — receipt OCR via Groq API (free). Rasterizes PDFs to image with PyMuPDF first since Groq vision only accepts images.
 - `api/requirements.txt` — Python deps
 - `api/TEMPLATE.xls`, `api/logo.png` — Excel template assets
 - `public/logo.png` — frontend logo
@@ -46,7 +46,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 
 ## Environment
 
-- `ANTHROPIC_API_KEY` — set in Vercel env vars; used by api/ocr-ticket.py
+- `SMTO_GROQ_API_KEY` — set in Vercel env vars; used by api/ocr-ticket.py (free Groq vision model `meta-llama/llama-4-scout-17b-16e-instruct`). Name is SMTO-specific to avoid colliding with a shared `GROQ_API_KEY` from another project.
 
 ## Features in production
 
@@ -54,7 +54,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 2. Bank reconciliation:
    - Clara MXN CSV: exact-only matching (smartAmountMatch ±$0.01)
    - Clara USA CSV: match by authorization code
-3. OCR for PDF/image tickets via Claude API — only fires for PDFs without a matching XML. Image-OCR receipts are wrapped into single-page PDFs at ZIP export so they ride along with the standard buildFileName naming.
+3. OCR for PDF/image tickets via Groq API (free) — only fires for PDFs without a matching XML. PDFs are rasterized to image server-side (PyMuPDF) before OCR since Groq vision only reads images. Image-OCR receipts are wrapped into single-page PDFs at ZIP export so they ride along with the standard buildFileName naming.
 4. Multi-currency: USD, EUR, JPY, etc. with per-line exchange rate
 5. Propina (tip) split into its own sub-row in Excel
 6. Collaborator selector: 50 people across 4 categories (Admin, Socio, Servicio, Ventas)
@@ -91,10 +91,14 @@ The app is fully client-side except for two Python serverless functions (Excel e
 - Before reconciliation: equals fechaFac
 - After reconciliation: equals dCSV (bank charge date)
 
-## Cost control (Anthropic API)
+## Cost control (Groq API — free tier)
+
+OCR runs on Groq's free vision model, so there is no per-call dollar cost. The
+gating below still applies to avoid unnecessary calls and respect Groq free-tier
+rate limits.
 
 - XML alone → parsed locally, NO API call
-- XML + PDF → PDF linked to XML, NO OCR, NO cost
+- XML + PDF → PDF linked to XML, NO OCR
 - PDF without matching XML → user confirmation modal BEFORE calling OCR
 - Image (jpg/png/heic/webp/bmp/gif) → compressed client-side to max 2000px width @ 85% quality, then OCR with user confirmation
 - Image OCR receipts → original (compressed) image stored on the gasto as `imageDataURL`, then converted to a single-page PDF at ZIP-export time via jsPDF (loaded from CDN in `index.html`). The PDF filename follows the `buildFileName` convention.
@@ -111,7 +115,7 @@ The app is fully client-side except for two Python serverless functions (Excel e
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v7.20
+- Current: v8.05
 
 ## Things to be careful about
 

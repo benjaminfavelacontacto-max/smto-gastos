@@ -1,52 +1,28 @@
 from http.server import BaseHTTPRequestHandler
-import json, os, traceback
+import json, os, base64, io, traceback
+import urllib.request, urllib.error
 
+# Groq es 100% gratuito (capa free con límites de uso) y reemplaza a la API
+# de Anthropic para no generar costo al leer tickets/PDFs sin XML.
+# Modelo de visión vigente en GroqCloud (Maverick fue deprecado feb-2026).
+GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions'
+GROQ_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+
+# Límite de Groq para imágenes en base64: 4MB. Dejamos margen apuntando a ~3MB
+# de imagen cruda (base64 expande ~1.33x) y reescalando si hace falta.
+MAX_IMG_BYTES = 3_000_000
+
+# Dependencias opcionales: se importan perezosamente para que un fallo de
+# import no tumbe todo el handler (igual que el patrón previo con anthropic).
 IMPORT_ERROR = None
 try:
-    import anthropic
+    import fitz  # PyMuPDF — rasteriza PDF → imagen (Groq no lee PDFs)
+    from PIL import Image
 except Exception:
     IMPORT_ERROR = traceback.format_exc()
 
-class handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        try:
-            if IMPORT_ERROR:
-                raise RuntimeError(f'Import failed: {IMPORT_ERROR}')
 
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body)
-
-            base64_data = data.get('base64')
-            media_type = data.get('mediaType', 'image/jpeg')
-
-            api_key = os.environ.get('ANTHROPIC_API_KEY', '')
-            if not api_key:
-                raise RuntimeError('ANTHROPIC_API_KEY not configured in Vercel environment variables')
-
-            client = anthropic.Anthropic(api_key=api_key)
-
-            if media_type == 'application/pdf':
-                content_block = {
-                    'type': 'document',
-                    'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': base64_data}
-                }
-            else:
-                content_block = {
-                    'type': 'image',
-                    'source': {'type': 'base64', 'media_type': media_type, 'data': base64_data}
-                }
-
-            message = client.messages.create(
-                model='claude-sonnet-4-6',
-                max_tokens=1000,
-                messages=[{
-                    'role': 'user',
-                    'content': [
-                        content_block,
-                        {
-                            'type': 'text',
-                            'text': '''Extract receipt/ticket/invoice data. Respond ONLY with a JSON object, no markdown, no explanation:
+OCR_PROMPT = '''Extract receipt/ticket/invoice data. Respond ONLY with a JSON object, no markdown, no explanation:
 {
   "tipoDocumento": "ticket | pedimento",
   "proveedor": "business or restaurant name",
@@ -92,12 +68,106 @@ REGLAS PARA TICKET (tipoDocumento="ticket"):
 - total: final total including tax but before tip, or grand total if tip included
 - propinaSugerida18/20/22: look for "Suggested Gratuity" table on the receipt and extract the tip amounts for 18%, 20%, 22% — use 0 if not present
 - If any field not found use null for strings and 0 for numbers'''
-                        }
-                    ]
-                }]
-            )
 
-            text = message.content[0].text
+
+def _shrink_image(img):
+    '''Reescala/recomprime una PIL.Image a JPEG <= MAX_IMG_BYTES.'''
+    if img.mode not in ('RGB', 'L'):
+        img = img.convert('RGB')
+    quality = 85
+    max_dim = 2400
+    while True:
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / float(max(w, h))
+            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=quality)
+        out = buf.getvalue()
+        if len(out) <= MAX_IMG_BYTES or (quality <= 45 and max_dim <= 1200):
+            return out
+        # Aprieta calidad primero, luego dimensiones.
+        if quality > 45:
+            quality -= 15
+        else:
+            max_dim = int(max_dim * 0.8)
+
+
+def _to_image_data_url(base64_data, media_type):
+    '''Devuelve un data URL de imagen JPEG listo para Groq.
+    Convierte PDFs (página 1) a imagen y reescala lo que exceda 4MB.'''
+    raw = base64.b64decode(base64_data)
+
+    if media_type == 'application/pdf':
+        doc = fitz.open(stream=raw, filetype='pdf')
+        page = doc.load_page(0)
+        # zoom 2.0 ≈ 144 DPI: buena lectura sin reventar el tamaño.
+        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+        img = Image.open(io.BytesIO(pix.tobytes('png')))
+        doc.close()
+        jpeg = _shrink_image(img)
+        return 'data:image/jpeg;base64,' + base64.b64encode(jpeg).decode()
+
+    # Imagen: si ya cabe en el límite la dejamos tal cual; si no, recomprimimos.
+    if len(raw) <= MAX_IMG_BYTES:
+        mt = media_type if media_type.startswith('image/') else 'image/jpeg'
+        return f'data:{mt};base64,{base64_data}'
+    img = Image.open(io.BytesIO(raw))
+    jpeg = _shrink_image(img)
+    return 'data:image/jpeg;base64,' + base64.b64encode(jpeg).decode()
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            if IMPORT_ERROR:
+                raise RuntimeError(f'Import failed: {IMPORT_ERROR}')
+
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body)
+
+            base64_data = data.get('base64')
+            media_type = data.get('mediaType', 'image/jpeg')
+
+            api_key = os.environ.get('SMTO_GROQ_API_KEY', '')
+            if not api_key:
+                raise RuntimeError('SMTO_GROQ_API_KEY not configured in Vercel environment variables')
+
+            image_url = _to_image_data_url(base64_data, media_type)
+
+            payload = {
+                'model': GROQ_MODEL,
+                'temperature': 0,
+                'max_tokens': 1000,
+                'response_format': {'type': 'json_object'},
+                'messages': [{
+                    'role': 'user',
+                    'content': [
+                        {'type': 'image_url', 'image_url': {'url': image_url}},
+                        {'type': 'text', 'text': OCR_PROMPT},
+                    ],
+                }],
+            }
+
+            req = urllib.request.Request(
+                GROQ_URL,
+                data=json.dumps(payload).encode(),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {api_key}',
+                },
+                method='POST',
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    groq_raw = resp.read().decode()
+            except urllib.error.HTTPError as he:
+                detail = he.read().decode(errors='replace')
+                raise RuntimeError(f'Groq API {he.code}: {detail}')
+
+            groq_json = json.loads(groq_raw)
+            text = groq_json['choices'][0]['message']['content']
             clean = text.replace('```json', '').replace('```', '').strip()
             result = json.loads(clean)
 

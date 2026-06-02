@@ -2740,7 +2740,7 @@ export default function App() {
             { value: `+${batch.length}`,                label: 'Facturas nuevas', color: '#59D39B' },
             { value: xmls.length,                       label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
             ...(linkedPDFs > 0 ? [{ value: linkedPDFs, label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
-            ...(ocrCount > 0  ? [{ value: ocrCount,    label: 'OCR IA',          color: '#f59e0b' }] : []),
+            ...(ocrCount > 0  ? [{ value: ocrCount,    label: 'OCR gratis',      color: '#f59e0b' }] : []),
           ],
           primaryLabel: 'Continuar',
         })
@@ -3126,7 +3126,7 @@ export default function App() {
           : `Se detectaron ${ocrFiles.length} archivos sin XML.`,
         stats: [
           { value: ocrFiles.length, label: 'Archivos OCR' },
-          { value: `~$${(ocrFiles.length * 0.01).toFixed(2)}`, label: 'Costo estimado' },
+          { value: 'Gratis', label: 'Costo' },
         ],
         primaryLabel: 'Procesar con IA',
         secondaryLabel: 'Cancelar',
@@ -4566,7 +4566,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.04</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.05</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5106,7 +5106,6 @@ export default function App() {
       {ocrSelectionModal && (() => {
         const { items, onConfirm, onCancel } = ocrSelectionModal
         const selectedCount = items.filter(i => i.selected).length
-        const costEstimate  = (selectedCount * 0.01).toFixed(2)
         const setAllSelected = (val) => setOcrSelectionModal(prev => ({
           ...prev,
           items: prev.items.map(i => ({ ...i, selected: val })),
@@ -5126,7 +5125,7 @@ export default function App() {
               <h2 className="premium-title">Archivos sin XML detectados</h2>
               <p className="premium-subtitle">
                 {items.length} archivo{items.length === 1 ? '' : 's'} en la carpeta no {items.length === 1 ? 'tiene' : 'tienen'} un XML pareja.
-                Selecciona cuáles procesar con OCR. Cada uno consume ~$0.01 USD de IA.
+                Selecciona cuáles procesar con OCR. El OCR es gratuito (Groq).
               </p>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '12px 0 4px', fontSize: 12 }}>
                 <button
@@ -5154,7 +5153,7 @@ export default function App() {
               <div style={{ marginTop: 12, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
                 {selectedCount === 0
                   ? 'Sin archivos seleccionados — se cargarán solo los XMLs'
-                  : `${selectedCount} seleccionado${selectedCount === 1 ? '' : 's'} · costo estimado ~$${costEstimate} USD`}
+                  : `${selectedCount} seleccionado${selectedCount === 1 ? '' : 's'} · OCR gratuito`}
               </div>
               <div className="premium-actions" style={{ marginTop: 18 }}>
                 <button className="premium-btn-secondary" onClick={onCancel}>Cancelar</button>
