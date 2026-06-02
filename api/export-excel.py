@@ -146,6 +146,34 @@ def format_date(date_str):
         return f'{parts[0]}/{parts[1]}/{yr}'
     return date_str
 
+def parse_date_obj(date_str):
+    """Convierte la fecha a un datetime REAL para que Excel la trate como
+    fecha (celda con number_format DD/MM/AAAA: se ve como fecha, se ordena y
+    se filtra como fecha — no como texto 'General'). Acepta YYYY-MM-DD
+    (interno), DD/MM/YYYY o DD/MM/YY. Devuelve None si no se puede parsear,
+    para que el caller caiga al string de format_date sin perder el dato."""
+    if not date_str:
+        return None
+    s = str(date_str).strip()
+    # YYYY-MM-DD (formato interno de la app)
+    if '-' in s and len(s) == 10 and s[4] == '-':
+        try:
+            return datetime(int(s[0:4]), int(s[5:7]), int(s[8:10]))
+        except ValueError:
+            return None
+    # DD/MM/YYYY o DD/MM/YY (ya formateado)
+    if '/' in s:
+        parts = s.split('/')
+        if len(parts) == 3:
+            d, m, y = parts
+            if len(y) == 2:
+                y = '20' + y
+            try:
+                return datetime(int(y), int(m), int(d))
+            except ValueError:
+                return None
+    return None
+
 FORMA_PAGO_MAP = {
     '01': '01 - Efectivo',
     '02': '02 - Efectivo',
@@ -451,6 +479,15 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             right=Side(style='medium', color=EXCEL_GREEN) if col == 21 else None,
         )
 
+    # Autofiltro sobre el encabezado (fila 9) + todas las filas de datos
+    # (B9:U{data_last}), para que el usuario filtre cualquier columna —
+    # CONCEPTO, TIPO, PROVEEDOR, fechas, etc.— con los dropdowns nativos.
+    # data_last se calculó arriba (cubre filas principales + sub-filas de
+    # propina) y NO incluye la banda de TOTAL CUENTA, que queda fuera del
+    # filtro. Nota: TOTAL usa SUM (no SUBTOTAL), así que la fila de totales
+    # no cambia al filtrar — es el comportamiento previo, intacto.
+    ws.auto_filter.ref = f'B9:U{data_last}'
+
     # ═══ DATA ROWS (row 10+) ═══
     row = 10
     for idx, g in enumerate(gastos):
@@ -458,8 +495,13 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         is_alt = (idx % 2 == 1)
         bg = ROW_ALT if is_alt else WHITE
 
-        fecha_fac = format_date(g.get('fechaFac', ''))
-        fecha_cobro = format_date(g.get('fechaCobro', ''))
+        # Fechas como datetime REAL (Excel las trata como fecha, no como texto
+        # 'General'): se ordenan y filtran como fecha. Si no parsean, cae al
+        # string DD/MM/AAAA de format_date para no perder el dato.
+        fecha_fac_obj   = parse_date_obj(g.get('fechaFac', ''))
+        fecha_cobro_obj = parse_date_obj(g.get('fechaCobro', ''))
+        fecha_fac   = fecha_fac_obj   if fecha_fac_obj   else format_date(g.get('fechaFac', ''))
+        fecha_cobro = fecha_cobro_obj if fecha_cobro_obj else format_date(g.get('fechaCobro', ''))
         forma = FORMA_PAGO_MAP.get(g.get('formaPago', '04'), g.get('formaPago', ''))
         importe_raw = round(g.get('importe', 0), 2)
         iva = round(g.get('iva', 0), 2)
@@ -588,8 +630,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             (4,  tipo,                   'center', 'badge_tipo'),
             (5,  poliza_row,             'center', 'normal'),
             (6,  g.get('noFactura', ''), 'center', 'normal'),
-            (7,  fecha_fac,              'center', 'normal'),
-            (8,  fecha_cobro,            'center', 'normal'),
+            (7,  fecha_fac,              'center', 'date'),
+            (8,  fecha_cobro,            'center', 'date'),
             (9,  g.get('concepto', ''),  'left',   'normal'),
             (10, importe_val,              'center', 'currency'),
             (11, iva_val,                  'center', 'currency'),
@@ -638,6 +680,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 cell.font = Font(name='Calibri', size=9, bold=True, color=BADGE_GRAY_FG)
             elif style_type == 'tipocambio':
                 cell.number_format = '#,##0.00'
+                cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
+            elif style_type == 'date':
+                # Fecha real: formato DD/MM/AAAA (no 'General'/texto), así Excel
+                # la ordena y filtra como fecha. Si por fallback llegó un string
+                # sin parsear, el formato no estorba — el texto se muestra igual.
+                cell.number_format = 'DD/MM/YYYY'
                 cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
             elif style_type == 'diff':
                 # DIFERENCIA: la celda lleva el VALOR calculado (diff_num).
@@ -781,7 +829,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=21)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v7.97'
+    ft.value = 'SMTO Engineering · v8.00'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
