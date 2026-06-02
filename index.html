@@ -11,6 +11,16 @@
     <!-- jsPDF (CDN) — used by exportar's image-to-PDF converter at ZIP time.
          Loaded out-of-bundle to keep the main JS chunk lean. -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- pdf.js (CDN) — rasteriza la 1ª página de PDFs GRANDES (escaneos) a una
+         imagen chica en el navegador ANTES de mandarlos al OCR, para que la
+         subida no se tarde (un escaneo de 1.8MB → ~150KB). Out-of-bundle. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

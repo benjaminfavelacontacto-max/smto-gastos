@@ -429,6 +429,11 @@ const parseDateDisplay = (s) => {
 // breaks the 4.5 MB Vercel serverless body limit (HTTP 413). This brings
 // them under the cap with negligible quality loss for OCR. Non-image
 // files pass through untouched.
+// Por encima de este tamaño, un PDF se rasteriza a JPEG en el navegador antes
+// de subirlo al OCR (escaneos pesados). Debajo se manda tal cual para conservar
+// la extracción de texto del server (CFDI normales, FNI ~45KB).
+const LARGE_PDF_BYTES = 600_000
+
 const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
   if (!file.type.startsWith('image/')) return file
   return new Promise((resolve, reject) => {
@@ -465,6 +470,37 @@ const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+// Rasteriza la 1ª página de un PDF a un File JPEG chico usando pdf.js (CDN).
+// Se usa SOLO para PDFs grandes (escaneos) antes de mandarlos al OCR: subir un
+// JPEG de ~150KB es mucho más rápido que un PDF de 1.8MB. Devuelve null si
+// pdf.js no está disponible o falla, para caer al envío del PDF original.
+const pdfFirstPageToJpeg = async (file, maxDim = 1500, quality = 0.8) => {
+  const pdfjs = window.pdfjsLib
+  if (!pdfjs) return null
+  try {
+    const buf = await file.arrayBuffer()
+    const pdf = await pdfjs.getDocument({ data: buf }).promise
+    const page = await pdf.getPage(1)
+    let viewport = page.getViewport({ scale: 1 })
+    const scale = Math.min(maxDim / viewport.width, maxDim / viewport.height, 3)
+    viewport = page.getViewport({ scale: Math.max(scale, 0.1) })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(viewport.width)
+    canvas.height = Math.round(viewport.height)
+    const ctx = canvas.getContext('2d')
+    // Fondo blanco: los PDFs escaneados pueden tener transparencia.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    await page.render({ canvasContext: ctx, viewport }).promise
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality))
+    if (!blob) return null
+    return new File([blob], file.name.replace(/\.pdf$/i, '.jpg'), { type: 'image/jpeg' })
+  } catch (err) {
+    console.warn('pdf.js rasterize falló:', file?.name, err)
+    return null
+  }
 }
 
 // Wrap an image data URL into a single-page PDF (data URL out). Used at
@@ -2877,9 +2913,18 @@ export default function App() {
           try {
             const isImage = (file.type || '').startsWith('image/') ||
               /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(file.name)
-            const fileForOCR = isImage ? await compressImage(file) : file
+            let fileForOCR = file
+            let mediaType = isImage ? 'image/jpeg' : 'application/pdf'
+            if (isImage) {
+              fileForOCR = await compressImage(file)
+            } else if (file.size > LARGE_PDF_BYTES) {
+              // PDF grande (escaneo): rasteriza a JPEG chico en el navegador
+              // para que la subida no se tarde. Los PDFs chicos (CFDI normales,
+              // FNI) se mandan tal cual para no perder la extracción de texto.
+              const jpg = await pdfFirstPageToJpeg(file)
+              if (jpg) { fileForOCR = jpg; mediaType = 'image/jpeg' }
+            }
             const base64 = await fileToBase64(fileForOCR)
-            const mediaType = isImage ? 'image/jpeg' : 'application/pdf'
             const g = await extractReceiptData(base64, mediaType, file.name)
             if (isImage) {
               try { g.imageDataURL = await fileToDataURL(fileForOCR) } catch {}
@@ -3264,15 +3309,31 @@ export default function App() {
     const newGastos = []
     for (const file of files) {
       try {
-        const fileForOCR = await compressImage(file)
+        const isPdfSource = file.name.toLowerCase().endsWith('.pdf')
+        const isLargePdf = isPdfSource && file.size > LARGE_PDF_BYTES
+        let fileForOCR, mediaType
+        if (isLargePdf) {
+          // PDF grande (escaneo): rasteriza a JPEG chico antes de subir.
+          const jpg = await pdfFirstPageToJpeg(file)
+          if (jpg) { fileForOCR = jpg; mediaType = 'image/jpeg' }
+          else { fileForOCR = file; mediaType = 'application/pdf' }
+        } else {
+          fileForOCR = await compressImage(file)
+          mediaType = fileForOCR.type || 'image/jpeg'
+        }
         const base64 = await fileToBase64(fileForOCR)
-        const mediaType = fileForOCR.type || 'image/jpeg'
         const gasto = await extractReceiptData(base64, mediaType, file.name)
         if (gasto) {
           gasto.esMonedaExtranjera = !!(gasto.moneda && gasto.moneda !== 'MXN')
-          // Stash the (compressed) image data URL so the ZIP export can
-          // wrap it into a single-page PDF named via buildFileName.
-          if (mediaType.startsWith('image/')) {
+          if (isPdfSource) {
+            gasto.pdfFile = file
+            gasto.pdfDataURL = isLargePdf
+              ? await fileToDataURL(file)
+              : `data:application/pdf;base64,${base64}`
+            gasto.tienePDF = true
+          } else if (mediaType.startsWith('image/')) {
+            // Stash the (compressed) image data URL so the ZIP export can
+            // wrap it into a single-page PDF named via buildFileName.
             gasto.imageDataURL = `data:${mediaType};base64,${base64}`
             gasto.originalFileName = file.name
           }
@@ -3358,28 +3419,37 @@ export default function App() {
         for (const file of ocrFiles) {
           try {
             // compressImage re-encodes images to a ≤2000px-wide JPEG so
-            // phone shots don't blow Vercel's 4.5 MB body cap; PDFs pass
-            // through untouched. mediaType derives from the compressed
-            // File's type when present, else from the original extension.
-            const fileForOCR = await compressImage(file)
+            // phone shots don't blow Vercel's 4.5 MB body cap. PDFs chicos
+            // pasan tal cual; los PDFs GRANDES (escaneos) se rasterizan a un
+            // JPEG chico en el navegador para que la subida sea rápida.
+            const isPdfSource = file.name.toLowerCase().endsWith('.pdf')
+            const isLargePdf = isPdfSource && file.size > LARGE_PDF_BYTES
+            let fileForOCR, mediaType
+            if (isLargePdf) {
+              const jpg = await pdfFirstPageToJpeg(file)
+              if (jpg) { fileForOCR = jpg; mediaType = 'image/jpeg' }
+              else { fileForOCR = file; mediaType = 'application/pdf' }
+            } else {
+              fileForOCR = await compressImage(file)
+              const ext = file.name.split('.').pop().toLowerCase()
+              mediaType = fileForOCR.type
+                || (ext === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`)
+            }
             const base64 = await fileToBase64(fileForOCR)
-            const ext = file.name.split('.').pop().toLowerCase()
-            const mediaType = fileForOCR.type
-              || (ext === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`)
 
             const gasto = await extractReceiptData(base64, mediaType, file.name)
             if (gasto) {
-              // Keep the source PDF attached so it rides the ZIP export.
-              // Reuse the base64 we already computed for the OCR call
-              // instead of re-reading the file.
-              if (mediaType === 'application/pdf') {
+              // El PDF ORIGINAL siempre se adjunta para el ZIP. Si rasterizamos
+              // (PDF grande), el base64 es el JPEG, así que leemos el PDF aparte.
+              if (isPdfSource) {
                 gasto.pdfFile = file
-                gasto.pdfDataURL = `data:application/pdf;base64,${base64}`
+                gasto.pdfDataURL = isLargePdf
+                  ? await fileToDataURL(file)
+                  : `data:application/pdf;base64,${base64}`
                 gasto.tienePDF = true
-              }
-              // For OCR'd images, stash the data URL so exportar can wrap
-              // it into a single-page PDF named via buildFileName.
-              if (mediaType.startsWith('image/')) {
+              } else if (mediaType.startsWith('image/')) {
+                // For OCR'd images, stash the data URL so exportar can wrap
+                // it into a single-page PDF named via buildFileName.
                 gasto.imageDataURL = `data:${mediaType};base64,${base64}`
                 gasto.originalFileName = file.name
               }
@@ -4789,7 +4859,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.21</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.22</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
