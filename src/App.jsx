@@ -116,6 +116,18 @@ const TIPOS_ESPECIALES = [
 
 const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda Navarro', 'Olivia Gil']
 
+// Tipo de peaje (FNI) según la lista de tipos del colaborador. Cada lista usa
+// un nombre distinto para la caseta, así que devolvemos el string EXACTO que
+// existe en la lista activa para que no salga "— Tipo —" en blanco:
+//   Ventas/Socio → 'Casetas Ventas' (TIPOS_VENTAS)
+//   Especiales   → 'Caseta'         (TIPOS_ESPECIALES)
+//   Admin/Servicio → 'Casetas'      (TIPOS_NORMALES)
+const tipoPeajeFNI = (colaborador) => {
+  if (COLABORADORES_ESPECIALES.includes(colaborador?.nombre)) return 'Caseta'
+  const cat = colaborador?.categoria
+  return (cat === 'Ventas' || cat === 'Socio') ? 'Casetas Ventas' : 'Casetas'
+}
+
 // Bancos disponibles para el dropdown de la columna BANCO (solo especiales).
 // Coinciden con los nombres de las pestañas del archivo de Saldos.
 const BANCOS_DISPONIBLES = [
@@ -1132,7 +1144,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     })(),
     fechaFac,
     concepto:   conceptoClasif,
-    tipo: autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria, claveProdServ),
+    tipo: rfc === 'FNI970829JR9'
+      ? tipoPeajeFNI(colaborador)
+      : autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria, claveProdServ),
     importe:        esExtranjera ? 0 : importe,
     iva:            esExtranjera ? 0 : iva,
     isrTrasladado,
@@ -3097,6 +3111,9 @@ export default function App() {
     // GW Instek: el membrete dice "GW INSTEK" pero la razón social del proveedor
     // es "INSTEK AMERICA CORP". Forzamos el nombre correcto.
     const esInstek = /gw\s*instek|instek\s*america/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
+    // FNI peaje: el server ya devuelve proveedor "Fondo Nacional de
+    // Infraestructura" (y el folio Serie+Folio) cuando detecta el PDF de FNI.
+    const esFNI = /fondo nacional de infraestructura|peaje y cruce/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
     let proveedorFinal = parsed.proveedor || ''
     let rfcFinal = ''
     let folioFinal = parsed.folio || parsed.approval_code || ''
@@ -3143,6 +3160,10 @@ export default function App() {
       }
     } else if (esInstek) {
       proveedorFinal = 'INSTEK AMERICA CORP'
+    } else if (esFNI) {
+      proveedorFinal = 'Fondo Nacional de Infraestructura'
+      rfcFinal = 'FNI970829JR9'
+      tipoFinal = tipoPeajeFNI(colaborador)
     }
 
     return {
@@ -4758,7 +4779,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.18</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.19</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
