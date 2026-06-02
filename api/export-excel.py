@@ -861,11 +861,17 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         except Exception as e:
             print(f'Logo: {e}')
 
-    # Explicitly unlock every cell so openpyxl's default locked=True
-    # doesn't prevent editing even when sheet protection is off.
+    # Unlock cells so they're editable, PERO dejamos las celdas con fórmula
+    # en locked=True (el default). Razón: Excel marca con triángulo verde
+    # ("fórmula desprotegida") cualquier celda que tenga fórmula y esté
+    # desbloqueada. Como la hoja NO está protegida, el estado locked no afecta
+    # la edición (todo es editable igual), así que dejar las fórmulas locked
+    # solo sirve para quitar esa advertencia y dejar el archivo más limpio.
     _unlocked = Protection(locked=False)
     for row in ws.iter_rows():
         for cell in row:
+            if isinstance(cell.value, str) and cell.value.startswith('='):
+                continue  # fórmula → se queda locked=True, sin triángulo
             cell.protection = _unlocked
 
     return wb
