@@ -114,6 +114,9 @@ REGLA ESPECIAL — FACTURAS DE MICROSOFT (logo de Microsoft / "Billing Summary" 
 - concepto: "Microsoft Office" o la suscripcion indicada.
 - formaPago: "04"
 
+REGLA ESPECIAL — FACTURAS DE GW INSTEK / INSTEK AMERICA CORP:
+- Si el documento tiene el logo "GW INSTEK" o el encabezado "INSTEK AMERICA CORP" → proveedor: "INSTEK AMERICA CORP" (NO uses "GW Instek" del logo). El RFC "SEN..." que aparece en "Bill To" es de SMTO, NO del proveedor; ignoralo.
+
 REGLA GENERAL DE FECHA (facturas/recibos de EE.UU.):
 - Si un documento de EE.UU. imprime la fecha con numeros ambiguos, recuerda: si algun componente es > 12 ese es el DIA. Devuelve siempre "fecha" en formato YYYY-MM-DD ya desambiguado.'''
 
