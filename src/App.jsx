@@ -2902,9 +2902,9 @@ export default function App() {
     const monedaCode   = esPedimento ? 'MXN' : (parsed.moneda || 'MXN').toString().toUpperCase()
     const isExtranjera = !esPedimento && !!monedaCode && monedaCode !== 'MXN'
     const today = new Date().toISOString().slice(0, 10)
-    const subtotal = Number(parsed.subtotal) || 0
+    let subtotal = Number(parsed.subtotal) || 0
     const iva = Number(parsed.iva) || 0
-    const total = Number(parsed.total) || 0
+    let total = Number(parsed.total) || 0
     const propina = esPedimento ? 0 : Number(parsed.propina) || 0
     const propinaSugerida18 = esPedimento ? 0 : Number(parsed.propinaSugerida18) || 0
     const propinaSugerida20 = esPedimento ? 0 : Number(parsed.propinaSugerida20) || 0
@@ -2959,10 +2959,26 @@ export default function App() {
       }
     }
 
+    // ── Regla especial: recibos de ITESO (Universidad Jesuita de Guadalajara) ──
+    // Estos recibos ponen al cliente (SMTO) en "Nombre:" y el monto real en la
+    // LÍNEA del concepto, dejando el campo "Total:" en $0.00. Forzamos
+    // proveedor/tipo de forma determinista y rescatamos el monto del subtotal
+    // si el total vino en cero.
+    const esITESO = /ITESO|universidad jesuita/i.test(parsed.proveedor || '') ||
+                    /ADEUDO\s+DEP[OÓ]SITO\s+GARANT[IÍ]A/i.test(parsed.concepto || '')
+    let proveedorFinal = parsed.proveedor || ''
+    let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
+    if (esITESO) {
+      proveedorFinal = 'ITESO'
+      tipoFinal = 'Renta Oficina'
+      if (!total && subtotal) total = subtotal
+      if (!subtotal && total) subtotal = total
+    }
+
     return {
       id: genId(),
       rfc: '',
-      proveedor: parsed.proveedor || '',
+      proveedor: proveedorFinal,
       // Prefer the merchant's own folio when present, fall back to the card
       // approval code so it lines up with the bank statement's "Código de
       // autorización" column in Pass 0 of validarBanco.
@@ -2971,7 +2987,7 @@ export default function App() {
         : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
       fechaFac: parsed.fecha || today,
       concepto: parsed.concepto || '',
-      tipo: autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria),
+      tipo: tipoFinal,
       // For foreign-currency tickets leave the MXN side at 0 — Pass 0 of
       // validarBanco will fill it from the bank statement's "Monto en MXN"
       // column once the authorization code matches.

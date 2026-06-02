@@ -67,7 +67,18 @@ REGLAS PARA TICKET (tipoDocumento="ticket"):
 - propina: tip amount (Tip, Gratuity, Propina) — 0 if not present
 - total: final total including tax but before tip, or grand total if tip included
 - propinaSugerida18/20/22: look for "Suggested Gratuity" table on the receipt and extract the tip amounts for 18%, 20%, 22% — use 0 if not present
-- If any field not found use null for strings and 0 for numbers'''
+- If any field not found use null for strings and 0 for numbers
+
+REGLA ESPECIAL — RECIBOS DE ITESO (Universidad Jesuita de Guadalajara):
+- Si el documento tiene el logo o encabezado "ITESO" o "Universidad Jesuita de Guadalajara" → es un recibo de ITESO. Aplica estas reglas:
+- proveedor: "ITESO" (NO uses el nombre que aparece junto a "Nombre:", ese es el cliente, no el proveedor).
+- concepto: copia TAL CUAL la descripcion de la LINEA del concepto, p.ej. "ADEUDO DEPOSITO GARANTIA RENTA PARQUE TE 1DI".
+- total: usa el importe que aparece en la LINEA del concepto (p.ej. 1370.00). NO uses el campo "Total :" porque suele venir en 0.00. Quita comas de miles.
+- subtotal: mismo valor que total.
+- iva: 0
+- propina: 0
+- moneda: "MXN"
+- formaPago: "03"'''
 
 
 def _shrink_image(img):
