@@ -156,6 +156,11 @@ class handler(BaseHTTPRequestHandler):
                 headers={
                     'Content-Type': 'application/json',
                     'Authorization': f'Bearer {api_key}',
+                    # Cloudflare (delante de Groq) banea el User-Agent por
+                    # defecto de urllib (Python-urllib/x.y) con error 1010.
+                    # Mandamos uno normal para que no nos bloquee.
+                    'User-Agent': 'smto-app/1.0 (+https://smto-app.vercel.app)',
+                    'Accept': 'application/json',
                 },
                 method='POST',
             )
