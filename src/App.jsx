@@ -645,6 +645,46 @@ function parseSaldosXLSX(arrayBuffer) {
    puntos; uppercase. "48 3993 64000" y "48399364000" matchearán. */
 const normFactura = (s) => String(s || '').replace(/[\s\-/.]/g, '').toUpperCase()
 
+/* Normaliza un proveedor/concepto para comparación laxa: sin acentos, sólo
+   A-Z0-9, uppercase. Permite buscar el proveedor del gasto dentro del
+   concepto del Saldos (que suele traer el nombre embebido en texto libre). */
+const normProv = (s) => String(s || '')
+  .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+  .toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+/* Puntúa un renglón del Saldos como candidato para un gasto. Se usa SÓLO
+   para DESEMPATAR cuando varios renglones comparten el MISMO número de
+   factura (folios repetidos entre proveedores o cuentas — el folio CFDI es
+   por emisor, así que dos proveedores distintos pueden traer el mismo
+   número). Señales de más a menos decisiva:
+     1. monto exacto del egreso ≈ total del CFDI (±$0.01)  → la más fuerte
+     2. proveedor del gasto presente en el concepto del Saldos
+     3. misma moneda (USD↔USD, MXN↔MXN)
+     4. cercanía de fecha factura↔cobro (desempate suave)
+   Devuelve { score, amountMatch, provMatch } para poder marcar después si la
+   colisión se resolvió por una señal fuerte (monto/proveedor) o sólo débil. */
+function scoreSaldosCandidate(g, sRow) {
+  const gMoneda = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
+  const sMoneda = (sRow.moneda || 'MXN').toString().toUpperCase()
+  const gTotal  = Number(g.totalCFDI) || 0
+  const sEgreso = Number(sRow.egreso) || 0
+  const amountMatch = gTotal > 0 && sEgreso > 0 && Math.abs(sEgreso - gTotal) <= 0.01
+  const gProv = normProv(g.proveedor)
+  const provMatch = gProv.length >= 4 && normProv(sRow.concepto).includes(gProv)
+
+  let score = 0
+  if (amountMatch)         score += 10000
+  if (provMatch)           score += 4000
+  if (sMoneda === gMoneda) score += 1000
+  const gIso = String(g.fechaFac || '').slice(0, 10)
+  const sIso = saldosFechaToIso(sRow.fecha) || ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(gIso) && /^\d{4}-\d{2}-\d{2}$/.test(sIso)) {
+    const days = Math.abs(new Date(gIso + 'T00:00:00Z') - new Date(sIso + 'T00:00:00Z')) / 86400000
+    if (!Number.isNaN(days)) score += Math.max(0, 200 - days)
+  }
+  return { score, amountMatch, provMatch }
+}
+
 /* Cotejo: por cada gasto busca la fila del Saldos con la misma factura
    normalizada, MISMO AÑO y MISMA MONEDA. Esto evita matchear una factura
    2026 contra un renglón Saldos 2025, y evita matchear USD contra MXN.
@@ -684,23 +724,25 @@ function cotejarConSaldos(saldosRows, lista) {
   const sinMatchGastos = []
   const usedSaldos = new Set()
 
-  // 4) Match con preferencia de moneda: primero intenta misma-moneda
-  //    (USD↔USD, MXN↔MXN). Si no hay candidato exacto, hace fallback al
-  //    primer renglón disponible para esa factura. Esto cubre el caso típico
-  //    donde la fila USD del Saldos no trae el marcador 'USD' explícito y
-  //    de otra forma la factura quedaría sin fechaCobro.
+  // 4) Match eligiendo el MEJOR candidato entre los renglones libres con esa
+  //    factura. Con un solo candidato es ese renglón (el folio basta). Con
+  //    VARIOS (mismo número de factura repetido entre proveedores/cuentas),
+  //    scoreSaldosCandidate desempata por monto/proveedor/moneda/fecha para
+  //    no vincular el gasto con la factura equivocada y mezclar póliza,
+  //    banco, fecha de cobro o tipo de otra factura que no es.
+  //    Greedy de un paso (igual que el resto del cotejo vía usedSaldos): cada
+  //    gasto toma su mejor renglón libre. En la colisión real (proveedores
+  //    distintos con el mismo folio) cada gasto prefiere fuertemente SU propio
+  //    renglón por monto+proveedor, así que el orden no importa.
   lista.forEach((g) => {
     const k = normFactura(g.noFactura)
     const candidates = k ? (byFactura.get(k) || []) : []
-    const gMoneda = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
 
-    let saldosIdx = candidates.find(idx => {
-      if (usedSaldos.has(idx)) return false
-      const sMoneda = (filteredSaldos[idx].moneda || 'MXN').toString().toUpperCase()
-      return sMoneda === gMoneda
-    })
-    if (saldosIdx === undefined) {
-      saldosIdx = candidates.find(idx => !usedSaldos.has(idx))
+    let saldosIdx, best = null
+    for (const idx of candidates) {
+      if (usedSaldos.has(idx)) continue
+      const cand = scoreSaldosCandidate(g, filteredSaldos[idx])
+      if (!best || cand.score > best.score) { best = cand; saldosIdx = idx }
     }
 
     if (saldosIdx === undefined) {
@@ -711,16 +753,18 @@ function cotejarConSaldos(saldosRows, lista) {
     const sRow = filteredSaldos[saldosIdx]
     const tipoDiffers = !!sRow.tipo && !!g.tipo &&
       sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
-    matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers })
+    // Colisión = había más de un renglón del Saldos con este mismo número de
+    // factura. La marcamos (y si se ancló por una señal fuerte) para que el
+    // usuario pueda verificar en el modal que se vinculó la correcta.
+    const facturaColision = candidates.length > 1
+    const colisionResuelta = best.amountMatch || best.provMatch
+    matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers, facturaColision, colisionResuelta })
   })
 
   // 5) FALLBACK match: para gastos que no encontraron factura en el Saldos,
   //    intenta matchear contra los renglones con factura='NA' (o vacía) por
   //    PROVEEDOR + MONTO + AÑO-MES. Cubre el caso donde el Saldos no tiene
   //    el folio de la factura pero sí registra el movimiento del banco.
-  const normProv = s => String(s || '')
-    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
-    .toUpperCase().replace(/[^A-Z0-9]/g, '')
   const stillSinMatch = []
   for (const g of sinMatchGastos) {
     const gProv = normProv(g.proveedor)
@@ -4363,6 +4407,7 @@ export default function App() {
     const discrepancias   = result.matched.filter(m => m.tipoDiffers)
     const tiposActualizados = discrepancias.filter(m => decisions[m.gasto.id] === 'saldos').length
     const tiposMantenidos   = discrepancias.length - tiposActualizados
+    const colisionesRevisar = result.matched.filter(m => m.facturaColision && !m.colisionResuelta).length
     const sinMatchG       = result.sinMatchGastos.length
     const sinMatchS       = result.sinMatchSaldos.length
     setLista(prev => prev.map(g => {
@@ -4381,6 +4426,7 @@ export default function App() {
         { value: matchedCount,       label: 'Matches',           color: '#59D39B' },
         ...(tiposActualizados > 0 ? [{ value: tiposActualizados, label: 'Tipos actualizados', color: 'rgba(255,255,255,0.85)' }] : []),
         ...(tiposMantenidos   > 0 ? [{ value: tiposMantenidos,   label: 'Tipos mantenidos',   color: 'rgba(255,255,255,0.85)' }] : []),
+        ...(colisionesRevisar > 0 ? [{ value: colisionesRevisar, label: 'Folios repetidos a revisar', color: '#FF9F0A' }] : []),
         ...(sinMatchG > 0 ? [{ value: sinMatchG, label: 'Gastos sin match', color: '#FF9F0A' }] : []),
         ...(sinMatchS > 0 ? [{ value: sinMatchS, label: 'Saldos sin match', color: 'rgba(255,255,255,0.65)' }] : []),
       ],
@@ -4511,7 +4557,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.00</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.01</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -4840,6 +4886,7 @@ export default function App() {
       {cotejoModal && (() => {
         const { result, decisions } = cotejoModal
         const discrepancias = result.matched.filter(m => m.tipoDiffers)
+        const colisiones = result.matched.filter(m => m.facturaColision)
         const sinMatchG = result.sinMatchGastos
         const sinMatchS = result.sinMatchSaldos
         const setDecision = (gastoId, choice) => {
@@ -4866,7 +4913,7 @@ export default function App() {
               </div>
               <div className="premium-title">Cotejo con Saldos</div>
               <div className="premium-subtitle">
-                {result.matched.length} pólizas aplicadas · {discrepancias.length} discrepancia(s) de tipo · {sinMatchG.length} gasto(s) sin match · {sinMatchS.length} fila(s) Saldos sobrantes
+                {result.matched.length} pólizas aplicadas · {discrepancias.length} discrepancia(s) de tipo{colisiones.length > 0 ? ` · ${colisiones.length} factura(s) con número repetido` : ''} · {sinMatchG.length} gasto(s) sin match · {sinMatchS.length} fila(s) Saldos sobrantes
               </div>
 
               <div style={{ overflowY: 'auto', flex: 1, marginTop: 16, padding: '0 4px' }}>
@@ -4913,6 +4960,41 @@ export default function App() {
                           </div>
                         )
                       })}
+                    </div>
+                  </section>
+                )}
+
+                {colisiones.length > 0 && (
+                  <section style={{ marginBottom: 24 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#38bdf8', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Facturas con número repetido
+                    </div>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                      Más de un renglón del Saldos comparte este número de factura. Se vinculó el de mayor coincidencia (monto, proveedor, moneda y fecha). Verifica los marcados con ⚠.
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {colisiones.map(m => (
+                        <div key={m.gastoId} style={{
+                          background: m.colisionResuelta ? 'rgba(56,189,248,0.06)' : 'rgba(245,158,11,0.08)',
+                          border: `1px solid ${m.colisionResuelta ? 'rgba(56,189,248,0.3)' : 'rgba(245,158,11,0.4)'}`,
+                          borderRadius: 8, padding: 10,
+                        }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 2 }}>
+                            {m.colisionResuelta ? '✓' : '⚠'} Factura {m.gasto.noFactura}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                            Gasto: {m.gasto.proveedor} · {fmtFecha(m.gasto.fechaFac)} · ${fmtMoney(m.gasto.totalCFDI)}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                            Vinculado a: {m.saldosRow.sheet} · {m.saldosRow.tipo || '—'} · {fmtFecha(m.saldosRow.fecha)} · ${fmtMoney(m.saldosRow.egreso)}
+                          </div>
+                          {!m.colisionResuelta && (
+                            <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 4 }}>
+                              Sin coincidencia clara de monto ni proveedor — revisa que sea la factura correcta.
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </section>
                 )}
