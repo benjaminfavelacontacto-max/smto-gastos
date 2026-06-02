@@ -2824,33 +2824,50 @@ export default function App() {
     // Helper: corre OCR sobre los archivos seleccionados, regresa los gastos
     // ya formateados (con pdfDataURL/imageDataURL para el export).
     const runOcrOnSelection = async (selectedFiles) => {
-      if (!selectedFiles.length) return []
+      if (!selectedFiles.length) return { results: [], failed: [] }
       setLoading(true)
       const results = []
+      const failed = []
       for (const file of selectedFiles) {
-        try {
-          const isImage = (file.type || '').startsWith('image/') ||
-            /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(file.name)
-          const fileForOCR = isImage ? await compressImage(file) : file
-          const base64 = await fileToBase64(fileForOCR)
-          const mediaType = isImage ? 'image/jpeg' : 'application/pdf'
-          const g = await extractReceiptData(base64, mediaType, file.name)
-          if (isImage) {
-            try { g.imageDataURL = await fileToDataURL(fileForOCR) } catch {}
-            g.originalFileName = file.name
-          } else {
-            g.pdfFile = file
-            g.tienePDF = true
-            try { g.pdfDataURL = await fileToDataURL(file) } catch {}
+        // Reintento: el OCR (Groq, tier gratuito) puede fallar de forma
+        // transitoria por límite de tasa cuando se mandan varias facturas
+        // seguidas, o por un JSON mal formado puntual. Antes el archivo se
+        // descartaba en silencio (solo console.warn) — por eso a veces de 3
+        // facturas solo aparecían 2. Reintentamos una vez con backoff y, si
+        // aun así falla, lo reportamos al usuario en vez de perderlo callado.
+        let ok = false
+        let lastErr = null
+        for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+          if (attempt > 0) await new Promise(r => setTimeout(r, 1200))
+          try {
+            const isImage = (file.type || '').startsWith('image/') ||
+              /\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i.test(file.name)
+            const fileForOCR = isImage ? await compressImage(file) : file
+            const base64 = await fileToBase64(fileForOCR)
+            const mediaType = isImage ? 'image/jpeg' : 'application/pdf'
+            const g = await extractReceiptData(base64, mediaType, file.name)
+            if (isImage) {
+              try { g.imageDataURL = await fileToDataURL(fileForOCR) } catch {}
+              g.originalFileName = file.name
+            } else {
+              g.pdfFile = file
+              g.tienePDF = true
+              try { g.pdfDataURL = await fileToDataURL(file) } catch {}
+            }
+            g.isNew = true
+            results.push(g)
+            ok = true
+          } catch (err) {
+            lastErr = err
           }
-          g.isNew = true
-          results.push(g)
-        } catch (err) {
-          console.warn('OCR failed for', file.name, err)
+        }
+        if (!ok) {
+          console.warn('OCR failed for', file.name, lastErr)
+          failed.push(file.name)
         }
       }
       setLoading(false)
-      return results
+      return { results, failed }
     }
 
     // Wraps applyBatch: si hay candidatos OCR abre el modal de selección;
@@ -2866,8 +2883,16 @@ export default function App() {
         items: candidates.map(f => ({ file: f, selected: false })),
         onConfirm: async (selectedFiles) => {
           setOcrSelectionModal(null)
-          const ocrResults = await runOcrOnSelection(selectedFiles)
+          const { results: ocrResults, failed } = await runOcrOnSelection(selectedFiles)
           applyBatch([...xmlBatch, ...ocrResults], ocrResults.length)
+          if (failed.length > 0) {
+            showModal({
+              type: 'error',
+              title: `${failed.length} factura${failed.length === 1 ? '' : 's'} no se pudo procesar`,
+              subtitle: `El OCR falló en:\n\n${failed.join('\n')}\n\nVuelve a arrastrar solo ${failed.length === 1 ? 'ese archivo' : 'esos archivos'} para reintentar.`,
+              primaryLabel: 'Entendido',
+            })
+          }
         },
         onCancel: () => {
           setOcrSelectionModal(null)
@@ -3031,6 +3056,7 @@ export default function App() {
     const esInstek = /gw\s*instek|instek\s*america/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
     let proveedorFinal = parsed.proveedor || ''
     let rfcFinal = ''
+    let folioFinal = parsed.folio || parsed.approval_code || ''
     let fechaFinal = parsed.fecha || today
     let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
     if (esITESO) {
@@ -3055,6 +3081,13 @@ export default function App() {
       // Preferimos esa fecha sobre la del OCR para que el gasto caiga en el mes
       // correcto y nunca en un mes anterior por un día/mes invertido.
       fechaFinal = fechaDesdeNombreUS(fileName) || parsed.fecha || today
+      // Billing Number determinista desde el nombre ("Microsoft G160071537 ...").
+      // CRÍTICO: como forzamos un RFC constante para Microsoft, la dedup
+      // (rfc|noFactura) colisiona si el OCR repite el folio entre dos facturas
+      // casi idénticas — y una se descartaría como "duplicado". El número del
+      // nombre del archivo es único por factura y evita esa pérdida.
+      const billingDesdeNombre = (fileName || '').match(/\bG\d{6,}\b/i)
+      if (billingDesdeNombre) folioFinal = billingDesdeNombre[0].toUpperCase()
     } else if (esTotalPlay) {
       proveedorFinal = 'Total Play'
       tipoFinal = 'IT & SW'
@@ -3076,8 +3109,8 @@ export default function App() {
       // Prefer the merchant's own folio when present, fall back to the card
       // approval code so it lines up with the bank statement's "Código de
       // autorización" column in Pass 0 of validarBanco.
-      noFactura: (parsed.folio || parsed.approval_code)
-        ? String(parsed.folio || parsed.approval_code)
+      noFactura: folioFinal
+        ? String(folioFinal)
         : ('TKT-' + uuid.slice(0, 6).toUpperCase()),
       fechaFac: fechaFinal,
       concepto: parsed.concepto || '',
@@ -4678,7 +4711,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.13</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.14</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
