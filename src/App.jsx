@@ -3812,6 +3812,35 @@ export default function App() {
     }
 
     // 2) Rename each gasto's XML + PDF through buildFileName.
+    // Dos blindajes contra pérdida/confusión silenciosa de archivos:
+    //  (a) Colisión de nombres: si dos filas generan el MISMO buildFileName,
+    //      JSZip escribiría dos entradas con el mismo nombre y al descomprimir
+    //      una pisa a la otra → factura perdida. uniqueName añade " (2)", " (3)"…
+    //      manteniendo el .xml y el .pdf de la fila bajo el mismo nombre.
+    //  (b) Contenido duplicado: si facturas con folio DISTINTO terminan con el
+    //      MISMO PDF byte a byte, casi siempre es data de origen corrupta (PDFs
+    //      mal descargados o residuo de un export viejo). No lo podemos
+    //      "reparar" —el PDF correcto no está en la carpeta— pero lo detectamos
+    //      y avisamos al final para que el usuario revise el origen.
+    const usedNames = new Set()
+    const uniqueName = base => {
+      let name = base, n = 2
+      while (usedNames.has(name.toLowerCase())) name = `${base} (${n++})`
+      usedNames.add(name.toLowerCase())
+      return name
+    }
+    // djb2 sobre los bytes del PDF — contenido idéntico ⇒ misma huella.
+    const djb2 = (readByte, len) => {
+      let h = 5381
+      for (let i = 0; i < len; i++) h = ((h << 5) + h + readByte(i)) | 0
+      return `${h}:${len}`
+    }
+    const pdfHuellas = new Map()  // huella → Set<folio> (folios que comparten ese PDF)
+    const registraPdf = (huella, g) => {
+      if (!pdfHuellas.has(huella)) pdfHuellas.set(huella, new Set())
+      pdfHuellas.get(huella).add(g.noFactura || '(sin folio)')
+    }
+
     let r = 0
     for (const g of lista) {
       if (g.imageDataURL && !g.pdfDataURL) {
@@ -3822,7 +3851,7 @@ export default function App() {
         }
       }
       if (g.xmlContent || g.pdfDataURL) {
-        const nom = buildFileName(g)
+        const nom = uniqueName(buildFileName(g))
         if (g.xmlContent) {
           facturas.file(`${nom}.xml`, g.xmlContent)
           r++
@@ -3834,18 +3863,24 @@ export default function App() {
           for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i)
           facturas.file(`${nom}.pdf`, bytes, { binary: true })
           if (!g.xmlContent) r++
+          registraPdf(djb2(i => bytes[i], bytes.length), g)
         }
         if (g.xmlFile && !g.xmlContent) {
           facturas.file(`${nom}.xml`, await g.xmlFile.arrayBuffer())
           r++
         }
         if (g.pdfFile && !g.pdfDataURL) {
-          facturas.file(`${nom}.pdf`, await g.pdfFile.arrayBuffer())
+          const buf = new Uint8Array(await g.pdfFile.arrayBuffer())
+          facturas.file(`${nom}.pdf`, buf)
           if (!g.xmlFile && !g.xmlContent) r++
+          registraPdf(djb2(i => buf[i], buf.length), g)
         }
       }
     }
     void r
+
+    // Grupos de folios DISTINTOS que comparten un PDF idéntico (data corrupta).
+    const dupPdfGroups = [...pdfHuellas.values()].filter(set => set.size > 1)
 
     // 3) Generate + trigger download.
     const zipBlob = await zip.generateAsync({ type: 'blob' })
@@ -3857,13 +3892,22 @@ export default function App() {
     a.click()
     URL.revokeObjectURL(a.href)
 
-    // 4) Success modal — generic PremiumModal with three stats.
+    // 4) Success modal — generic PremiumModal with three stats. Si se detectó
+    //    PDF idéntico entre folios distintos, el modal pasa a 'warning' y lista
+    //    los folios afectados: el PDF de esas facturas está mal en el origen.
     const xmlCount = lista.filter(g => g.xmlContent || g.xmlFile).length
     const pdfCount = lista.filter(g => g.pdfDataURL || g.pdfFile).length
+    const hayDupPdf = dupPdfGroups.length > 0
+    const dupFolios = dupPdfGroups
+      .map(set => [...set].join(', '))
+      .slice(0, 6)
+      .join('  ·  ')
     showModal({
-      type: 'success',
-      title: '¡ZIP Generado!',
-      subtitle: 'Paquete descargado con Excel + facturas renombradas.',
+      type: hayDupPdf ? 'warning' : 'success',
+      title: hayDupPdf ? 'ZIP generado — revisa estos PDFs' : '¡ZIP Generado!',
+      subtitle: hayDupPdf
+        ? `Se generó el paquete, pero ${dupPdfGroups.length} grupo(s) de facturas con folio distinto comparten un PDF idéntico — el PDF de esas facturas está equivocado en la carpeta de origen, no en el renombrado. Vuelve a descargar el PDF correcto de: ${dupFolios}`
+        : 'Paquete descargado con Excel + facturas renombradas.',
       stats: [
         { value: xmlCount, label: 'XMLs',   color: '#59D39B' },
         { value: pdfCount, label: 'PDFs',   color: '#60a5fa' },
@@ -4467,7 +4511,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.98</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v7.99</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
