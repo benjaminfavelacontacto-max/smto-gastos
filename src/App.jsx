@@ -2916,7 +2916,28 @@ export default function App() {
     await enrichFniFoliosDesdePDF(nueva)
 
     const applyBatch = (batch, ocrCount = 0) => {
-      setLista(batch)
+      // Merge ACUMULATIVO: en vez de sobrescribir, agrega la carpeta nueva a los
+      // registros existentes. Dedup por rfc|noFactura — una factura repetida
+      // actualiza la fila previa en vez de duplicarse. Así el usuario puede
+      // cargar varias carpetas seguidas y todas se acumulan en la lista.
+      let added = 0, updated = 0
+      setLista(prev => {
+        const merged = [...prev]
+        const keys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
+        for (const newG of batch) {
+          const key = `${newG.rfc}|${newG.noFactura}`
+          if (keys.has(key)) {
+            const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
+            if (idx !== -1) { merged[idx] = { ...merged[idx], ...newG, isNew: true }; updated++ }
+          } else {
+            merged.push(newG); keys.add(key); added++
+          }
+        }
+        return merged
+      })
+      setTimeout(() => {
+        setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+      }, 1500)
       setLoading(false)
       if (batch.length > 0) {
         const linkedPDFs = batch.filter(g => g.tienePDF).length
@@ -2925,7 +2946,8 @@ export default function App() {
           title: 'Carpeta cargada',
           subtitle: `Procesamos ${xmls.length} XML${xmls.length === 1 ? '' : 's'}${ocrCount > 0 ? ` + ${ocrCount} OCR` : ''} correctamente.`,
           stats: [
-            { value: `+${batch.length}`,                label: 'Facturas nuevas', color: '#59D39B' },
+            { value: `+${added}`,                       label: 'Facturas nuevas', color: '#59D39B' },
+            ...(updated > 0 ? [{ value: updated,        label: 'Actualizadas',    color: 'rgba(255,255,255,0.85)' }] : []),
             { value: xmls.length,                       label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
             ...(linkedPDFs > 0 ? [{ value: linkedPDFs, label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
             ...(ocrCount > 0  ? [{ value: ocrCount,    label: 'OCR gratis',      color: '#f59e0b' }] : []),
@@ -4965,7 +4987,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.31</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.32</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
