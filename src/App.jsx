@@ -516,6 +516,78 @@ const pdfFirstPageToJpeg = async (file, maxDim = 1500, quality = 0.8) => {
   }
 }
 
+// Lee el TEXTO embebido de las primeras páginas de un PDF usando pdf.js (CDN),
+// SIN red y SIN OCR. Sirve para enlazar un PDF a su XML cuando el NOMBRE del
+// archivo no comparte ningún token (folio/UUID/RFC) — buscamos esos tokens
+// dentro del contenido. Devuelve el texto en MAYÚSCULAS y sin espacios para
+// matchear igual que las llaves normalizadas. Devuelve '' si pdf.js no está
+// disponible, si el PDF es un escaneo sin capa de texto, o si falla.
+const pdfTextContent = async (file, maxPages = 2) => {
+  const pdfjs = window.pdfjsLib
+  if (!pdfjs) return ''
+  try {
+    const buf = await file.arrayBuffer()
+    const pdf = await pdfjs.getDocument({ data: buf }).promise
+    const pages = Math.min(maxPages, pdf.numPages)
+    let texto = ''
+    for (let i = 1; i <= pages; i++) {
+      const page = await pdf.getPage(i)
+      const content = await page.getTextContent()
+      texto += content.items.map(it => it.str).join(' ')
+    }
+    // Normaliza igual que las llaves: sin acentos, sin separadores, MAYÚSCULAS.
+    return texto.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+      .toUpperCase().replace(/[^A-Z0-9]/g, '')
+  } catch (err) {
+    console.warn('pdf.js text extract falló:', file?.name, err)
+    return ''
+  }
+}
+
+// NIVEL 6 de matching (corre DESPUÉS de linkPdfsExclusive): para los gastos que
+// quedaron SIN PDF y los PDFs huérfanos, lee el TEXTO embebido del PDF y enlaza
+// si contiene el UUID, el folio (noFactura) o el RFC del gasto. Cierra el caso
+// "el PDF fue renombrado a algo arbitrario (scan_001.pdf) pero adentro trae los
+// datos correctos". Exclusivo: un PDF → un solo gasto. Muta gasto.pdfFile /
+// gasto.tienePDF. Devuelve los PDFs que siguen sin pareja (candidatos a OCR).
+const linkPdfsByContent = async (gastos, orphanPdfs) => {
+  const norm = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const sinPdf = gastos.filter(g => !g.pdfFile)
+  if (sinPdf.length === 0 || !orphanPdfs || orphanPdfs.length === 0) return orphanPdfs || []
+
+  // Cache de texto por PDF (se lee una sola vez aunque varios gastos lo evalúen).
+  const pool = [...orphanPdfs]
+  const textCache = new Map()
+  const getText = async (p) => {
+    if (!textCache.has(p)) textCache.set(p, await pdfTextContent(p))
+    return textCache.get(p)
+  }
+
+  for (const g of sinPdf) {
+    if (g.pdfFile) continue
+    const uuid  = norm(g.uuid)
+    const folio = norm(g.noFactura)
+    const rfc   = norm(g.rfc)
+    for (let i = 0; i < pool.length; i++) {
+      const p = pool[i]
+      const txt = await getText(p)
+      if (!txt) continue
+      const hit =
+        (uuid.length  >= 16 && txt.includes(uuid))  ||
+        (folio.length >= 4  && txt.includes(folio)) ||
+        (rfc.length   >= 10 && txt.includes(rfc))
+      if (hit) {
+        g.pdfFile = p
+        g.tienePDF = true
+        pool.splice(i, 1)
+        break
+      }
+    }
+  }
+  return pool
+}
+
 // Wrap an image data URL into a single-page PDF (data URL out). Used at
 // ZIP-export time so an OCR'd photo lands in Facturas/ with the same
 // PROVEEDOR_FOLIO_TIPO_FECHA naming as a CFDI-linked PDF. jsPDF is
@@ -2902,7 +2974,11 @@ export default function App() {
     // base exacto o UUID. Aquí completamos los PDFs renombrados por el usuario
     // (folio/RFC/substring en el nombre) de forma EXCLUSIVA: cada PDF se asigna
     // a un solo gasto, con prioridad por confianza. Misma lógica que handleDrop.
-    linkPdfsExclusive(nueva, pdfs)
+    const huerfanosNombre = linkPdfsExclusive(nueva, pdfs)
+    // NIVEL 6: para los gastos que siguen sin PDF, lee el TEXTO embebido de los
+    // PDFs huérfanos (sin red) y enlaza por UUID/folio/RFC encontrado DENTRO del
+    // contenido. Cierra el caso del PDF renombrado a algo arbitrario.
+    await linkPdfsByContent(nueva, huerfanosNombre)
 
     // Persist PDF bytes as data URLs so the ZIP export survives even if
     // the original File reference goes stale. XMLs already carry their
@@ -3539,7 +3615,10 @@ export default function App() {
     // (un PDF → un gasto, por prioridad de confianza). parseCFDI ya enlazó
     // los de nombre/UUID exacto; esto completa folio/RFC/substring sin
     // duplicar. Lo que quede sin pareja son candidatos a OCR.
-    const unmatchedPDFs = linkPdfsExclusive(allNewGastos, pdfFiles)
+    const unmatchedNombre = linkPdfsExclusive(allNewGastos, pdfFiles)
+    // NIVEL 6: enlaza por TEXTO embebido del PDF (UUID/folio/RFC en el contenido)
+    // los gastos que siguen sin PDF, para PDFs renombrados a algo arbitrario.
+    const unmatchedPDFs = await linkPdfsByContent(allNewGastos, unmatchedNombre)
 
     // FNI (peaje): completa el Serie+Folio desde el PDF cuando el XML no lo trae
     // (ver enrichFniFoliosDesdePDF). Mismo arreglo que en la carga de carpeta.
@@ -5032,7 +5111,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.34</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.35</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
