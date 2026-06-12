@@ -607,7 +607,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # Per-row póliza (sólo se llena cuando el colaborador es especial
         # y corrió el cotejo con su Saldos); para todos los demás cae al
         # folio Clara global del colaborador.
-        poliza_row = g.get('polizaNumero') or poliza_numero
+        _praw = g.get('polizaNumero') or poliza_numero
+        try:
+            poliza_row = int(_praw)
+        except (ValueError, TypeError):
+            poliza_row = _praw
 
         # Propina-row fields. When the gasto has any propina, the main row
         # shows the NET amount (total − tip) so main_row + propina_sub_row
