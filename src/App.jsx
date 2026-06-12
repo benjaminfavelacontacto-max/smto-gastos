@@ -993,7 +993,12 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // The parent container determines the bucket — Traslado nodes can only feed
   // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
   let   iva           = sumByTipo(trasladosBox,   'traslado',  '002')
-  let   isrTrasladado = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR from regular Traslados
+  // ISR trasladado (001) y los impuestos locales (ISH/IEPS) se separan en dos
+  // buckets para que el Excel tenga columnas distintas (ISR aparte de ISH/IEPS).
+  // El campo combinado `isrTrasladado` (= isr + ishIeps) se conserva más abajo
+  // para la tabla de UI, el portapapeles y compatibilidad.
+  let   isr           = sumByTipo(trasladosBox,   'traslado',  '001')  // ISR trasladado (001)
+  let   ishIeps       = 0                                               // ISH (local) + IEPS
   let   retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   let   retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
   let   retenciones   = retencionISR + retencionIVA
@@ -1046,7 +1051,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // Per-RFC override: some providers' <Retencion Impuesto="001"> is actually
   // a trasladado ISR (the invoice line-item tax), not a withholding.
   if (RFC_ISR_COMO_TRASLADO.includes(rfc)) {
-    isrTrasladado += retencionISR
+    isr           += retencionISR
     retencionISR   = 0
     retenciones    = retencionIVA
   }
@@ -1068,7 +1073,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   for (const el of doc.querySelectorAll('*')) {
     if (!el.localName) continue
     const ln = el.localName.toLowerCase()
-    if      (ln === 'trasladoslocales')  isrTrasladado += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
+    if      (ln === 'trasladoslocales')  ishIeps      += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
     else if (ln === 'retencioneslocales') retenciones  += parseFloat(ga(el, 'Importe', 'importe') || '0') || 0
   }
 
@@ -1095,7 +1100,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   if (isEDC && dispersion) {
     importe         = parseFloat(ga(dispersion, 'GralImporte',  'gralImporte')  || '0') || 0
     iva             = parseFloat(ga(dispersion, 'GralImpuesto', 'gralImpuesto') || '0') || 0
-    isrTrasladado  += parseFloat(ga(dispersion, 'GralIEPS',     'gralIEPS')     || '0') || 0
+    ishIeps        += parseFloat(ga(dispersion, 'GralIEPS',     'gralIEPS')     || '0') || 0
     totalCFDI       = parseFloat(ga(dispersion, 'GralTotal',    'gralTotal')    || '0') || 0
     conceptoClasif  = 'Combustible'
   }
@@ -1165,6 +1170,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   const importeUSD     = esExtranjera ? importe     : 0
   const ivaUSD         = esExtranjera ? iva         : 0
   const retencionesUSD = esExtranjera ? retenciones : 0
+  // Combinado para la tabla de UI / portapapeles / compat. El Excel usa los
+  // desgloses `isr` (001) e `ishIeps` (locales + IEPS) por separado.
+  const isrTrasladado  = isr + ishIeps
   return {
     id: genId(),
     rfc,
@@ -1208,6 +1216,8 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     importe:        esExtranjera ? 0 : importe,
     iva:            esExtranjera ? 0 : iva,
     isrTrasladado,
+    isr:            esExtranjera ? 0 : isr,
+    ishIeps:        esExtranjera ? 0 : ishIeps,
     retencionISR,
     retencionIVA,
     retenciones:    esExtranjera ? 0 : retenciones,
@@ -4185,6 +4195,8 @@ export default function App() {
       importe:          Number(g.importe) || 0,
       iva:              Number(g.iva) || 0,
       isrTrasladado:    Number(g.isrTrasladado) || 0,
+      isr:              Number(g.isr) || 0,
+      ishIeps:          Number(g.ishIeps ?? g.isrTrasladado) || 0,
       retenciones:      Number(g.retenciones) || 0,
       totalCFDI:        Number(g.totalCFDI) || 0,
       formaPago:        g.formaPago || '',
@@ -4818,6 +4830,8 @@ export default function App() {
         importe:          Number(g.importe) || 0,
         iva:              Number(g.iva) || 0,
         isrTrasladado:    Number(g.isrTrasladado) || 0,
+        isr:              Number(g.isr) || 0,
+        ishIeps:          Number(g.ishIeps ?? g.isrTrasladado) || 0,
         retenciones:      Number(g.retenciones) || 0,
         totalCFDI:        Number(g.totalCFDI) || 0,
         formaPago:        g.formaPago || '',
@@ -4923,7 +4937,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.26</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.27</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

@@ -301,14 +301,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates).
     # Layout: A spacer, B RFC, C PROVEEDOR, D TIPO, E PÓLIZA, F FACTURA,
-    # G F.FACTURA, H F.COBRO, I CONCEPTO, J IMPORTE, K IVA, L ISH/IEPS (nueva),
-    # M RETENCIÓN, N TOTAL, O FORMA PAGO, P BANCO, Q MONTO USD, R T/C,
-    # S USUARIO, T COBRADO, U FACTURADO, V DIFERENCIA, W spacer.
+    # G F.FACTURA, H F.COBRO, I CONCEPTO, J IMPORTE, K IVA, L ISR (nueva),
+    # M ISH/IEPS, N RETENCIÓN, O TOTAL, P FORMA PAGO, Q BANCO, R MONTO USD,
+    # S T/C, T USUARIO, U COBRADO, V FACTURADO, W DIFERENCIA, X spacer.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
-        'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 11, 'N': 18,
-        'O': 15, 'P': 22, 'Q': 13, 'R': 13, 'S': 24,
-        'T': 14, 'U': 14, 'V': 14, 'W': 3,
+        'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 11, 'N': 11, 'O': 18,
+        'P': 15, 'Q': 22, 'R': 13, 'S': 13, 'T': 24,
+        'U': 14, 'V': 14, 'W': 14, 'X': 3,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -317,7 +317,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # outer spacer cols past the totals/footer still inherit BG_PAGE.
     nrows_painted = max(80, 40 + len(gastos))
     for r in range(1, nrows_painted):
-        fill_row_bg(ws, r, 1, 23, BG_PAGE)
+        fill_row_bg(ws, r, 1, 24, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
     ws.row_dimensions[1].height = 50
@@ -371,7 +371,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
-    for c in range(2, 23):
+    for c in range(2, 24):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(
@@ -399,20 +399,20 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # both update together. REGISTROS stays a static count (not a sum).
     # All five cards share a medium EXCEL_GREEN frame; TOTAL FACTURADO and
     # USD are tinted brand-green, the rest stay SMTO_BLACK.
-    # NOTA: tras agregar la columna ISH/IEPS (L), las columnas de datos se
-    # recorrieron: TOTAL ahora vive en N, RETENCIÓN en M, MONTO USD en Q y
-    # DIFERENCIA en V. Los SUM de los KPIs apuntan a esas letras nuevas.
+    # NOTA: tras agregar ISR (L) e ISH/IEPS (M), las columnas de datos se
+    # recorrieron: TOTAL vive en O, RETENCIÓN en N, MONTO USD en R y
+    # DIFERENCIA en W. Los SUM de los KPIs apuntan a esas letras nuevas.
     kpis = [
-        ('B', 'D', 'TOTAL FACTURADO', f'=SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('B', 'D', 'TOTAL FACTURADO', f'=SUM(O{data_first}:O{data_last})', '"$"#,##0.00', SMTO_GREEN),
         ('E', 'G', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
-        ('H', 'J', 'RETENCIONES',     f'=SUM(M{data_first}:M{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('H', 'J', 'RETENCIONES',     f'=SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
         ('K', 'M', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
-        ('N', 'P', 'USD',             f'=SUM(Q{data_first}:Q{data_last})', '"$"#,##0.00', SMTO_GREEN),
-        # DIFERENCIA cobrado vs facturado — span Q:V (6 cols) para que la banda
-        # de tarjetas llegue al borde derecho de la tabla (ahora B:V).
+        ('N', 'P', 'USD',             f'=SUM(R{data_first}:R{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        # DIFERENCIA cobrado vs facturado — span Q:W (7 cols) para que la banda
+        # de tarjetas llegue al borde derecho de la tabla (ahora B:W).
         # La suma SOLO incluye renglones Clara MXN Credito (los demás
-        # escriben '' en col V, ignorados por SUM).
-        ('Q', 'V', 'DIFERENCIA',      f'=SUM(V{data_first}:V{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        # escriben '' en col W, ignorados por SUM).
+        ('Q', 'W', 'DIFERENCIA',      f'=SUM(W{data_first}:W{data_last})', '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -463,8 +463,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     MED_GREEN  = Side(style='medium', color=EXCEL_GREEN)
     THIN_LIGHT = Side(style='thin',   color=BORDER_LIGHT)
     # Middle cells por tarjeta: B-D→C, E-G→F, H-J→I, K-M→L, N-P→O,
-    # Q-V (DIFERENCIA, 6 cols) → R, S, T, U
-    for col_letter in ('C', 'F', 'I', 'L', 'O', 'R', 'S', 'T', 'U'):
+    # Q-W (DIFERENCIA, 7 cols) → R, S, T, U, V
+    for col_letter in ('C', 'F', 'I', 'L', 'O', 'R', 'S', 'T', 'U', 'V'):
         ws[f'{col_letter}5'].border = Border(
             left=MED_GREEN, right=MED_GREEN, top=MED_GREEN, bottom=THIN_LIGHT,
         )
@@ -523,7 +523,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
     ws.row_dimensions[9].height = 28
 
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'ISH/IEPS', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO', 'DIFERENCIA']
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'ISR', 'ISH/IEPS', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO', 'DIFERENCIA']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -539,12 +539,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         )
         cell.fill = PatternFill(fill_type=None)
         # Top + bottom medium green on every header; left edge on B9 (first),
-        # right edge on V9 (last, col 22) so the band reads as one bordered strip.
+        # right edge on W9 (last, col 23) so the band reads as one bordered strip.
         cell.border = Border(
             top=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
             left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
-            right=Side(style='medium', color=EXCEL_GREEN) if col == 22 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 23 else None,
         )
 
     # Autofiltro sobre el encabezado (fila 9) + todas las filas de datos
@@ -554,7 +554,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # propina) y NO incluye la banda de TOTAL CUENTA, que queda fuera del
     # filtro. Nota: TOTAL usa SUM (no SUBTOTAL), así que la fila de totales
     # no cambia al filtrar — es el comportamiento previo, intacto.
-    ws.auto_filter.ref = f'B9:V{data_last}'
+    ws.auto_filter.ref = f'B9:W{data_last}'
 
     # ═══ DATA ROWS (row 10+) ═══
     row = 10
@@ -573,10 +573,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         forma = FORMA_PAGO_MAP.get(g.get('formaPago', '04'), g.get('formaPago', ''))
         importe_raw = round(g.get('importe', 0), 2)
         iva = round(g.get('iva', 0), 2)
-        # ISH/IEPS: impuestos locales (TrasladosLocales de hoteles, IEPS de
-        # combustible). Viven en isrTrasladado. Van en su propia columna y se
-        # suman al TOTAL (=importe+IVA+ISH−retención) para que cuadre exacto.
-        ish = round(g.get('isrTrasladado', 0) or 0, 2)
+        # ISR e ISH/IEPS en columnas SEPARADAS:
+        #  - isr   = ISR trasladado (código 001)
+        #  - ish   = ISH (impuestos locales de hoteles) + IEPS (combustible)
+        # Ambos son traslados → se suman al TOTAL (=importe+IVA+ISR+ISH−retención)
+        # para que hoteles/combustible cuadren exacto. `ishIeps` cae a
+        # isrTrasladado para filas legadas que no traen el desglose.
+        isr_amt = round(g.get('isr', 0) or 0, 2)
+        ish = round(g.get('ishIeps', g.get('isrTrasladado', 0)) or 0, 2)
         ret = round(g.get('retenciones', 0), 2)
         total = round(g.get('totalCFDI', 0) + g.get('montoPropina', 0), 2)
         tipo = g.get('tipo', 'Consumo')
@@ -702,9 +706,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         rfc_is_na = str(rfc_raw).strip().upper() in ('NA', 'N/A')
         rfc_disp = 'N/A' if rfc_is_na else rfc_raw
         rfc_align = 'center' if rfc_is_na else 'left'
-        # Layout tras agregar ISH/IEPS en L (col 12): RETENCIÓN→M(13),
-        # TOTAL→N(14), FORMA→O(15), BANCO→P(16), MONTO USD→Q(17), T/C→R(18),
-        # USUARIO→S(19), COBRADO→T(20), FACTURADO→U(21), DIFERENCIA→V(22).
+        # Layout tras agregar ISR (L=12) e ISH/IEPS (M=13): RETENCIÓN→N(14),
+        # TOTAL→O(15), FORMA→P(16), BANCO→Q(17), MONTO USD→R(18), T/C→S(19),
+        # USUARIO→T(20), COBRADO→U(21), FACTURADO→V(22), DIFERENCIA→W(23).
         cells = [
             (2,  rfc_disp,               rfc_align, 'rfc'),
             # PROVEEDOR: SIEMPRE en MAYÚSCULAS en el Excel, sin importar la fuente
@@ -718,21 +722,22 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             (9,  g.get('concepto', ''),  'left',   'normal'),
             (10, importe_val,            'center', 'currency'),
             (11, iva_val,                'center', 'currency'),
-            (12, ish,                    'center', 'currency'),   # ISH/IEPS (nueva)
-            (13, ret_val,                'center', 'currency'),
-            # TOTAL = IMPORTE + IVA + ISH − RETENCIÓN (fórmula viva). Al incluir
-            # ISH, hoteles/combustible cuadran exacto con el total del CFDI.
-            # Recalcula solo si el usuario edita J/K/L/M o cuando J/K/M son
-            # fórmulas de USD apuntando a la celda editable de T/C.
-            (14, f'=J{row}+K{row}+L{row}-M{row}', 'center', 'currency_bold'),
-            (15, forma,                  'center', 'badge_pago'),
-            (16, banco,                  'center', 'normal'),
-            (17, monto_usd,              'center', 'currency'),
-            (18, tc_val,                 'center', 'tipocambio'),
-            (19, usuario,                'center', 'normal'),
-            (20, cobrado,                'center', 'currency'),
-            (21, facturado,              'center', 'currency'),
-            (22, diferencia,             'center', 'diff'),
+            (12, isr_amt,                'center', 'currency'),   # ISR (nueva)
+            (13, ish,                    'center', 'currency'),   # ISH/IEPS
+            (14, ret_val,                'center', 'currency'),
+            # TOTAL = IMPORTE + IVA + ISR + ISH/IEPS − RETENCIÓN (fórmula viva).
+            # Al incluir ISR e ISH, hoteles/combustible/honorarios cuadran exacto
+            # con el total del CFDI. Recalcula si se editan J/K/L/M/N o cuando
+            # J/K/N son fórmulas de USD apuntando a la celda editable de T/C.
+            (15, f'=J{row}+K{row}+L{row}+M{row}-N{row}', 'center', 'currency_bold'),
+            (16, forma,                  'center', 'badge_pago'),
+            (17, banco,                  'center', 'normal'),
+            (18, monto_usd,              'center', 'currency'),
+            (19, tc_val,                 'center', 'tipocambio'),
+            (20, usuario,                'center', 'normal'),
+            (21, cobrado,                'center', 'currency'),
+            (22, facturado,              'center', 'currency'),
+            (23, diferencia,             'center', 'diff'),
         ]
 
         for col, val, align, style_type in cells:
@@ -748,7 +753,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-        ws.cell(row=row, column=23).fill = PatternFill('solid', start_color=BG_PAGE)
+        ws.cell(row=row, column=24).fill = PatternFill('solid', start_color=BG_PAGE)
 
         row += 1
 
@@ -757,7 +762,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # mismo PROVEEDOR (no dice "Propina" en esa columna), mismo TIPO, misma
         # PÓLIZA, misma FORMA PAGO, mismo BANCO, mismo USUARIO y T/C. Cambia
         # sólo: FACTURA = "N/A", CONCEPTO = "Propina", IMPORTE = monto de la
-        # propina, IVA = 0, ISH/IEPS = 0, RETENCIÓN = 0, TOTAL = la propina.
+        # propina, IVA = 0, ISR = 0, ISH/IEPS = 0, RETENCIÓN = 0, TOTAL = la propina.
         # COBRADO/FACTURADO/DIFERENCIA quedan vacías (el renglón principal ya
         # contempla la propina en su fórmula de DIFERENCIA — no duplicamos).
         if propina_mxn > 0 or propina_ext > 0:
@@ -766,7 +771,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
             # Pintar toda la banda primero (mismo fondo) para que las columnas
             # sin contenido (COBRADO/FACTURADO/DIFERENCIA) mantengan el tinte.
-            for c in range(2, 23):
+            for c in range(2, 24):
                 pcell = ws.cell(row=row, column=c)
                 pcell.fill = PatternFill('solid', start_color=propina_bg)
                 pcell.border = Border(bottom=Side(style='hair', color=BORDER_LIGHT))
@@ -799,15 +804,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 (8,  fecha_cobro,            'center', 'date'),
                 (9,  concepto_prop,          'left',   'normal'),
                 (10, p_importe_val,          'center', 'currency'),
-                (11, 0,                      'center', 'currency'),
-                (12, 0,                      'center', 'currency'),
-                (13, 0,                      'center', 'currency'),
-                (14, f'=J{row}+K{row}+L{row}-M{row}', 'center', 'currency_bold'),
-                (15, forma,                  'center', 'badge_pago'),
-                (16, banco,                  'center', 'normal'),
-                (17, p_monto_usd,            'center', 'currency'),
-                (18, p_tc_val,               'center', 'tipocambio'),
-                (19, usuario,                'center', 'normal'),
+                (11, 0,                      'center', 'currency'),   # IVA
+                (12, 0,                      'center', 'currency'),   # ISR
+                (13, 0,                      'center', 'currency'),   # ISH/IEPS
+                (14, 0,                      'center', 'currency'),   # RETENCIÓN
+                (15, f'=J{row}+K{row}+L{row}+M{row}-N{row}', 'center', 'currency_bold'),  # TOTAL
+                (16, forma,                  'center', 'badge_pago'),
+                (17, banco,                  'center', 'normal'),
+                (18, p_monto_usd,            'center', 'currency'),
+                (19, p_tc_val,               'center', 'tipocambio'),
+                (20, usuario,                'center', 'normal'),
             ]
             for col, val, align, style_type in pcells:
                 cell = ws.cell(row=row, column=col, value=val)
@@ -823,7 +829,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             # Outer spacers stay on page bg so the propina band fits inside
             # the table boundary like every other data row.
             ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-            ws.cell(row=row, column=23).fill = PatternFill('solid', start_color=BG_PAGE)
+            ws.cell(row=row, column=24).fill = PatternFill('solid', start_color=BG_PAGE)
 
             row += 1
 
@@ -832,7 +838,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     row += 1
 
     ws.row_dimensions[row].height = 32
-    for c in range(2, 23):
+    for c in range(2, 24):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
         cell.border = Border()
@@ -845,15 +851,17 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
     # Same SUM formulas as the KPI cards above so the two views always agree.
     # `data_first` / `data_last` cubren filas principales + sub-filas de propina.
-    # Tras agregar ISH/IEPS (L): IMPORTE=J, IVA=K, ISH=L, RETENCIÓN=M, TOTAL=N,
-    # MONTO USD=Q. T/C (R), BANCO (P), USUARIO (S) no se totalizan.
+    # Tras agregar ISR (L) e ISH/IEPS (M): IMPORTE=J, IVA=K, ISR=L, ISH/IEPS=M,
+    # RETENCIÓN=N, TOTAL=O, MONTO USD=R. T/C (S), BANCO (Q), USUARIO (T) no se
+    # totalizan.
     totals = [
         (10, f'=SUM(J{data_first}:J{data_last})', False),  # IMPORTE
         (11, f'=SUM(K{data_first}:K{data_last})', False),  # IVA
-        (12, f'=SUM(L{data_first}:L{data_last})', False),  # ISH/IEPS (nueva)
-        (13, f'=SUM(M{data_first}:M{data_last})', False),  # RETENCIÓN
-        (14, f'=SUM(N{data_first}:N{data_last})', True),   # TOTAL
-        (17, f'=SUM(Q{data_first}:Q{data_last})', False),  # MONTO USD
+        (12, f'=SUM(L{data_first}:L{data_last})', False),  # ISR (nueva)
+        (13, f'=SUM(M{data_first}:M{data_last})', False),  # ISH/IEPS
+        (14, f'=SUM(N{data_first}:N{data_last})', False),  # RETENCIÓN
+        (15, f'=SUM(O{data_first}:O{data_last})', True),   # TOTAL
+        (18, f'=SUM(R{data_first}:R{data_last})', False),  # MONTO USD
     ]
     for col, val, is_main in totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -867,18 +875,18 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # FORMA PAGO (O), BANCO (P), T/C (R), USUARIO (S), COBRADO (T),
-    # FACTURADO (U) y DIFERENCIA (V) en la banda de totales sólo llevan el
+    # FORMA PAGO (P), BANCO (Q), T/C (S), USUARIO (T), COBRADO (U),
+    # FACTURADO (V) y DIFERENCIA (W) en la banda de totales sólo llevan el
     # fill negro (no son agregables o sólo aplican a Clara MXN Credito).
-    for c in (15, 16, 18, 19, 20, 21, 22):
+    for c in (16, 17, 19, 20, 21, 22, 23):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
-    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=22)
+    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v8.26'
+    ft.value = 'SMTO Engineering · v8.27'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
