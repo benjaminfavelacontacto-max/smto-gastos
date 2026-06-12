@@ -331,18 +331,25 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     title.alignment = Alignment(horizontal='center', vertical='center')
     title.fill = PatternFill('solid', start_color=BG_PAGE)
 
-    # Right-side form labels (col H) — compact 11pt bold
+    # Right-side form labels — merged H:I, right-aligned. Sin el merge, el texto
+    # largo ("Nombre de colaborador:") se recortaba contra el título (D1:G2) a
+    # la izquierda. Con H:I (ancho 11+28) cabe completo y termina justo antes
+    # del campo de valor en J.
+    ws.merge_cells('H1:I1')
     lbl1 = ws['H1']
     lbl1.value = 'Nombre de colaborador:'
     lbl1.font = Font(name='Aptos', size=11, bold=True, color=TEXT_SECONDARY)
     lbl1.alignment = Alignment(horizontal='right', vertical='center')
     lbl1.fill = PatternFill('solid', start_color=BG_PAGE)
+    ws['I1'].fill = PatternFill('solid', start_color=BG_PAGE)
 
+    ws.merge_cells('H2:I2')
     lbl2 = ws['H2']
     lbl2.value = 'Fecha de viaje:'
     lbl2.font = Font(name='Aptos', size=11, bold=True, color=TEXT_SECONDARY)
     lbl2.alignment = Alignment(horizontal='right', vertical='center')
     lbl2.fill = PatternFill('solid', start_color=BG_PAGE)
+    ws['I2'].fill = PatternFill('solid', start_color=BG_PAGE)
 
     # Right-side form fields (cols J:M) — compact 11pt
     ws.merge_cells('J1:M1')
@@ -395,26 +402,27 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
     # (col_start, col_end, label, value, number_format, value_color)
     # KPI cards are live Excel formulas referencing the data band so the
-    # numbers always match the bottom totals row — edit any data cell and
-    # both update together. REGISTROS stays a static count (not a sum).
-    # All five cards share a medium EXCEL_GREEN frame; TOTAL FACTURADO and
-    # USD are tinted brand-green, the rest stay SMTO_BLACK.
-    # NOTA: tras agregar ISR (L) e ISH/IEPS (M), las columnas de datos se
-    # recorrieron: TOTAL vive en O, RETENCIÓN en N, MONTO USD en R y
-    # DIFERENCIA en W. Los SUM de los KPIs apuntan a esas letras nuevas.
+    # numbers always match the bottom totals row. REGISTROS stays a static count.
+    # 7 tarjetas sobre B:W (22 cols): la headline TOTAL FACTURADO ocupa 4 cols
+    # y las demás 3 c/u (4 + 6×3 = 22), así DIFERENCIA es del mismo tamaño que el
+    # resto (ya no es un rectángulo grande) y la banda queda simétrica.
+    # Columnas de datos tras ISR/ISH: TOTAL=O, IVA=K, ISR=L, RETENCIÓN=N,
+    # MONTO USD=R, DIFERENCIA=W, CONCEPTO=I.
+    #  - TOTAL FACTURADO = total SIN propinas (resta las sub-filas "Propina*").
+    #  - TOTAL COBRADO   = total CON propinas (todo lo que cargó la tarjeta).
+    suma_total   = f'SUM(O{data_first}:O{data_last})'
+    suma_propina = f'SUMIF(I{data_first}:I{data_last},"Propina*",O{data_first}:O{data_last})'
     kpis = [
-        ('B', 'D', 'TOTAL FACTURADO', f'=SUM(O{data_first}:O{data_last})', '"$"#,##0.00', SMTO_GREEN),
-        ('E', 'G', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
-        # RETENCIONES = ISR retenido (col L) + RETENCIÓN (col N), porque el ISR
-        # ahora tiene su propia columna pero sigue siendo una retención.
-        ('H', 'J', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})+SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
-        ('K', 'M', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
-        ('N', 'P', 'USD',             f'=SUM(R{data_first}:R{data_last})', '"$"#,##0.00', SMTO_GREEN),
-        # DIFERENCIA cobrado vs facturado — span Q:W (7 cols) para que la banda
-        # de tarjetas llegue al borde derecho de la tabla (ahora B:W).
-        # La suma SOLO incluye renglones Clara MXN Credito (los demás
-        # escriben '' en col W, ignorados por SUM).
-        ('Q', 'W', 'DIFERENCIA',      f'=SUM(W{data_first}:W{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('B', 'E', 'TOTAL FACTURADO', f'={suma_total}-{suma_propina}', '"$"#,##0.00', SMTO_GREEN),
+        ('F', 'H', 'TOTAL COBRADO',   f'={suma_total}',                '"$"#,##0.00', SMTO_GREEN),
+        ('I', 'K', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        # RETENCIONES = ISR retenido (col L) + RETENCIÓN (col N): el ISR tiene su
+        # propia columna pero sigue siendo una retención.
+        ('L', 'N', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})+SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('O', 'Q', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
+        ('R', 'T', 'USD',             f'=SUM(R{data_first}:R{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        # DIFERENCIA cobrado vs facturado — SOLO renglones Clara MXN Credito.
+        ('U', 'W', 'DIFERENCIA',      f'=SUM(W{data_first}:W{data_last})', '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -464,9 +472,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # inside the cards even though the anchor + end cells have borders.
     MED_GREEN  = Side(style='medium', color=EXCEL_GREEN)
     THIN_LIGHT = Side(style='thin',   color=BORDER_LIGHT)
-    # Middle cells por tarjeta: B-D→C, E-G→F, H-J→I, K-M→L, N-P→O,
-    # Q-W (DIFERENCIA, 7 cols) → R, S, T, U, V
-    for col_letter in ('C', 'F', 'I', 'L', 'O', 'R', 'S', 'T', 'U', 'V'):
+    # Middle cells por tarjeta: B-E→C,D · F-H→G · I-K→J · L-N→M · O-Q→P ·
+    # R-T→S · U-W→V
+    for col_letter in ('C', 'D', 'G', 'J', 'M', 'P', 'S', 'V'):
         ws[f'{col_letter}5'].border = Border(
             left=MED_GREEN, right=MED_GREEN, top=MED_GREEN, bottom=THIN_LIGHT,
         )
@@ -475,9 +483,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         )
 
     # ═══ TIPO DE CAMBIO EDITABLE (solo colaboradores especiales) ═══
-    # Una sola celda en N7 que el usuario puede editar libremente. Las filas
-    # de gastos en USD usan formulas =(monto USD)*$N$7 en IMPORTE / IVA /
-    # RETENCIÓN, y =$N$7 en la columna T/C. Cambiar este valor recalcula
+    # Una sola celda en R7 que el usuario puede editar libremente. Las filas
+    # de gastos en USD usan formulas =(monto USD)*$R$7 en IMPORTE / IVA /
+    # RETENCIÓN, y =$R$7 en la columna T/C. Cambiar este valor recalcula
     # automáticamente todas las filas USD y los KPI / totales que las suman.
     is_especial = (colaborador or '').strip() in COLABORADORES_ESPECIALES
     tc_ref = None
@@ -485,19 +493,20 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     if is_especial:
         ws.row_dimensions[7].height = 30
 
-        # Label en K7:M7 — alineado a la derecha, fondo ámbar suave.
-        ws.merge_cells('K7:M7')
-        lbl_tc = ws['K7']
+        # Label en O7:Q7 — alineado a la derecha, fondo ámbar suave. Va debajo
+        # de la tarjeta USD (R-T) para que el input quede junto a ella.
+        ws.merge_cells('O7:Q7')
+        lbl_tc = ws['O7']
         lbl_tc.value = 'TIPO DE CAMBIO USD →'
         lbl_tc.font = Font(name='Aptos', size=11, bold=True, color=BADGE_AMBER_FG)
         lbl_tc.alignment = Alignment(horizontal='right', vertical='center', indent=1)
         lbl_tc.fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
         # Pintar el resto de la celda combinada para que se vea uniforme
-        for col_letter in ('L', 'M'):
+        for col_letter in ('P', 'Q'):
             ws[f'{col_letter}7'].fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
 
-        # Input editable en N7 — fondo ámbar más vivo, borde grueso naranja.
-        tc_input = ws['N7']
+        # Input editable en R7 — fondo ámbar más vivo, borde grueso naranja.
+        tc_input = ws['R7']
         default_tc = 17.50
         for g in gastos:
             m = (g.get('monedaCodigo') or g.get('moneda') or 'MXN').upper()
@@ -515,7 +524,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             left=amber_side, right=amber_side, top=amber_side, bottom=amber_side,
         )
 
-        tc_ref = '$N$7'
+        tc_ref = '$R$7'
 
     # Row 7 (cuando NO es especial) small gap + Row 8 pre-table spacer
     if not is_especial:
@@ -625,7 +634,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
         # USD passthrough: si el colaborador es especial y la factura viene
         # en moneda extranjera, IMPORTE / IVA / RETENCIÓN / T/C usan formulas
-        # que multiplican el valor en USD por la celda editable $N$7. Cambiar
+        # que multiplican el valor en USD por la celda editable $R$7. Cambiar
         # esa celda recalcula toda la fila al instante. importe/iva/ret en
         # la gasto vienen en 0 (la UI los muestra así hasta tener T/C); los
         # valores reales en USD viajan en importeUSD / ivaUSD / retencionesUSD.
@@ -889,7 +898,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v8.27'
+    ft.value = 'SMTO Engineering · v8.29'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
