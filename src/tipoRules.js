@@ -423,6 +423,17 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
     return 'Automóvil'
   }
 
+  // Catch-all de HOTEL: cualquier factura cuyo proveedor o concepto mencione
+  // hotel / hoteles / hotelera / hotelería / hospedaje / habitación / noche(s)
+  // de hospedaje cae a Hotel (o Hotel Ventas para Ventas/Socio). Va ANTES de
+  // las reglas genéricas para ganar prioridad y atrapar hoteles no listados
+  // (p.ej. "Hotel Fiesta Americana", "Servicios de hotelería"). 'HOTEL' como
+  // substring cubre HOTELES/HOTELERA/HOTELERO/HOTELERIA de un solo golpe.
+  const HOTEL_KEYWORDS = ['HOTEL', 'HOSPEDAJE', 'HABITACION', 'HABITACIÓN', 'NOCHE DE HOSPEDAJE', 'ROOM NIGHT']
+  if (HOTEL_KEYWORDS.some(kw => texto.includes(kw))) {
+    return isVentas && VENTAS_VARIANT['Hotel'] ? VENTAS_VARIANT['Hotel'] : 'Hotel'
+  }
+
   // 1. Primero: buscar en reglas conocidas (marcas, razones sociales, conceptos específicos)
   for (const [kw, tipoBase] of TIPO_RULES) {
     if (texto.includes(kw)) {
