@@ -2506,7 +2506,7 @@ function DropSuccessModal({ data, onClose }) {
 // (Conciliacion / Export / Import / Drop) are richer experiences with
 // count-up animations and stat grids; this is the workhorse for everything
 // else (errors, confirmations, simple successes).
-function PremiumModal({ open, type, title, subtitle, stats, primaryLabel, secondaryLabel, onPrimary, onSecondary, children }) {
+function PremiumModal({ open, type, title, subtitle, body, stats, primaryLabel, secondaryLabel, onPrimary, onSecondary, children }) {
   if (!open) return null
 
   const isSuccess = type === 'success'
@@ -2552,6 +2552,15 @@ function PremiumModal({ open, type, title, subtitle, stats, primaryLabel, second
 
         <h2 className="premium-title">{title}</h2>
         {subtitle && <p className="premium-subtitle">{subtitle}</p>}
+        {body && (
+          <pre style={{
+            textAlign: 'left', background: 'rgba(255,255,255,0.05)',
+            borderRadius: 8, padding: '10px 14px', fontSize: 12,
+            color: 'rgba(255,255,255,0.75)', whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word', margin: '8px 0 0', maxHeight: 160,
+            overflowY: 'auto', fontFamily: 'inherit',
+          }}>{body}</pre>
+        )}
 
         {stats && stats.length > 0 && (
           <div className="premium-stats">
@@ -2861,8 +2870,22 @@ export default function App() {
     const normName = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
     setCarpetaNombre(folderName)
     setLoading(true)
+    // Detectar XMLs corruptos (0 KB) antes de procesar
+    const xmlsCorruptos = xmls.filter(f => f.size === 0)
+    const xmlsValidos   = xmls.filter(f => f.size > 0)
+    if (xmlsCorruptos.length > 0) {
+      await askConfirm({
+        type: 'warning',
+        title: 'XMLs corruptos detectados',
+        subtitle: `${xmlsCorruptos.length} archivo${xmlsCorruptos.length > 1 ? 's' : ''} XML ${xmlsCorruptos.length > 1 ? 'están vacíos' : 'está vacío'} (0 KB) y no ${xmlsCorruptos.length > 1 ? 'pudieron' : 'pudo'} procesarse.`,
+        body: xmlsCorruptos.map(f => `• ${f.name}`).join('\n') +
+          '\n\nDescarga nuevamente el XML y su PDF con el mismo nombre desde el portal del SAT o del proveedor y vuelve a subirlos.',
+        primaryLabel: 'Entendido',
+      })
+    }
+
     const nueva = []
-    for (const f of xmls) {
+    for (const f of xmlsValidos) {
       try {
         const text = await f.text()
         const g = parseCFDI(text, f, pdfs, colaborador)
@@ -3432,9 +3455,23 @@ export default function App() {
 
     const allNewGastos = []
 
+    // Detectar XMLs corruptos (0 KB)
+    const xmlCorruptos = xmlFiles.filter(f => f.size === 0)
+    const xmlValidos   = xmlFiles.filter(f => f.size > 0)
+    if (xmlCorruptos.length > 0) {
+      await askConfirm({
+        type: 'warning',
+        title: 'XMLs corruptos detectados',
+        subtitle: `${xmlCorruptos.length} archivo${xmlCorruptos.length > 1 ? 's' : ''} XML ${xmlCorruptos.length > 1 ? 'están vacíos' : 'está vacío'} (0 KB) y no ${xmlCorruptos.length > 1 ? 'pudieron' : 'pudo'} procesarse.`,
+        body: xmlCorruptos.map(f => `• ${f.name}`).join('\n') +
+          '\n\nDescarga nuevamente el XML y su PDF con el mismo nombre desde el portal del SAT o del proveedor y vuelve a subirlos.',
+        primaryLabel: 'Entendido',
+      })
+    }
+
     // STEP 1 — parse XMLs locally (always free). parseCFDI takes the full
     // signature so xmlFile + auto-PDF-link + auto-tipo all work.
-    for (const file of xmlFiles) {
+    for (const file of xmlValidos) {
       try {
         const text = await file.text()
         const gasto = parseCFDI(text, file, pdfFiles, colaborador)
@@ -4928,7 +4965,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.30</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.31</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5239,6 +5276,7 @@ export default function App() {
           type={modal.type || 'success'}
           title={modal.title}
           subtitle={modal.subtitle}
+          body={modal.body}
           stats={modal.stats}
           primaryLabel={modal.primaryLabel || 'Continuar'}
           secondaryLabel={modal.secondaryLabel}
