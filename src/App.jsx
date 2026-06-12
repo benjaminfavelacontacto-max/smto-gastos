@@ -4213,6 +4213,34 @@ export default function App() {
       }
     )
 
+    // Pass 3 — casi exacto. Cargo y factura difieren por una cantidad pequeña
+    // (≤1% Y ≤$20): típico de un monto tecleado a mano en la terminal del
+    // comercio (hotel cobró 7,334 con factura de 7,344) o un ajuste menor.
+    // SÍ vincula la fila — fechaCobro/montoCobrado reales — pero con
+    // confianza 70, debajo del umbral de 80, así que cae en la pestaña
+    // "Revisión" del modal y la columna DIFERENCIA del Excel exhibe el
+    // faltante/excedente real en vez de perder el vínculo por completo.
+    // Corre al final: nunca le roba filas a los passes exactos ni de propina.
+    const NEAR_ABS_MAX = 20, NEAR_PCT_MAX = 0.01
+    tryPass(
+      (inv, m) => {
+        const base = (inv.totalCFDI || 0) + (inv.montoPropina || 0)
+        if (!(base > 0)) return false
+        const diff = Math.abs(m - base)
+        return diff > 0.01 && diff <= NEAR_ABS_MAX && diff / base <= NEAR_PCT_MAX
+      },
+      (idx, m, dCSV, row) => {
+        const inv = nl[idx]
+        const diff = m - ((inv.totalCFDI || 0) + (inv.montoPropina || 0))
+        inv.hizoMatch = true
+        inv.fechaCobro = formatCobro(dCSV)
+        inv.formaPago = '04'
+        const signo = diff > 0 ? '+' : '−'
+        snapshotMatch(idx, row, 3, `Casi exacto (dif ${signo}$${Math.abs(diff).toFixed(2)})`, 70)
+        matches++
+      }
+    )
+
     // Collect unmatched rows for the result modal, attaching the top-2
     // fuzzy-name suggestions from existing gastos for the "¿Quisiste decir...?"
     // hint. Pool is all gastos (matched or not) — the user might have already
@@ -4228,7 +4256,11 @@ export default function App() {
         .map(s => ({ id: s.id, proveedor: s.proveedor, score: Math.round(s.score * 100) }))
       sinFactura.push({
         fecha: formatCobro(row.dCSV),
-        monto: Math.max(...row.amounts),
+        // amounts viene vacío para devoluciones (los montos negativos se
+        // filtran al parsear) — Math.max() de un arreglo vacío da -Infinity
+        // y el modal mostraba "$-∞". Cae al monto MXN/USD crudo con signo,
+        // para que una devolución se vea como -109.96.
+        monto: row.amounts.length ? Math.max(...row.amounts) : (row.montoMXN || row.montoUSD || 0),
         descripcion: row.descripcion,
         montoMXN: row.montoMXN || 0,
         montoUSD: row.montoUSD || 0,
@@ -5152,7 +5184,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.36</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.37</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

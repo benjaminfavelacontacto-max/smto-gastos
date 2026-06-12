@@ -41,6 +41,10 @@ Examples:
   (exact to the cent, taken from the real charge). Covers atypical tips (16%)
   and hand-rounded amounts that the Pass 1 ladder misses. MUST run after
   passes 0–1 so exact matches claim their rows first.
+- Pass 3: near-exact match — charge vs (total + detected propina) differ by
+  ≤1% AND ≤$20 (hand-keyed terminal amounts, minor adjustments). Binds with
+  confidence 70 (< 80) so it lands in the modal's "Revisión" tab, and the
+  Excel DIFERENCIA column surfaces the real gap. MUST run last.
 - No fuzzy amount passes beyond these. If no pass binds, leave unmatched.
 - Tip variants (Pass 1 ladder AND Pass 2 delta) tested ONLY for gastos in
   food/restaurant/bar categories (Clara "Categoría de Compra" first, keyword
