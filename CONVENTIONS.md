@@ -26,6 +26,11 @@ Examples:
   celda), sin importar la fuente (XML emisor, OCR, manual) ni el usuario de la
   plantilla. Esto NO afecta el Title Case del nombre de archivo del ZIP (ver
   arriba), que es una regla distinta.
+- **COBRADO nunca se inventa después de una conciliación.** Si la sesión tuvo
+  corrida de banco (algún gasto con `montoCobrado > 0` o `hizoMatch`), las
+  filas Clara sin match muestran "SIN CONCILIAR" en COBRADO (ámbar) y
+  DIFERENCIA vacía — jamás el estimado factura+propina, que pintaba un falso
+  $0.00. El estimado solo aplica en exports SIN validación bancaria.
 
 ## fechaCobro
 

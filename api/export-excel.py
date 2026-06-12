@@ -567,6 +567,19 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # no cambia al filtrar — es el comportamiento previo, intacto.
     ws.auto_filter.ref = f'B9:W{data_last}'
 
+    # ¿Hubo conciliación bancaria en esta sesión? Si CUALQUIER fila trae un
+    # montoCobrado real del CSV (o hizoMatch del frontend), el reporte está
+    # en "modo conciliado": las filas Clara que NO encontraron su cargo ya no
+    # fabrican COBRADO = factura+propina — eso pintaba DIFERENCIA $0.00 y
+    # escondía faltantes reales (hotel facturado $7,344 vs cobrado $7,334
+    # salía como si cuadrara). Ahora muestran "SIN CONCILIAR" en COBRADO.
+    # Sin corrida de banco (export temprano), se conserva el estimado
+    # histórico para no llenar el reporte de marcas.
+    algo_conciliado = any(
+        (g.get('montoCobrado') or 0) > 0 or g.get('hizoMatch')
+        for g in gastos
+    )
+
     # ═══ DATA ROWS (row 10+) ═══
     row = 10
     for idx, g in enumerate(gastos):
@@ -708,15 +721,28 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             # contra el banco (montoCobrado=0), cae al estimado factura+propina,
             # que cuadra → DIFERENCIA 0 hasta que se concilie con el banco.
             monto_cobrado = round(g.get('montoCobrado', 0) or 0, 2)
-            cobrado = monto_cobrado if monto_cobrado > 0 else round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
-            # DIFERENCIA = cobrado − (facturado + propina). Se escribe el VALOR
-            # calculado (NO una fórmula viva) para que la celda muestre el número
-            # correcto en CUALQUIER visor — Excel, Numbers, Quick Look, Google
-            # Sheets — sin depender de que recalcule fórmulas. openpyxl no
-            # precalcula fórmulas, así que un visor que no recalcula mostraba 0
-            # o vacío. Resta la propina sólo cuando existe (no todas la tienen).
-            diff_num = round(cobrado - facturado - propina_actual, 2)
-            diferencia = diff_num
+            if monto_cobrado > 0:
+                # Fila conciliada: COBRADO es el cargo REAL de la tarjeta.
+                # DIFERENCIA = cobrado − (facturado + propina). Se escribe el
+                # VALOR calculado (NO una fórmula viva) para que la celda
+                # muestre el número correcto en CUALQUIER visor — Excel,
+                # Numbers, Quick Look, Google Sheets — sin depender de que
+                # recalcule fórmulas. Resta la propina sólo cuando existe.
+                cobrado = monto_cobrado
+                diff_num = round(cobrado - facturado - propina_actual, 2)
+                diferencia = diff_num
+            elif algo_conciliado:
+                # Hubo corrida de banco y ESTA fila no encontró su cargo:
+                # decirlo explícitamente en vez de fingir que cuadra en $0.
+                cobrado = 'SIN CONCILIAR'
+                diff_num = None
+                diferencia = ''
+            else:
+                # Export sin validación bancaria: estimado factura+propina
+                # (comportamiento histórico — DIFERENCIA 0 hasta conciliar).
+                cobrado = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
+                diff_num = round(cobrado - facturado - propina_actual, 2)
+                diferencia = diff_num
         else:
             facturado = ''
             cobrado = ''
@@ -772,6 +798,15 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 indent=2 if align == 'left' else 0
             )
             style_data_cell(cell, style_type, tipo=tipo, diff_num=diff_num)
+
+        # Marca de fila no conciliada: COBRADO dice "SIN CONCILIAR" en ámbar
+        # bold (mismo lenguaje visual que "⚠ Falta XML") para que el revisor
+        # la distinga de un $0.00 legítimo.
+        if cobrado == 'SIN CONCILIAR':
+            c_sin = ws.cell(row=row, column=21)
+            c_sin.number_format = '@'
+            c_sin.font = Font(name='Calibri', size=8.5, bold=True, color='B45309')
+            c_sin.fill = PatternFill('solid', start_color='FEF3C7')
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
