@@ -405,7 +405,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     kpis = [
         ('B', 'D', 'TOTAL FACTURADO', f'=SUM(O{data_first}:O{data_last})', '"$"#,##0.00', SMTO_GREEN),
         ('E', 'G', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
-        ('H', 'J', 'RETENCIONES',     f'=SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        # RETENCIONES = ISR retenido (col L) + RETENCIÓN (col N), porque el ISR
+        # ahora tiene su propia columna pero sigue siendo una retención.
+        ('H', 'J', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})+SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
         ('K', 'M', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
         ('N', 'P', 'USD',             f'=SUM(R{data_first}:R{data_last})', '"$"#,##0.00', SMTO_GREEN),
         # DIFERENCIA cobrado vs facturado — span Q:W (7 cols) para que la banda
@@ -573,15 +575,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         forma = FORMA_PAGO_MAP.get(g.get('formaPago', '04'), g.get('formaPago', ''))
         importe_raw = round(g.get('importe', 0), 2)
         iva = round(g.get('iva', 0), 2)
-        # ISR e ISH/IEPS en columnas SEPARADAS:
-        #  - isr   = ISR trasladado (código 001)
-        #  - ish   = ISH (impuestos locales de hoteles) + IEPS (combustible)
-        # Ambos son traslados → se suman al TOTAL (=importe+IVA+ISR+ISH−retención)
-        # para que hoteles/combustible cuadren exacto. `ishIeps` cae a
-        # isrTrasladado para filas legadas que no traen el desglose.
-        isr_amt = round(g.get('isr', 0) or 0, 2)
+        # ISR e ISH/IEPS en columnas SEPARADAS, con SIGNOS distintos:
+        #  - isr_amt = ISR RETENIDO (retencionISR) → RESTA del total (es una
+        #    retención: p.ej. Volare 494.12+79.06−6.18 = 567.00).
+        #  - ish     = ISH (locales de hoteles) + IEPS (combustible) → SUMAN.
+        # La columna RETENCIÓN ya NO incluye el ISR (tiene su propia columna),
+        # así que = retenciones totales − ISR retenido (para no contarlo doble).
+        # `ishIeps` cae a isrTrasladado para filas legadas sin desglose.
+        isr_amt = round(g.get('retencionISR', 0) or 0, 2)
         ish = round(g.get('ishIeps', g.get('isrTrasladado', 0)) or 0, 2)
-        ret = round(g.get('retenciones', 0), 2)
+        ret = round((g.get('retenciones', 0) or 0) - (g.get('retencionISR', 0) or 0), 2)
         total = round(g.get('totalCFDI', 0) + g.get('montoPropina', 0), 2)
         tipo = g.get('tipo', 'Consumo')
         monto_usd_raw = round(g.get('montoUSD', 0) or 0, 2)
@@ -722,14 +725,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             (9,  g.get('concepto', ''),  'left',   'normal'),
             (10, importe_val,            'center', 'currency'),
             (11, iva_val,                'center', 'currency'),
-            (12, isr_amt,                'center', 'currency'),   # ISR (nueva)
-            (13, ish,                    'center', 'currency'),   # ISH/IEPS
+            (12, isr_amt,                'center', 'currency'),   # ISR retenido (RESTA)
+            (13, ish,                    'center', 'currency'),   # ISH/IEPS (SUMA)
             (14, ret_val,                'center', 'currency'),
-            # TOTAL = IMPORTE + IVA + ISR + ISH/IEPS − RETENCIÓN (fórmula viva).
-            # Al incluir ISR e ISH, hoteles/combustible/honorarios cuadran exacto
-            # con el total del CFDI. Recalcula si se editan J/K/L/M/N o cuando
-            # J/K/N son fórmulas de USD apuntando a la celda editable de T/C.
-            (15, f'=J{row}+K{row}+L{row}+M{row}-N{row}', 'center', 'currency_bold'),
+            # TOTAL = IMPORTE + IVA − ISR + ISH/IEPS − RETENCIÓN (fórmula viva).
+            # El ISR (L) y la RETENCIÓN (N) RESTAN; ISH/IEPS (M) SUMA. Así
+            # hoteles/combustible/honorarios y retenciones cuadran exacto con el
+            # total del CFDI. Recalcula si se editan J/K/L/M/N o con fórmulas USD.
+            (15, f'=J{row}+K{row}-L{row}+M{row}-N{row}', 'center', 'currency_bold'),
             (16, forma,                  'center', 'badge_pago'),
             (17, banco,                  'center', 'normal'),
             (18, monto_usd,              'center', 'currency'),
@@ -808,7 +811,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 (12, 0,                      'center', 'currency'),   # ISR
                 (13, 0,                      'center', 'currency'),   # ISH/IEPS
                 (14, 0,                      'center', 'currency'),   # RETENCIÓN
-                (15, f'=J{row}+K{row}+L{row}+M{row}-N{row}', 'center', 'currency_bold'),  # TOTAL
+                (15, f'=J{row}+K{row}-L{row}+M{row}-N{row}', 'center', 'currency_bold'),  # TOTAL
                 (16, forma,                  'center', 'badge_pago'),
                 (17, banco,                  'center', 'normal'),
                 (18, p_monto_usd,            'center', 'currency'),
