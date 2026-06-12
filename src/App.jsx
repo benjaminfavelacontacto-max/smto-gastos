@@ -2873,6 +2873,12 @@ export default function App() {
     // Detectar XMLs corruptos (0 KB) antes de procesar
     const xmlsCorruptos = xmls.filter(f => f.size === 0)
     const xmlsValidos   = xmls.filter(f => f.size > 0)
+    // Nombres base (sin .xml, normalizados) de los XML corruptos. El PDF que
+    // comparta nombre base con uno de estos NO tiene XML usable → se manda a
+    // OCR para no perder la info, y el gasto resultante se marca xmlFaltante.
+    const corruptBaseNames = new Set(
+      xmlsCorruptos.map(f => normName(f.name.replace(/\.xml$/i, '')))
+    )
     if (xmlsCorruptos.length > 0) {
       await askConfirm({
         type: 'warning',
@@ -2928,7 +2934,16 @@ export default function App() {
           const key = `${newG.rfc}|${newG.noFactura}`
           if (keys.has(key)) {
             const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
-            if (idx !== -1) { merged[idx] = { ...merged[idx], ...newG, isNew: true }; updated++ }
+            if (idx !== -1) {
+              // Si el entrante trae XML real (xmlContent), el usuario re-subió
+              // el XML correcto → limpia la marca xmlFaltante.
+              const clearFlag = !!newG.xmlContent
+              merged[idx] = {
+                ...merged[idx], ...newG, isNew: true,
+                xmlFaltante: clearFlag ? false : (newG.xmlFaltante || merged[idx].xmlFaltante),
+              }
+              updated++
+            }
           } else {
             merged.push(newG); keys.add(key); added++
           }
@@ -2966,13 +2981,15 @@ export default function App() {
       const linkedPdfNames = new Set(
         xmlGastos.filter(g => g.pdfFile).map(g => g.pdfFile.name)
       )
-      // Fuente 2 (defensa de raíz): la carpeta tiene un archivo .xml con el
-      // MISMO nombre base que el PDF. Aunque parseCFDI haya fallado al parsear
+      // Fuente 2 (defensa de raíz): la carpeta tiene un archivo .xml VÁLIDO con
+      // el MISMO nombre base que el PDF. Aunque parseCFDI haya fallado al parsear
       // ese XML (namespace raro, sello inválido, RFC vacío, etc.) o aunque
       // la heurística de matching no haya tripeado, el PDF claramente tiene
-      // XML pareja en el folder y NO debe mandarse a OCR.
+      // XML pareja en el folder y NO debe mandarse a OCR. OJO: usamos solo los
+      // XML válidos — un PDF cuyo único XML está corrupto (0 KB) SÍ debe ir a
+      // OCR para rescatar la info, y se marcará xmlFaltante más abajo.
       const xmlBaseNames = new Set(
-        xmls.map(x => normName(x.name.replace(/\.xml$/i, '')))
+        xmlsValidos.map(x => normName(x.name.replace(/\.xml$/i, '')))
       )
       const orphanPDFs = pdfs.filter(p => {
         if (linkedPdfNames.has(p.name)) return false
@@ -3028,6 +3045,11 @@ export default function App() {
               g.tienePDF = true
               try { g.pdfDataURL = await fileToDataURL(file) } catch {}
             }
+            // Si este PDF/imagen es el rescate de un XML corrupto (mismo nombre
+            // base que un .xml de 0 KB), marca el gasto para que el Excel señale
+            // "Falta XML" en la fila. Se limpia si luego suben el XML correcto.
+            const baseSinExt = normName(file.name.replace(/\.[^.]+$/i, ''))
+            if (corruptBaseNames.has(baseSinExt)) g.xmlFaltante = true
             g.isNew = true
             results.push(g)
             ok = true
@@ -3480,6 +3502,13 @@ export default function App() {
     // Detectar XMLs corruptos (0 KB)
     const xmlCorruptos = xmlFiles.filter(f => f.size === 0)
     const xmlValidos   = xmlFiles.filter(f => f.size > 0)
+    // Nombres base (normalizados) de XMLs corruptos: el PDF que comparta nombre
+    // base irá a OCR (ya cae en unmatchedPDFs porque su XML no produjo gasto) y
+    // el gasto resultante se marca xmlFaltante para señalarlo en el Excel.
+    const normDrop = s => (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
+    const corruptDropBases = new Set(
+      xmlCorruptos.map(f => normDrop(f.name.replace(/\.xml$/i, '')))
+    )
     if (xmlCorruptos.length > 0) {
       await askConfirm({
         type: 'warning',
@@ -3575,6 +3604,11 @@ export default function App() {
                 gasto.imageDataURL = `data:${mediaType};base64,${base64}`
                 gasto.originalFileName = file.name
               }
+              // Rescate de XML corrupto: si este archivo comparte nombre base
+              // con un .xml de 0 KB, marca el gasto para señalar "Falta XML".
+              if (corruptDropBases.has(normDrop(file.name.replace(/\.[^.]+$/i, '')))) {
+                gasto.xmlFaltante = true
+              }
               gasto.isNew = true
               allNewGastos.push(gasto)
             }
@@ -3629,7 +3663,16 @@ export default function App() {
           const key = `${newG.rfc}|${newG.noFactura}`
           if (keys.has(key)) {
             const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
-            if (idx !== -1) { merged[idx] = { ...merged[idx], ...newG, isNew: true }; updated++ }
+            if (idx !== -1) {
+              // Si el entrante trae XML real (xmlContent), el usuario re-subió
+              // el XML correcto → limpia la marca xmlFaltante.
+              const clearFlag = !!newG.xmlContent
+              merged[idx] = {
+                ...merged[idx], ...newG, isNew: true,
+                xmlFaltante: clearFlag ? false : (newG.xmlFaltante || merged[idx].xmlFaltante),
+              }
+              updated++
+            }
           } else {
             merged.push(newG); keys.add(key); added++
           }
@@ -4265,6 +4308,7 @@ export default function App() {
       montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
       montoCobrado:     Number(g.montoCobrado) || 0,
       polizaNumero:     g.polizaNumero || '',
+      xmlFaltante:      !!g.xmlFaltante,
     }))
     try {
       const response = await fetch('/api/export-excel', {
@@ -4899,6 +4943,7 @@ export default function App() {
         montoFacturado:   Number(g.montoFacturado) || 0,
         montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
         montoCobrado:     Number(g.montoCobrado) || 0,
+        xmlFaltante:      !!g.xmlFaltante,
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
@@ -4987,7 +5032,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.33</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.34</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

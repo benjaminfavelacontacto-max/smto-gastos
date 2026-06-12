@@ -308,7 +308,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
         'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 11, 'N': 11, 'O': 18,
         'P': 15, 'Q': 22, 'R': 13, 'S': 13, 'T': 24,
-        'U': 14, 'V': 14, 'W': 14, 'X': 3,
+        'U': 14, 'V': 14, 'W': 14, 'X': 3, 'Y': 16,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -573,6 +573,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         ws.row_dimensions[row].height = 15
         is_alt = (idx % 2 == 1)
         bg = ROW_ALT if is_alt else WHITE
+        # XML corrupto rescatado por OCR: la fila NO tiene su CFDI XML. Se tinta
+        # de ámbar muy claro y se marca "⚠ Falta XML" a la derecha de la tabla
+        # (columna Y) para que el revisor sepa que falta descargar/adjuntar el XML.
+        xml_faltante = bool(g.get('xmlFaltante'))
+        if xml_faltante:
+            bg = 'FEF3C7'  # ámbar claro
 
         # Fechas como datetime REAL (Excel las trata como fecha, no como texto
         # 'General'): se ordenan y filtran como fecha. Si no parsean, cae al
@@ -770,6 +776,14 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
         ws.cell(row=row, column=24).fill = PatternFill('solid', start_color=BG_PAGE)
+
+        # Marcador "Falta XML" a la derecha de la tabla (columna Y = 25). Solo
+        # aparece en filas rescatadas por OCR sin su CFDI XML.
+        if xml_faltante:
+            mark = ws.cell(row=row, column=25, value='⚠ Falta XML')
+            mark.fill = PatternFill('solid', start_color='FEF3C7')
+            mark.font = Font(name='Calibri', size=9, bold=True, color='B45309')
+            mark.alignment = Alignment(horizontal='left', vertical='center', indent=1)
 
         row += 1
 
