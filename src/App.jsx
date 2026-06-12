@@ -4110,7 +4110,7 @@ export default function App() {
           if (receipt.propinaSugerida22 > 0) candidates.push({ amount: sub + receipt.propinaSugerida22, propina: receipt.propinaSugerida22, pct: 22, label: 'ocr22' })
         } else {
           const total = receipt.totalCFDI
-          ;[0.10, 0.12, 0.13, 0.15, 0.18, 0.20, 0.22, 0.25].forEach(p => {
+          ;[0.10, 0.12, 0.13, 0.15, 0.16, 0.18, 0.20, 0.22, 0.25].forEach(p => {
             candidates.push({ amount: total * (1 + p), propina: total * p, pct: p * 100, label: `pct${p * 100}` })
           })
         }
@@ -4168,6 +4168,47 @@ export default function App() {
         }
         const { method, confidence } = methodFromMatch(matchResult)
         snapshotMatch(idx, row, 1, method, confidence)
+        matches++
+      }
+    )
+
+    // Pass 2 — propina por delta, SOLO para pares (factura, cargo) elegibles
+    // a propina. La escalera de Pass 1 falla con propinas atípicas (16%) o
+    // cuando el mesero redondea el monto a mano (15% cobrado como $88.79 en
+    // vez de $88.80): cualquier centavo fuera de la escalera dejaba la fila
+    // sin match y la propina se perdía del reporte. Aquí, si el cargo del
+    // banco excede el total de la factura por un porcentaje plausible de
+    // propina (5%–35%, misma ventana que ya usa Pass 0 para moneda
+    // extranjera), el delta ES la propina — exacto al centavo porque viene
+    // del cargo real, no de un porcentaje teórico. Corre DESPUÉS de los
+    // passes exactos para que éstos reclamen sus filas primero, y el gate de
+    // categoría (Alimentos/keywords) impide que un cargo de hotel/gasolina
+    // se enganche a una factura vía propina fantasma.
+    const TIP_DELTA_MIN = 0.05, TIP_DELTA_MAX = 0.35
+    const tipBase = inv => {
+      const r = asReceipt(inv)
+      return r.isOCR ? r.subtotalOCR : r.totalCFDI
+    }
+    tryPass(
+      (inv, m, row) => {
+        if (!isEligibleForTip(inv, row)) return false
+        const base = tipBase(inv)
+        if (!(base > 0) || m <= base) return false
+        const pct = (m - base) / base
+        return pct >= TIP_DELTA_MIN && pct <= TIP_DELTA_MAX
+      },
+      (idx, m, dCSV, row) => {
+        const inv = nl[idx]
+        const base = tipBase(inv)
+        const tip = +(m - base).toFixed(2)
+        const pct = +((tip / base) * 100).toFixed(2)
+        inv.hizoMatch = true
+        inv.fechaCobro = formatCobro(dCSV)
+        inv.formaPago = '04'
+        inv.montoPropina = tip
+        inv.propinaPorcentaje = pct
+        propinas++
+        snapshotMatch(idx, row, 2, `Propina detectada +${pct.toFixed(1)}%`, 80)
         matches++
       }
     )
@@ -5111,7 +5152,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.35</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.36</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

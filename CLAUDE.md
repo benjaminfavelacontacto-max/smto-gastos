@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.35
+Current version: v8.36
 
 ## Stack
 
@@ -52,7 +52,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 
 1. CFDI XML parser: IVA, ISR, ISH, IEPS, retenciones, EDC combustible (GasNGo), Volare RFC exception
 2. Bank reconciliation:
-   - Clara MXN CSV: exact-only matching (smartAmountMatch ±$0.01)
+   - Clara MXN CSV: smartAmountMatch ±$0.01 (Pass 1) + delta-tip Pass 2 (cargo − total = propina, 5–35%, solo categorías de comida)
    - Clara USA CSV: match by authorization code
 3. OCR for PDF/image tickets via Groq API (free) — only fires for PDFs without a matching XML. PDFs are rasterized to image server-side (PyMuPDF) before OCR since Groq vision only reads images. Image-OCR receipts are wrapped into single-page PDFs at ZIP export so they ride along with the standard buildFileName naming.
 4. Multi-currency: USD, EUR, JPY, etc. with per-line exchange rate
@@ -115,7 +115,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.35
+- Current: v8.36
 
 ## Things to be careful about
 

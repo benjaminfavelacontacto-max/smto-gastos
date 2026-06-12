@@ -36,9 +36,16 @@ Examples:
 
 - Pass 0: auth code exact match (OCR tickets only)
 - Pass 1: `smartAmountMatch` with tolerance ±$0.01 ONLY
-- No fuzzy passes. If exact match (subtotal + common tip %) not found, leave unmatched.
-- Tip variants tested ONLY for gastos in food/restaurant/bar categories.
-- Common tip percentages: 10, 12, 13, 15, 18, 20, 22, 25.
+- Pass 2: delta-tip match, ONLY for tip-eligible (factura, cargo) pairs — if the
+  bank charge exceeds the invoice total by 5%–35%, the delta IS the propina
+  (exact to the cent, taken from the real charge). Covers atypical tips (16%)
+  and hand-rounded amounts that the Pass 1 ladder misses. MUST run after
+  passes 0–1 so exact matches claim their rows first.
+- No fuzzy amount passes beyond these. If no pass binds, leave unmatched.
+- Tip variants (Pass 1 ladder AND Pass 2 delta) tested ONLY for gastos in
+  food/restaurant/bar categories (Clara "Categoría de Compra" first, keyword
+  sniff fallback). A hotel/gas/uber charge can never bind via phantom tip.
+- Pass 1 common tip percentages: 10, 12, 13, 15, 16, 18, 20, 22, 25.
 
 ## Cost control (Anthropic API)
 
