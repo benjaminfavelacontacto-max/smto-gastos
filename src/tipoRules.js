@@ -387,12 +387,19 @@ const VENTAS_VARIANT = {
   'Avión': 'Avión Ventas',
   'Casetas': 'Casetas Ventas',
   'Estacionamiento': 'Estacionamiento Ventas',
-  'Gasolina': 'Gasolina Ventas',
+  'Gasolina': 'Gasolina Ventas Viáticos',
   'Herramientas': 'Herramientas Ventas',
   'Hotel': 'Hotel Ventas',
   'Consumo': 'Gastos Rep (Representación)',
   'Consumo Viáticos': 'Gastos Rep Viáticos',
   'Taxi': 'Gastos Rep (Representación)',
+}
+
+// Variantes para colaboradores NO-Ventas (Admin/Servicio). La gasolina siempre
+// es un viático en SMTO, así que se etiqueta como 'Gasolina Viáticos' en vez del
+// 'Gasolina' genérico. Ventas/Socio usan VENTAS_VARIANT ('Gasolina Ventas Viáticos').
+const NORMAL_VARIANT = {
+  'Gasolina': 'Gasolina Viáticos',
 }
 
 // Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.
@@ -437,7 +444,8 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
   // 1. Primero: buscar en reglas conocidas (marcas, razones sociales, conceptos específicos)
   for (const [kw, tipoBase] of TIPO_RULES) {
     if (texto.includes(kw)) {
-      return isVentas && VENTAS_VARIANT[tipoBase] ? VENTAS_VARIANT[tipoBase] : tipoBase
+      if (isVentas) return VENTAS_VARIANT[tipoBase] || tipoBase
+      return NORMAL_VARIANT[tipoBase] || tipoBase
     }
   }
 
