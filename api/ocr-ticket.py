@@ -64,8 +64,8 @@ REGLAS PARA TICKET (tipoDocumento="ticket"):
 - moneda: if prices are in USD or receipt is from USA use USD, otherwise MXN
 - subtotal: amount before tax and tip
 - iva: tax amount (Tax, IVA, Impuesto)
-- propina: tip amount (Tip, Gratuity, Propina) — 0 if not present
-- total: final total including tax but before tip, or grand total if tip included
+- propina: tip amount (Tip, Gratuity, Propina), often HANDWRITTEN on a restaurant receipt — 0 if not present
+- total: the PRE-TIP total ONLY — the consumption amount including tax but BEFORE the tip. This is the printed/authorized "Total" or "Amount" (e.g. the card pre-authorization), NOT the handwritten grand total at the bottom. NEVER add the tip into this field. When a diner handwrites a grand total (= base + tip), you MUST split it: the printed base goes in "total" and the handwritten tip goes in "propina" — never put the grand total here. Example: printed "Total $68.00", handwritten "Tip $12.24", handwritten grand "Total $80.24" → total=68.00, propina=12.24 (NEVER total=80.24)
 - propinaSugerida18/20/22: look for "Suggested Gratuity" table on the receipt and extract the tip amounts for 18%, 20%, 22% — use 0 if not present
 - If any field not found use null for strings and 0 for numbers
 
