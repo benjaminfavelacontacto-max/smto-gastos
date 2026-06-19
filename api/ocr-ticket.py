@@ -28,7 +28,7 @@ OCR_PROMPT = '''Extract receipt/ticket/invoice data. Respond ONLY with a JSON ob
   "proveedor": "business or restaurant name",
   "concepto": "brief description (food, gas, hotel, taxi, etc)",
   "fecha": "YYYY-MM-DD or null",
-  "moneda": "MXN or USD",
+  "moneda": "3-letter ISO code: MXN, USD, EUR, GBP, JPY, CHF, CAD, etc.",
   "subtotal": 0.00,
   "iva": 0.00,
   "propina": 0.00,
@@ -61,7 +61,11 @@ REGLAS PARA TICKET (tipoDocumento="ticket"):
 - proveedor: full business name as shown on receipt
 - folio: look for Approval Code, Authorization Code, Auth, Approval, Code — return ONLY the digits as a plain string. If multiple codes exist prefer the one labeled "Approval" or "Authorization". This number is critical for bank matching, so do not strip leading zeros or insert dashes. If no auth code is shown fall back to a visible Check #, Ticket # or Receipt # in the same plain-digits form.
 - formaPago: 04=card/mastercard/visa, 02=cash/efectivo
-- moneda: if prices are in USD or receipt is from USA use USD, otherwise MXN
+- moneda: the 3-letter ISO currency code of the amounts on the receipt. Detect it from the currency symbol AND the country/address on the ticket:
+  - "€" or "EUR" -> EUR;  "£" or "GBP" -> GBP;  "¥" / "円" / "JPY" -> JPY (use CNY only if clearly from China);  "CHF" -> CHF;  "R$" -> BRL.
+  - "$" is AMBIGUOUS: use USD if the receipt is from the USA (US city/state/ZIP, "US$", or prices say USD); CAD if from Canada; and MXN ONLY when there is positive evidence the receipt is Mexican (Mexican address, RFC, "IVA", "M.N.", "pesos", or amounts clearly in pesos).
+  - If an explicit ISO code is printed on the receipt, trust it over the symbol.
+  - CRITICAL: NEVER default a foreign-looking receipt (European/Asian/other address, or a non-"$" symbol like €, £, ¥) to MXN. Return MXN only with real evidence it is Mexican; if a European ticket shows "€", the answer is EUR, never MXN.
 - subtotal: amount before tax and tip
 - iva: tax amount (Tax, IVA, Impuesto)
 - propina: tip amount (Tip, Gratuity, Propina), often HANDWRITTEN on a restaurant receipt — 0 if not present
