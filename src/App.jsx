@@ -119,6 +119,16 @@ const TIPOS_ESPECIALES = [
 
 const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda Navarro', 'Olivia Gil']
 
+// Socios que se configuran COMO ingenieros de soporte: en toda la lógica que
+// depende de la categoría (tipos, caseta, autodetección) se comportan como
+// 'Servicio', aunque en la UI sigan mostrándose como Socio.
+const SOCIOS_COMO_SOPORTE = ['Edie Haro', 'David Delgado', 'Isaias Valencia', 'Rosy Corral']
+
+// Categoría efectiva para la lógica del app (no para mostrar): los socios de
+// SOCIOS_COMO_SOPORTE se tratan como 'Servicio'.
+const categoriaEfectiva = (colaborador) =>
+  colaborador && SOCIOS_COMO_SOPORTE.includes(colaborador.nombre) ? 'Servicio' : colaborador?.categoria
+
 // Tipo de peaje (FNI) según la lista de tipos del colaborador. Cada lista usa
 // un nombre distinto para la caseta, así que devolvemos el string EXACTO que
 // existe en la lista activa para que no salga "— Tipo —" en blanco:
@@ -127,7 +137,7 @@ const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda 
 //   Admin/Servicio → 'Casetas'      (TIPOS_NORMALES)
 const tipoPeajeFNI = (colaborador) => {
   if (COLABORADORES_ESPECIALES.includes(colaborador?.nombre)) return 'Caseta'
-  const cat = colaborador?.categoria
+  const cat = categoriaEfectiva(colaborador)
   return (cat === 'Ventas' || cat === 'Socio') ? 'Casetas Ventas' : 'Casetas'
 }
 
@@ -291,11 +301,10 @@ const matchEmpleadoByShortName = (shortName) => {
 const getTiposForColaborador = (colaborador) => {
   if (!colaborador) return TIPOS_NORMALES
   if (COLABORADORES_ESPECIALES.includes(colaborador.nombre)) return TIPOS_ESPECIALES
-  // Rosy Corral y David Delgado (socios) usan la lista de soporte (TIPOS_NORMALES)
-  // en vez de la de Ventas. David conserva además 'Pasaporte o Visa'.
+  // David Delgado conserva 'Pasaporte o Visa' sobre la lista de soporte.
   if (colaborador.nombre === 'David Delgado') return [...TIPOS_NORMALES, 'Pasaporte o Visa']
-  if (colaborador.nombre === 'Rosy Corral') return TIPOS_NORMALES
-  const cat = colaborador.categoria
+  // categoriaEfectiva mapea a Edie/Isaias/Rosy/David a 'Servicio' → TIPOS_NORMALES.
+  const cat = categoriaEfectiva(colaborador)
   if (cat === 'Ventas' || cat === 'Socio') return TIPOS_VENTAS
   return TIPOS_NORMALES  // Admin, Servicio
 }
@@ -1285,7 +1294,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     concepto:   conceptoClasif,
     tipo: rfc === 'FNI970829JR9'
       ? tipoPeajeFNI(colaborador)
-      : autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria, claveProdServ),
+      : autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : categoriaEfectiva(colaborador), claveProdServ),
     importe:        esExtranjera ? 0 : importe,
     iva:            esExtranjera ? 0 : iva,
     isrTrasladado,
@@ -3382,7 +3391,7 @@ export default function App() {
     let rfcFinal = ''
     let folioFinal = parsed.folio || parsed.approval_code || ''
     let fechaFinal = parsed.fecha || today
-    let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : colaborador?.categoria)
+    let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : categoriaEfectiva(colaborador))
     if (esITESO) {
       proveedorFinal = 'ITESO'
       tipoFinal = 'Renta Oficina'
@@ -5195,7 +5204,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.45</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.46</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
