@@ -301,9 +301,8 @@ const matchEmpleadoByShortName = (shortName) => {
 const getTiposForColaborador = (colaborador) => {
   if (!colaborador) return TIPOS_NORMALES
   if (COLABORADORES_ESPECIALES.includes(colaborador.nombre)) return TIPOS_ESPECIALES
-  // David Delgado conserva 'Pasaporte o Visa' sobre la lista de soporte.
-  if (colaborador.nombre === 'David Delgado') return [...TIPOS_NORMALES, 'Pasaporte o Visa']
-  // categoriaEfectiva mapea a Edie/Isaias/Rosy/David a 'Servicio' → TIPOS_NORMALES.
+  // Edie/David/Isaias/Rosy: lista de soporte + 'Pasaporte o Visa'.
+  if (SOCIOS_COMO_SOPORTE.includes(colaborador.nombre)) return [...TIPOS_NORMALES, 'Pasaporte o Visa']
   const cat = categoriaEfectiva(colaborador)
   if (cat === 'Ventas' || cat === 'Socio') return TIPOS_VENTAS
   return TIPOS_NORMALES  // Admin, Servicio
@@ -5204,7 +5203,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.46</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.47</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
