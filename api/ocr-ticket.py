@@ -69,7 +69,7 @@ REGLAS PARA TICKET (tipoDocumento="ticket"):
 - subtotal: amount before tax and tip
 - iva: tax amount (Tax, IVA, Impuesto)
 - propina: tip amount (Tip, Gratuity, Propina), often HANDWRITTEN on a restaurant receipt — 0 if not present
-- total: the PRE-TIP total ONLY — the consumption amount including tax but BEFORE the tip. This is the printed/authorized "Total" or "Amount" (e.g. the card pre-authorization), NOT the handwritten grand total at the bottom. NEVER add the tip into this field. When a diner handwrites a grand total (= base + tip), you MUST split it: the printed base goes in "total" and the handwritten tip goes in "propina" — never put the grand total here. Example: printed "Total $68.00", handwritten "Tip $12.24", handwritten grand "Total $80.24" → total=68.00, propina=12.24 (NEVER total=80.24)
+- total: the PRE-TIP total ONLY — the consumption amount including tax but BEFORE the tip. This is the printed/authorized "Total" or "Amount" (e.g. the card pre-authorization), NOT the handwritten grand total at the bottom. NEVER add the tip into this field. When a diner handwrites a grand total (= base + tip), you MUST split it: the printed base goes in "total" and the handwritten tip goes in "propina" — never put the grand total here. Example: printed "Total $68.00", handwritten "Tip $12.24", handwritten grand "Total $80.24" → total=68.00, propina=12.24 (NEVER total=80.24). The "total" label may also appear as "TOTAL A PAGAR", "Importe a pagar", "Monto", "Amount Due" or "Importe" — treat any of these as the total. CRITICAL: NEVER return total=0 if the receipt shows ANY printed amount; if the only amount on the ticket is a single "TOTAL A PAGAR"/"Amount", that figure IS the total.
 - propinaSugerida18/20/22: look for "Suggested Gratuity" table on the receipt and extract the tip amounts for 18%, 20%, 22% — use 0 if not present
 - If any field not found use null for strings and 0 for numbers
 
@@ -127,6 +127,19 @@ REGLA ESPECIAL — FACTURAS DE PEAJE / FONDO NACIONAL DE INFRAESTRUCTURA (FNI, "
 - folio: concatena la "Serie" y el "Folio" que aparecen arriba en el recuadro del CFDI, TAL CUAL, en ese orden. Ejemplo: Serie "FNPE" + Folio "72984235" -> "FNPE72984235". NO uses el "Folio fiscal" (UUID) ni el "No. de certificado".
 - moneda: "MXN".
 - formaPago: "01".
+
+REGLA ESPECIAL — VOUCHERS DE PAGO CON TARJETA / TERMINAL BANCARIA (BBVA, Banorte, Santander, etc. — textos "VENTA", "TOTAL A PAGAR", "APROBACION", "AUTORIZACION", "ARQC", "AID", "ALABEL"):
+- Si el documento es un voucher/recibo de una terminal punto de venta (contiene "APROBACION"/"AUTORIZACION" junto con "TOTAL A PAGAR", "VENTA", "ARQC" o "AID") → aplica estas reglas:
+- total: el monto que aparece junto a "TOTAL A PAGAR", "IMPORTE", "MONTO" o "VENTA". Ejemplo: "TOTAL A PAGAR: $ 5339.00 M.N." -> 5339.00. Quita comas de miles. Este campo NUNCA debe quedar en 0 si hay un monto impreso en el voucher.
+- folio: el codigo junto a "APROBACION" o "AUTORIZACION" — solo digitos (p.ej. "APROBACION: 147404" -> "147404"). NO uses el ARQC, AID, REF ni el numero de tarjeta.
+- moneda: "MXN" si dice "M.N." o "$" con dependencia/direccion mexicana; aplica las reglas generales de moneda en otro caso.
+- subtotal: mismo valor que total.
+- iva: 0 (el voucher de terminal no desglosa IVA).
+- propina: 0.
+- proveedor: el nombre del establecimiento o dependencia impreso en la parte superior (p.ej. "Instituto Nacional de Migracion").
+- concepto: la descripcion del tramite/servicio si aparece (p.ej. "Expedicion ABTC Definitiva"); si no, "Pago con tarjeta".
+- fecha: la fecha del voucher ("FECHA"/"HORA"). "24JUN26"/"24062026" -> "2026-06-24".
+- formaPago: "04".
 
 REGLA GENERAL DE FECHA (facturas/recibos de EE.UU.):
 - Si un documento de EE.UU. imprime la fecha con numeros ambiguos, recuerda: si algun componente es > 12 ese es el DIA. Devuelve siempre "fecha" en formato YYYY-MM-DD ya desambiguado.'''
