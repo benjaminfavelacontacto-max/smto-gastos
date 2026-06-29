@@ -129,6 +129,19 @@ const SOCIOS_COMO_SOPORTE = ['Edie Haro', 'David Delgado', 'Isaias Valencia', 'R
 const categoriaEfectiva = (colaborador) =>
   colaborador && SOCIOS_COMO_SOPORTE.includes(colaborador.nombre) ? 'Servicio' : colaborador?.categoria
 
+// Socios que usan la lista EXTENDIDA de tipos (TIPOS_ESPECIALES) igual que
+// Alejandro/Victor, PERO sin el perfil bancario especial: conservan su tarjeta
+// Clara (banco default + conciliación con el CSV de Clara MXN) y NO ven la
+// columna BANCO ni el cotejo con Saldos. Solo se les amplían los tipos de factura.
+const SOCIOS_TIPOS_EXTENDIDOS = ['Rosy Corral', 'David Delgado']
+
+// ¿El colaborador usa el vocabulario extendido de tipos? (lista TIPOS_ESPECIALES,
+// caseta 'Caseta', autodetección sin sesgo de categoría). Aplica a los
+// especiales y a los socios de SOCIOS_TIPOS_EXTENDIDOS.
+const usaTiposExtendidos = (colaborador) =>
+  COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ||
+  SOCIOS_TIPOS_EXTENDIDOS.includes(colaborador?.nombre)
+
 // Tipo de peaje (FNI) según la lista de tipos del colaborador. Cada lista usa
 // un nombre distinto para la caseta, así que devolvemos el string EXACTO que
 // existe en la lista activa para que no salga "— Tipo —" en blanco:
@@ -136,7 +149,7 @@ const categoriaEfectiva = (colaborador) =>
 //   Especiales   → 'Caseta'         (TIPOS_ESPECIALES)
 //   Admin/Servicio → 'Casetas'      (TIPOS_NORMALES)
 const tipoPeajeFNI = (colaborador) => {
-  if (COLABORADORES_ESPECIALES.includes(colaborador?.nombre)) return 'Caseta'
+  if (usaTiposExtendidos(colaborador)) return 'Caseta'
   const cat = categoriaEfectiva(colaborador)
   return (cat === 'Ventas' || cat === 'Socio') ? 'Casetas Ventas' : 'Casetas'
 }
@@ -300,8 +313,10 @@ const matchEmpleadoByShortName = (shortName) => {
 
 const getTiposForColaborador = (colaborador) => {
   if (!colaborador) return TIPOS_NORMALES
-  if (COLABORADORES_ESPECIALES.includes(colaborador.nombre)) return TIPOS_ESPECIALES
-  // Edie/David/Isaias/Rosy: lista de soporte + 'Pasaporte o Visa'.
+  // Especiales (Alejandro/Victor) + socios con tipos extendidos (Rosy/David):
+  // lista TIPOS_ESPECIALES (incluye 'Pasaporte o Visa').
+  if (usaTiposExtendidos(colaborador)) return TIPOS_ESPECIALES
+  // Edie/Isaias: lista de soporte + 'Pasaporte o Visa'.
   if (SOCIOS_COMO_SOPORTE.includes(colaborador.nombre)) return [...TIPOS_NORMALES, 'Pasaporte o Visa']
   const cat = categoriaEfectiva(colaborador)
   if (cat === 'Ventas' || cat === 'Socio') return TIPOS_VENTAS
@@ -1293,7 +1308,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     concepto:   conceptoClasif,
     tipo: rfc === 'FNI970829JR9'
       ? tipoPeajeFNI(colaborador)
-      : autoDetectTipo(proveedor, descripcionFirstLine, COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : categoriaEfectiva(colaborador), claveProdServ),
+      : autoDetectTipo(proveedor, descripcionFirstLine, usaTiposExtendidos(colaborador) ? undefined : categoriaEfectiva(colaborador), claveProdServ),
     importe:        esExtranjera ? 0 : importe,
     iva:            esExtranjera ? 0 : iva,
     isrTrasladado,
@@ -3390,7 +3405,7 @@ export default function App() {
     let rfcFinal = ''
     let folioFinal = parsed.folio || parsed.approval_code || ''
     let fechaFinal = parsed.fecha || today
-    let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', COLABORADORES_ESPECIALES.includes(colaborador?.nombre) ? undefined : categoriaEfectiva(colaborador))
+    let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', usaTiposExtendidos(colaborador) ? undefined : categoriaEfectiva(colaborador))
     if (esITESO) {
       proveedorFinal = 'ITESO'
       tipoFinal = 'Renta Oficina'
@@ -5203,7 +5218,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.47</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.48</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
