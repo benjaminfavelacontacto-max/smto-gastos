@@ -4154,6 +4154,8 @@ export default function App() {
       'comida', 'aerocomidas', 'taqueria', 'taquería', 'pizzeria', 'pizzería',
       'grill', 'steakhouse', 'bistro', 'parrilla', 'cantina', 'fonda',
       'sushi', 'cocina', 'kitchen', 'diner', 'eatery', 'jumper',
+      'wings', 'mariscos', 'marisqueria', 'marisquería', 'asador', 'birria',
+      'antojitos', 'burger', 'burguer', 'pub', 'brewery', 'cerveceria', 'cervecería',
     ]
     const TIP_ELIGIBLE_CATEGORIES = [
       'alimentos', 'bares y bebidas alcoholicas', 'bares y bebidas alcohólicas',
@@ -4166,9 +4168,15 @@ export default function App() {
         // a food category → eligible; any other category → never tip.
         return TIP_ELIGIBLE_CATEGORIES.some(c => csvCat.includes(c))
       }
-      // No CSV category (non-Clara source). Sniff invoice fields for
-      // restaurant keywords instead.
-      const haystack = ((inv?.proveedor || '') + ' ' + (inv?.concepto || '')).toLowerCase()
+      // No CSV category (non-Clara source, o estado de cuenta Clara en Excel
+      // que no trae la columna Categoría). Husmea palabras clave de restaurante
+      // tanto en la factura (proveedor + concepto) como en la descripción del
+      // propio movimiento bancario ("CASA MATRIA RESTAURANT", "REST WENDYS",
+      // "BUFALO WILD WINGS"), que suele delatar el giro aunque el proveedor del
+      // CFDI sea un nombre corporativo sin la palabra "restaurante".
+      const haystack = (
+        (inv?.proveedor || '') + ' ' + (inv?.concepto || '') + ' ' + (csvRow?.descripcion || '')
+      ).toLowerCase()
       return RESTAURANT_KEYWORDS.some(kw => haystack.includes(kw))
     }
     const asReceipt = inv => ({
@@ -5278,7 +5286,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.49</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.50</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
