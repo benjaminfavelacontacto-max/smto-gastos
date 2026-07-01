@@ -3826,21 +3826,55 @@ export default function App() {
   // ── Validar estado de cuenta bancario ──
   const validarBanco = async e => {
     const file = e.target.files[0]; if (!file) return
-    // Read as bytes and pick the encoding: try strict UTF-8 first, fall back
-    // to ISO-8859-1 (latin-1) which is what Clara USA exports. Without this,
-    // accented chars (Código, Autorización, etc.) come back as mojibake.
     const buffer = await file.arrayBuffer()
-    let raw
-    try {
-      raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
-    } catch {
-      raw = new TextDecoder('iso-8859-1').decode(buffer)
+    const isExcel = /\.xlsx?$/i.test(file.name || '')
+
+    // Normalizamos ambos formatos a `records` = filas [{ cols[], raw }] para
+    // que el resto del parser sea agnóstico al origen. `cols` son las celdas;
+    // `raw` es la línea original (para el escaneo genérico de bancos no-Clara).
+    let records = []
+    let headerLine = ''
+    if (isExcel) {
+      // Estado de cuenta (Clara u otro) exportado a Excel en vez de CSV
+      // — p.ej. el formato de Natividad. Leemos la primera hoja tal cual;
+      // las fechas llegan como Date (cellDates) y las pasamos a YYYY-MM-DD
+      // para que parseDateRobusto las entienda igual que en el CSV.
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const aoa = ws ? XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, raw: true }) : []
+      const cellToStr = v => {
+        if (v == null) return ''
+        if (v instanceof Date) {
+          const yyyy = v.getFullYear()
+          const mm   = String(v.getMonth() + 1).padStart(2, '0')
+          const dd   = String(v.getDate()).padStart(2, '0')
+          return `${yyyy}-${mm}-${dd}`
+        }
+        return String(v)
+      }
+      records = aoa.map(row => {
+        const cols = (Array.isArray(row) ? row : []).map(cellToStr)
+        return { cols, raw: cols.join(',') }
+      })
+      headerLine = (records[0]?.cols || []).join(',')
+    } else {
+      // Read as bytes and pick the encoding: try strict UTF-8 first, fall back
+      // to ISO-8859-1 (latin-1) which is what Clara USA exports. Without this,
+      // accented chars (Código, Autorización, etc.) come back as mojibake.
+      let raw
+      try {
+        raw = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+      } catch {
+        raw = new TextDecoder('iso-8859-1').decode(buffer)
+      }
+      const content = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      const lines = content.split('\n')
+      const sample = content.slice(0, 500)
+      let sep = ','
+      if (!sample.includes(',')) sep = sample.includes(';') ? ';' : '\t'
+      records = lines.map(line => ({ cols: parseCSVLine(line, sep), raw: line }))
+      headerLine = lines[0] || ''
     }
-    const content = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    const lines = content.split('\n')
-    const sample = content.slice(0, 500)
-    let sep = ','
-    if (!sample.includes(',')) sep = sample.includes(';') ? ';' : '\t'
 
     // Clara-platform CSVs have a fixed column layout. Detect by any of the
     // header markers we know about — the MX and USA variants share most
@@ -3848,10 +3882,35 @@ export default function App() {
     // and "Moneda original" (col 4) which power the ticket Pass 0 match.
     // "Transacci"/"autorizaci" intentionally drop the accented chars so we
     // survive encoding mishaps regardless of UTF-8 vs latin-1.
-    const headerLine = lines[0] || ''
     const isClara = headerLine.includes('Fecha de Transacci')
                  || headerLine.includes('digo de autorizaci')
                  || headerLine.includes('Moneda original')
+
+    // Las posiciones de columna de Clara difieren entre el CSV (trae una
+    // columna extra "Estado de Cuenta" + "Código de autorización" +
+    // "Categoría") y el Excel (formato de Natividad: sin esas tres, todo
+    // corrido una a la izquierda). Resolvemos cada columna por su encabezado
+    // para que AMBOS layouts funcionen; si un encabezado no aparece, caemos a
+    // los índices clásicos del CSV (columnas opcionales quedan en -1 → vacío).
+    const headerCells = (records[0]?.cols || []).map(c =>
+      String(c || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim())
+    const findCol = (needle, fallback) => {
+      const i = headerCells.findIndex(h => h.includes(needle))
+      return i >= 0 ? i : fallback
+    }
+    const findColExact = (val, fallback) => {
+      const i = headerCells.findIndex(h => h === val)
+      return i >= 0 ? i : fallback
+    }
+    // "fecha de transaccion" también contiene "transaccion", por eso la
+    // descripción se busca con match exacto del encabezado "Transacción".
+    const colFecha    = findCol('fecha de transacc', 0)
+    const colDesc     = findColExact('transaccion', 2)
+    const colMontoOrg = findCol('monto original', 3)
+    const colMoneda   = findCol('moneda original', 4)
+    const colMontoMXN = findCol('monto en mxn', 5)
+    const colAuth     = findCol('autorizacion', -1)
+    const colCat      = findCol('categoria', -1)
 
     let matches = 0, propinas = 0
     const sinFactura = []
@@ -3922,12 +3981,13 @@ export default function App() {
 
     // Step 1 — parse every CSV row into a flat list { dCSV, amounts[], descripcion }.
     const csvRows = []
-    for (let li = 0; li < lines.length; li++) {
-      const line = lines[li]
-      if (!line.trim()) continue
+    for (let li = 0; li < records.length; li++) {
+      const rec = records[li]
+      const cols = rec?.cols || []
+      const line = rec?.raw || ''
+      if (!cols.some(c => String(c).trim())) continue   // fila vacía
       if (isClara && li === 0) continue   // skip Clara header row
 
-      const cols = parseCSVLine(line, sep)
       let dCSV = null
       let amounts = []
       let descripcion = null
@@ -3941,19 +4001,19 @@ export default function App() {
       let categoria = ''
 
       if (isClara) {
-        dCSV = parseDateRobusto(cols[0] || '')
-        montoMXN = cleanNum(cols[5]) || 0
-        montoUSD = cleanNum(cols[3]) || 0
-        moneda = (cols[4] || 'MXN').trim().toUpperCase() || 'MXN'
-        autorizacion = String(cols[12] || '').trim()
-        categoria = (cols[13] || '').toString().trim()
+        dCSV = parseDateRobusto(cols[colFecha] || '')
+        montoMXN = cleanNum(cols[colMontoMXN]) || 0
+        montoUSD = cleanNum(cols[colMontoOrg]) || 0
+        moneda = (cols[colMoneda] || 'MXN').trim().toUpperCase() || 'MXN'
+        autorizacion = colAuth >= 0 ? String(cols[colAuth] || '').trim() : ''
+        categoria = colCat >= 0 ? (cols[colCat] || '').toString().trim() : ''
         const amount = montoMXN || montoUSD || 0
         if (!dCSV || !amount) continue
         // Carry BOTH the MXN and USD figures into the amount candidates so
         // smartAmountMatch can find ticket receipts whose OCR was captured in
         // either currency without depending on which column is non-zero.
         amounts = [montoMXN, montoUSD].filter(v => v > 0)
-        descripcion = (cols[2] || '').trim().slice(0, 60)
+        descripcion = (cols[colDesc] || '').trim().slice(0, 60)
       } else {
         for (const cell of cols) {
           const c = cell.trim(); if (!c) continue
@@ -5218,7 +5278,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.48</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.49</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5409,7 +5469,7 @@ export default function App() {
       />
       <input
         ref={bancoRef}
-        type="file" accept=".csv,.txt,.tsv" style={{ display: 'none' }}
+        type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" style={{ display: 'none' }}
         onChange={validarBanco}
       />
       <input
