@@ -248,6 +248,34 @@ def _extract_vanstron(raw_pdf_bytes):
     return out if ('folio' in out or 'concepto' in out) else None
 
 
+def _extract_ict(raw_pdf_bytes):
+    '''ICT Holding Co.,Limited (proveedor chino de carritos/equipo PCBA): su
+    "PROFORMA INVOICE" tampoco trae XML. El folio es el "PI No.:" (p.ej.
+    "ICT2026525E") que la visión no capturaba → caía a "TKT-XXXX". Lo leemos del
+    TEXTO del PDF. El concepto es el nombre del producto en la columna "Machine",
+    que aparece en la línea siguiente al modelo entre corchetes ("[ICT PCBA
+    Cart]"). Devuelve {"folio", "proveedor", "concepto"} o None.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = doc.load_page(0).get_text()
+        doc.close()
+    except Exception:
+        return None
+    up = text.upper()
+    if 'ICT HOLDING' not in up:
+        return None
+    out = {'proveedor': 'ICT Holding'}
+    m = re.search(r'PI\s*No\.?\s*[:：]?\s*([A-Za-z0-9\-]+)', text, re.I)
+    if m:
+        out['folio'] = m.group(1).strip()
+    lines = [l.strip() for l in text.splitlines()]
+    for i, l in enumerate(lines):
+        if re.match(r'^\[.*\]', l) and i + 1 < len(lines) and lines[i + 1].strip():
+            out['concepto'] = lines[i + 1].strip()
+            break
+    return out if ('folio' in out or 'concepto' in out) else None
+
+
 def _to_image_data_url(base64_data, media_type):
     '''Devuelve un data URL de imagen JPEG listo para Groq.
     Convierte PDFs (página 1) a imagen y reescala lo que exceda 4MB.'''
@@ -399,16 +427,18 @@ class handler(BaseHTTPRequestHandler):
                     pass
                 # Vanstron (proforma invoice sin XML): folio y proveedor
                 # deterministas desde el texto del PDF.
-                try:
-                    vs = _extract_vanstron(base64.b64decode(base64_data))
-                    if vs:
-                        result['proveedor'] = vs['proveedor']
-                        if vs.get('folio'):
-                            result['folio'] = vs['folio']
-                        if vs.get('concepto'):
-                            result['concepto'] = vs['concepto']
-                except Exception:
-                    pass
+                for _extract in (_extract_vanstron, _extract_ict):
+                    try:
+                        ov = _extract(base64.b64decode(base64_data))
+                        if ov:
+                            result['proveedor'] = ov['proveedor']
+                            if ov.get('folio'):
+                                result['folio'] = ov['folio']
+                            if ov.get('concepto'):
+                                result['concepto'] = ov['concepto']
+                            break
+                    except Exception:
+                        pass
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
