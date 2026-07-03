@@ -432,6 +432,11 @@ class handler(BaseHTTPRequestHandler):
                         ov = _extract(base64.b64decode(base64_data))
                         if ov:
                             result['proveedor'] = ov['proveedor']
+                            # Son proformas de compra, NUNCA pedimentos: la visión
+                            # a veces las clasifica mal como "pedimento" (mencionan
+                            # HS CODE / EXW / envío) y caían a tipo "Aduana". Lo
+                            # forzamos a ticket para que el cliente aplique COGS.
+                            result['tipoDocumento'] = 'ticket'
                             if ov.get('folio'):
                                 result['folio'] = ov['folio']
                             if ov.get('concepto'):
