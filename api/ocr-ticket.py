@@ -141,6 +141,17 @@ REGLA ESPECIAL — VOUCHERS DE PAGO CON TARJETA / TERMINAL BANCARIA (BBVA, Banor
 - fecha: la fecha del voucher ("FECHA"/"HORA"). "24JUN26"/"24062026" -> "2026-06-24".
 - formaPago: "04".
 
+REGLA ESPECIAL — PROFORMA INVOICE DE VANSTRON AUTOMATION (proveedor chino de bandas transportadoras, encabezado "Vanstron Automation Co.Ltd" / "Proforma Invoice"):
+- Si el documento tiene el encabezado "Vanstron" y/o "Proforma Invoice" → aplica estas reglas:
+- proveedor: "Vanstron Automation".
+- folio: el valor que aparece junto a "Invoice No." — preservalo EXACTAMENTE como aparece, INCLUYENDO letras, guiones y el sufijo ordinal (p.ej. "2026-04-01st-01X", "2026-06-21th-01X"). NO lo conviertas a solo digitos ni uses el "PO No".
+- moneda: "USD".
+- total: el "Total" en dolares (p.ej. 27900.00). Quita comas de miles.
+- subtotal: mismo valor que total.
+- iva: 0.
+- propina: 0.
+- formaPago: "03".
+
 REGLA GENERAL DE FECHA (facturas/recibos de EE.UU.):
 - Si un documento de EE.UU. imprime la fecha con numeros ambiguos, recuerda: si algun componente es > 12 ese es el DIA. Devuelve siempre "fecha" en formato YYYY-MM-DD ya desambiguado.'''
 
@@ -192,6 +203,29 @@ def _extract_fni_folio(raw_pdf_bytes):
     if folio_m:
         return folio_m.group(1).strip()
     return None
+
+
+def _extract_vanstron(raw_pdf_bytes):
+    '''Vanstron Automation (proveedor de bandas transportadoras, China): su
+    "Proforma Invoice" NO trae XML/CFDI y su identificador es el "Invoice No.:"
+    (p.ej. "2026-04-01st-01X" / "2026-06-21th-01X"), un folio alfanumérico con
+    sufijo ordinal que la visión de Groq no captura (el prompt pide un código de
+    autorización de solo dígitos), así que el folio caía a un "TKT-XXXX" random.
+    Lo leemos del TEXTO embebido del PDF, igual que FNI. Devuelve
+    {"folio": ..., "proveedor": ...} o None.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = doc.load_page(0).get_text()
+        doc.close()
+    except Exception:
+        return None
+    if 'VANSTRON' not in text.upper():
+        return None
+    # "Invoice No.: 2026-04-01st-01X" — preservamos el folio TAL CUAL.
+    m = re.search(r'Invoice\s*No\.?\s*:?\s*([A-Za-z0-9\-]+)', text, re.I)
+    if not m:
+        return None
+    return {'folio': m.group(1).strip(), 'proveedor': 'Vanstron Automation'}
 
 
 def _to_image_data_url(base64_data, media_type):
@@ -341,6 +375,15 @@ class handler(BaseHTTPRequestHandler):
                     if fni_folio:
                         result['folio'] = fni_folio
                         result['proveedor'] = 'Fondo Nacional de Infraestructura'
+                except Exception:
+                    pass
+                # Vanstron (proforma invoice sin XML): folio y proveedor
+                # deterministas desde el texto del PDF.
+                try:
+                    vs = _extract_vanstron(base64.b64decode(base64_data))
+                    if vs:
+                        result['folio'] = vs['folio']
+                        result['proveedor'] = vs['proveedor']
                 except Exception:
                     pass
 
