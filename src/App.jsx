@@ -4704,80 +4704,145 @@ export default function App() {
 
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const wb = XLSX.read(arrayBuffer, { type: 'array', cellStyles: true })
+      const wb = XLSX.read(arrayBuffer, { type: 'array', cellStyles: true, cellDates: true })
       const ws = wb.Sheets[wb.SheetNames[0]]
 
-      // Data starts at row 10 (0-indexed: r=9). Columns:
-      // B=RFC, C=PROVEEDOR, D=TIPO, E=FACTURA, F=F.FACTURA, G=F.COBRO,
-      // H=CONCEPTO, I=IMPORTE, J=IVA, K=RETENCIÓN, L=TOTAL, M=FORMA PAGO
+      // El layout del export (api/export-excel.py) creció con el tiempo: se
+      // insertaron PÓLIZA, ISR, ISH/IEPS, BANCO y MONTO USD entre las columnas
+      // originales. Cuando este import usaba índices de columna FIJOS quedaron
+      // desfasados y leía IMPORTE/IVA/TOTAL de columnas equivocadas (p.ej.
+      // IMPORTE leía el texto de CONCEPTO → 0) y "no sumaba". Ahora mapeamos
+      // cada columna por su ENCABEZADO (fila 9), así el import sobrevive
+      // cualquier cambio de layout futuro.
+      const HEADER_ROW = 9
+      const normHdr = (s) => String(s ?? '').toUpperCase().normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '').replace(/[^A-Z0-9]/g, '')
+      const colByHeader = {}
+      for (let c = 0; c < 40; c++) {
+        const h = normHdr(ws[XLSX.utils.encode_cell({ r: HEADER_ROW - 1, c })]?.v)
+        if (h && !(h in colByHeader)) colByHeader[h] = c
+      }
+      const findCol = (...aliases) => {
+        for (const a of aliases) { const k = normHdr(a); if (k in colByHeader) return colByHeader[k] }
+        return -1
+      }
+      const C = {
+        rfc:      findCol('RFC'),
+        prov:     findCol('PROVEEDOR'),
+        tipo:     findCol('TIPO'),
+        factura:  findCol('FACTURA'),
+        fFac:     findCol('F. FACTURA', 'F.FACTURA'),
+        fCobro:   findCol('F. COBRO', 'F.COBRO'),
+        concepto: findCol('CONCEPTO'),
+        importe:  findCol('IMPORTE'),
+        iva:      findCol('IVA'),
+        isr:      findCol('ISR'),
+        ish:      findCol('ISH/IEPS', 'ISH IEPS'),
+        ret:      findCol('RETENCIÓN', 'RETENCION'),
+        total:    findCol('TOTAL'),
+        forma:    findCol('FORMA PAGO'),
+        banco:    findCol('BANCO'),
+        usd:      findCol('MONTO USD'),
+        tc:       findCol('T/C', 'TC'),
+      }
+      // Si faltan columnas clave, el archivo no tiene el formato del reporte:
+      // abortamos con aviso en vez de importar basura desalineada.
+      if (C.rfc < 0 || C.importe < 0 || C.total < 0) {
+        showModal({
+          type: 'error',
+          title: 'Formato de Excel no reconocido',
+          subtitle: 'No se encontraron los encabezados (RFC, IMPORTE, TOTAL) en la fila 9. ¿Es un Excel exportado por esta app?',
+          primaryLabel: 'Entendido',
+        })
+        return
+      }
+
+      // Fechas: con cellDates el datetime nativo del export llega como Date;
+      // también toleramos strings MM-DD-YY y YYYY-MM-DD.
+      const parseDate = (d) => {
+        if (d == null || d === '') return ''
+        if (d instanceof Date && !isNaN(d)) {
+          const yyyy = d.getFullYear()
+          const mm = String(d.getMonth() + 1).padStart(2, '0')
+          const dd = String(d.getDate()).padStart(2, '0')
+          return `${yyyy}-${mm}-${dd}`
+        }
+        const s = String(d)
+        if (s.includes('-') && s.length === 8) {
+          const [mm, dd, yy] = s.split('-')
+          return `20${yy}-${mm}-${dd}`
+        }
+        return s
+      }
+
       const gastos = []
       let row = 10
 
       while (true) {
-        const rfc = ws[XLSX.utils.encode_cell({ r: row - 1, c: 1 })]?.v
-        if (!rfc || rfc === 'TOTAL CUENTA') break
+        const rfc = ws[XLSX.utils.encode_cell({ r: row - 1, c: C.rfc })]?.v
+        if (!rfc || String(rfc).trim() === '' || rfc === 'TOTAL CUENTA') break
 
-        const getVal = (col) => ws[XLSX.utils.encode_cell({ r: row - 1, c: col })]?.v ?? ''
+        // .v = valor crudo; .w = texto ya formateado (útil para la etiqueta de
+        // forma de pago "04 - Tarjeta de Crédito").
+        const val = (c) => c >= 0 ? (ws[XLSX.utils.encode_cell({ r: row - 1, c })]?.v ?? '') : ''
+        const txt = (c) => {
+          if (c < 0) return ''
+          const cell = ws[XLSX.utils.encode_cell({ r: row - 1, c })]
+          return cell?.w ?? cell?.v ?? ''
+        }
 
-        // Forma de pago: cell carries the "04 - Tarjeta de Crédito" label,
-        // so strip back to the leading two-digit code.
-        const formaLabel = String(getVal(12))
+        // Forma de pago: la celda trae la etiqueta "04 - Tarjeta de Crédito",
+        // la recortamos al código de dos dígitos.
+        const formaLabel = String(txt(C.forma))
         const formaCode = formaLabel.startsWith('04') ? '04'
           : formaLabel.startsWith('03') ? '03'
           : formaLabel.startsWith('02') ? '02'
           : formaLabel.startsWith('01') ? '01' : '04'
 
-        // Dates round-trip as MM-DD-YY strings in the export; convert back
-        // to YYYY-MM-DD for internal use.
-        const parseDate = (d) => {
-          if (!d) return ''
-          const s = String(d)
-          if (s.includes('-') && s.length === 8) {
-            const [mm, dd, yy] = s.split('-')
-            return `20${yy}-${mm}-${dd}`
-          }
-          return s
-        }
-
-        // Numeric fields. The export writes column L as an Excel formula
-        // `=I+J-K`, and SheetJS returns 0/undefined for formula cells when
-        // there is no cached evaluated value — so fall back to recomputing
-        // the total from I+J-K if L came back empty.
-        const importe     = Number(getVal(8))  || 0
-        const iva         = Number(getVal(9))  || 0
-        const retenciones = Number(getVal(10)) || 0
-        const lRaw        = Number(getVal(11)) || 0
-        const totalCFDI   = lRaw || (importe + iva - retenciones)
+        // Campos numéricos. Semántica idéntica al export (export-excel.py):
+        //   L=ISR → retencionISR (RESTA), M=ISH/IEPS → ishIeps (SUMA),
+        //   N=RETENCIÓN → retenciones − retencionISR (RESTA).
+        // La columna TOTAL (O) es la fórmula viva =J+K-L+M-N SIN valor cacheado,
+        // así que casi siempre llega vacía → la reconstruimos con esos valores.
+        const importe      = Number(val(C.importe)) || 0
+        const iva          = Number(val(C.iva))     || 0
+        const retencionISR = Number(val(C.isr))     || 0
+        const ishIeps      = Number(val(C.ish))     || 0
+        const retNoIsr     = Number(val(C.ret))     || 0   // col N = retenciones − ISR
+        const totalRaw     = Number(val(C.total))   || 0
+        const totalCFDI    = totalRaw || (importe + iva - retencionISR + ishIeps - retNoIsr)
+        const montoUSD     = Number(val(C.usd))     || 0
 
         gastos.push({
           // id is required by React (table key) and the delete handler;
-          // tienePDF/pdfFile/xmlFile/hizoMatch/isrTrasladado keep the row
-          // shape identical to parseCFDI-produced rows so every cell
-          // renders correctly.
+          // tienePDF/pdfFile/xmlFile/hizoMatch keep the row shape identical to
+          // parseCFDI-produced rows so every cell renders correctly.
           id: genId(),
           rfc: String(rfc || ''),
-          proveedor: String(getVal(2) || ''),
+          proveedor: String(val(C.prov) || ''),
           // Normaliza tipos legacy renombrados: IT & SW antes era "IT & SW
           // (Software/Sistemas)" — un Excel viejo importado todavía trae el
           // nombre largo. Se reescribe al canónico para evitar discrepancias
           // falsas en cotejo con Saldos.
           tipo: (() => {
-            const raw = String(getVal(3) || '').trim()
+            const raw = String(val(C.tipo) || '').trim()
             if (raw === 'IT & SW (Software/Sistemas)') return 'IT & SW'
             return raw
           })(),
-          noFactura: String(getVal(4) || ''),
-          fechaFac: parseDate(getVal(5)),
-          fechaCobro: parseDate(getVal(6)),
-          concepto: String(getVal(7) || ''),
+          noFactura: String(val(C.factura) || ''),
+          fechaFac: parseDate(val(C.fFac)),
+          fechaCobro: parseDate(val(C.fCobro)),
+          concepto: String(val(C.concepto) || ''),
           importe,
           iva,
-          isrTrasladado: 0,
-          retencionISR: 0,
-          retencionIVA: 0,
-          retenciones,
+          isrTrasladado: ishIeps,
+          ishIeps,
+          retencionISR,
+          retencionIVA: retNoIsr,
+          retenciones: retencionISR + retNoIsr,
           totalCFDI,
           formaPago: formaCode,
+          banco: String(val(C.banco) || ''),
           propinaPorcentaje: 0,
           montoPropina: 0,
           uuid: crypto.randomUUID(),
@@ -4786,11 +4851,9 @@ export default function App() {
           xmlFile: null,
           hizoMatch: false,
           validado: false,
-          // New USD columns sit at N (idx 13) + O (idx 14) in the exported
-          // xlsx; round-trip them here so re-importing keeps the values.
-          montoUSD: Number(getVal(13)) || 0,
-          tipoCambio: Number(getVal(14)) || 0,
-          moneda: (Number(getVal(13)) || 0) > 0 ? 'USD' : 'MXN',
+          montoUSD,
+          tipoCambio: Number(val(C.tc)) || 0,
+          moneda: montoUSD > 0 ? 'USD' : 'MXN',
         })
         row++
       }
@@ -5294,7 +5357,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.52</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.53</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
