@@ -1299,6 +1299,14 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
       if (rfc === 'REF2208125E6' && /^\d{1,5}$/.test(folio)) {
         folio = folio.padStart(5, '0')
       }
+      // CFDIs de Odoo (Vauxoo, MBGE, etc.): la Serie termina en "/"
+      // ("INV/2026/") y el Folio es solo el consecutivo SIN ceros ("591"). El
+      // número fiscal completo que imprime el PDF lo padea a 5 dígitos
+      // ("INV/2026/00591"). Replicamos ese pad para que la FACTURA del Excel y
+      // el nombre del archivo conserven los ceros a la izquierda.
+      if (serie.endsWith('/') && /^\d{1,5}$/.test(folio)) {
+        folio = folio.padStart(5, '0')
+      }
       if (serie || folio) return serie + folio
       // Peaje del Fondo Nacional de Infraestructura (RFC FNI970829JR9): su CFDI
       // NO trae Serie/Folio. El Serie+Folio (p.ej. FNPE72984235) solo está
@@ -4564,9 +4572,13 @@ export default function App() {
         .trim()
     )
 
-    // Folio \u2014 preserved exactly as detected
+    // Folio \u2014 preserved exactly as detected. Las diagonales / y \\ no son
+    // v\u00e1lidas en nombres de archivo, pero forman parte del n\u00famero fiscal de los
+    // CFDI de Odoo ("INV/2026/00591"); las convertimos a guion en vez de
+    // borrarlas para conservar el n\u00famero completo ("INV-2026-00591").
     const folio = (g.noFactura || 'SN')
-      .replace(/[\/\\:*?"<>|()\[\]{}]/g, '')
+      .replace(/[\/\\]+/g, '-')
+      .replace(/[:*?"<>|()\[\]{}]/g, '')
       .trim()
 
     // Concepto \u2014 primera l\u00ednea de la descripci\u00f3n del CFDI (g.concepto ya viene
@@ -5440,7 +5452,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.64</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.65</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
