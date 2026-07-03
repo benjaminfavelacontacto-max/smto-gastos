@@ -306,6 +306,35 @@ def _extract_essemtec(raw_pdf_bytes):
     return out if ('folio' in out or 'concepto' in out) else None
 
 
+def _extract_sat(raw_pdf_bytes):
+    '''SAT — "ACUSE DE RECIBO / DECLARACIÓN PROVISIONAL O DEFINITIVA DE IMPUESTOS
+    FEDERALES". El RFC impreso (SEN...) es el del contribuyente (SMTO), NO el del
+    SAT. proveedor = "Servicio de Administración Tributaria" (RFC SAT970701NN3 se
+    fuerza en el cliente). folio = "Número de operación". total = suma de todas
+    las "Cantidad a pagar". Devuelve dict o None.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = ''
+        for pg in doc:
+            text += pg.get_text()
+        doc.close()
+    except Exception:
+        return None
+    if 'IMPUESTOS FEDERALES' not in text.upper():
+        return None
+    out = {
+        'proveedor': 'Servicio de Administración Tributaria',
+        'concepto': 'Impuestos Federales',
+    }
+    m = re.search(r'N[úu]mero de operaci[óo]n\s*[:：]?\s*(\d+)', text, re.I)
+    if m:
+        out['folio'] = m.group(1).strip()
+    pagas = re.findall(r'Cantidad a pagar\s*[:：]?\s*([\d,]+(?:\.\d+)?)', text, re.I)
+    if pagas:
+        out['total'] = round(sum(float(p.replace(',', '')) for p in pagas), 2)
+    return out
+
+
 def _to_image_data_url(base64_data, media_type):
     '''Devuelve un data URL de imagen JPEG listo para Groq.
     Convierte PDFs (página 1) a imagen y reescala lo que exceda 4MB.'''
@@ -457,20 +486,24 @@ class handler(BaseHTTPRequestHandler):
                     pass
                 # Vanstron (proforma invoice sin XML): folio y proveedor
                 # deterministas desde el texto del PDF.
-                for _extract in (_extract_vanstron, _extract_ict, _extract_essemtec):
+                for _extract in (_extract_vanstron, _extract_ict, _extract_essemtec, _extract_sat):
                     try:
                         ov = _extract(base64.b64decode(base64_data))
                         if ov:
                             result['proveedor'] = ov['proveedor']
-                            # Son proformas de compra, NUNCA pedimentos: la visión
-                            # a veces las clasifica mal como "pedimento" (mencionan
-                            # HS CODE / EXW / envío) y caían a tipo "Aduana". Lo
-                            # forzamos a ticket para que el cliente aplique COGS.
+                            # NUNCA son pedimentos: la visión a veces clasifica mal
+                            # estos documentos como "pedimento" y caían a tipo
+                            # "Aduana". Lo forzamos a ticket para que el cliente
+                            # aplique la regla por proveedor.
                             result['tipoDocumento'] = 'ticket'
                             if ov.get('folio'):
                                 result['folio'] = ov['folio']
                             if ov.get('concepto'):
                                 result['concepto'] = ov['concepto']
+                            if ov.get('total') is not None:
+                                result['total'] = ov['total']
+                                result['subtotal'] = ov['total']
+                                result['iva'] = 0
                             break
                     except Exception:
                         pass
