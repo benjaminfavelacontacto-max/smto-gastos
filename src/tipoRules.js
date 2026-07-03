@@ -57,6 +57,8 @@ export const TIPO_RULES = [
   ['ITESO',                    'Renta Oficina'],
   ['FIAT ',                    'Renta Oficina'],   // override de FIAT (marca de auto)
   ['VANRENTA',                 'Automóvil'],
+  ['SALUD DIGNA',              'Permiso'],       // facturas de salud (RFC SDI121109B14) → siempre Permiso por convenio SMTO
+  ['OPERADORA OMX',            'Papelería'],     // Office Max (razón social 'Operadora OMX', RFC OOM960429832). DEBE ir antes de 'OPERADORA OM'→Hotel, que hace prefix-match sobre esta razón social.
   // ── Fin proveedores SMTO ────────────────────────────────────────────────
 
   // ── Equipo de cómputo / PC ──────────────────────────────────────────────

@@ -29,6 +29,7 @@ const TIPOS_VENTAS = [
   'Hotel Ventas',
   'IT & SW',
   'Marketing',
+  'Permiso',
   'Renta Oficina',
 ]
 
@@ -57,6 +58,7 @@ const TIPOS_NORMALES = [
   'No Comprobado',
   'Papelería',
   'PC',
+  'Permiso',
   'Rechazada',
   'Renta Auto',
   'Renta Oficina',
@@ -1094,10 +1096,16 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // iva/isrTrasladado, Retencion nodes can only feed retencionISR/retencionIVA.
   let   iva           = sumByTipo(trasladosBox,   'traslado',  '002')
   // ishIeps = impuestos que SE SUMAN al total y no son IVA: ISH (locales de
-  // hoteles), IEPS (combustible) y el raro ISR trasladado (001 en Traslados).
+  // hoteles), IEPS y el raro ISR trasladado (001 en Traslados).
   // El "ISR" del Excel es el ISR RETENIDO (retencionISR), que RESTA del total
   // y va en su propia columna. Se separan porque tienen signo distinto.
-  let   ishIeps       = sumByTipo(trasladosBox,   'traslado',  '001')
+  //
+  // ⚠️ IEPS federal viaja en <Traslado Impuesto="003"> (gasolinas, alimentos con
+  // IEPS como refrescos/botanas en OXXO/Tiendas Extra, gasolineras). Antes solo
+  // sumábamos '001' y el 003 se perdía → el usuario lo capturaba a mano. Ahora
+  // el bucket ishIeps agrupa 001 (ISR trasladado) + 003 (IEPS); 002 (IVA) queda
+  // aparte en su propio bucket.
+  let   ishIeps       = sumByTipo(trasladosBox,   'traslado',  t => t === '001' || t === '003')
   let   retencionISR  = sumByTipo(retencionesBox, 'retencion', '001')
   let   retencionIVA  = sumByTipo(retencionesBox, 'retencion', '002')
   let   retenciones   = retencionISR + retencionIVA
@@ -5286,7 +5294,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.50</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.51</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
