@@ -221,11 +221,31 @@ def _extract_vanstron(raw_pdf_bytes):
         return None
     if 'VANSTRON' not in text.upper():
         return None
+    out = {'proveedor': 'Vanstron Automation'}
     # "Invoice No.: 2026-04-01st-01X" — preservamos el folio TAL CUAL.
     m = re.search(r'Invoice\s*No\.?\s*:?\s*([A-Za-z0-9\-]+)', text, re.I)
-    if not m:
-        return None
-    return {'folio': m.group(1).strip(), 'proveedor': 'Vanstron Automation'}
+    if m:
+        out['folio'] = m.group(1).strip()
+    # Concepto: nombres de la columna "Product name" (no el encabezado
+    # "Proforma Invoice"). En la tabla, cada nombre de producto es la línea
+    # inmediatamente anterior a su cantidad (QTY, un entero). Los deduplicamos
+    # conservando el orden y los unimos con coma. La visión de Groq a veces
+    # devuelve "Proforma Invoice" como concepto; esto lo corrige.
+    lines = [l.strip() for l in text.splitlines()]
+    try:
+        start = next(i for i, l in enumerate(lines) if l.lower() == 'product name')
+        end = next(i for i, l in enumerate(lines) if l.lower() == 'total')
+        names = []
+        for i in range(start + 1, end):
+            if re.fullmatch(r'\d+', lines[i]):  # QTY → el producto es la línea previa
+                prod = lines[i - 1].strip()
+                if prod and prod not in names:
+                    names.append(prod)
+        if names:
+            out['concepto'] = ', '.join(names)
+    except StopIteration:
+        pass
+    return out if ('folio' in out or 'concepto' in out) else None
 
 
 def _to_image_data_url(base64_data, media_type):
@@ -382,8 +402,11 @@ class handler(BaseHTTPRequestHandler):
                 try:
                     vs = _extract_vanstron(base64.b64decode(base64_data))
                     if vs:
-                        result['folio'] = vs['folio']
                         result['proveedor'] = vs['proveedor']
+                        if vs.get('folio'):
+                            result['folio'] = vs['folio']
+                        if vs.get('concepto'):
+                            result['concepto'] = vs['concepto']
                 except Exception:
                     pass
 
