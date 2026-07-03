@@ -1337,7 +1337,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     propinaPorcentaje: 0,
     montoPropina: 0,
     fechaCobro: fechaFac,
-    formaPago:  ga(comp, 'FormaPago') || '04',
+    // Telcel (Radiomóvil Dipsa) timbra sus CFDI con FormaPago="99" (por definir),
+    // pero SMTO siempre los paga por transferencia → forzamos "03".
+    formaPago:  rfc === 'RDI841003QJ4' ? '03' : (ga(comp, 'FormaPago') || '04'),
     uuid,
     tienePDF: !!pdfFile,
     pdfFile,
@@ -3045,6 +3047,7 @@ export default function App() {
     // por OCR y sustituimos el folio (que de otro modo cae al NoIdentificacion)
     // por el Serie+Folio real. Solo para FNI y solo si aún no lo tenemos.
     await enrichFniFoliosDesdePDF(nueva)
+    await enrichTelcelParcialidad(nueva)
 
     const applyBatch = (batch, ocrCount = 0) => {
       // Merge ACUMULATIVO: en vez de sobrescribir, agrega la carpeta nueva a los
@@ -3309,6 +3312,41 @@ export default function App() {
     // Tope DURO de tiempo: pase lo que pase con la red, seguimos en ≤12s para
     // que la carga NUNCA se quede trabada. Lo que no alcanzó a resolver queda
     // con su NoIdentificacion (el usuario lo puede editar).
+    await Promise.race([trabajo, new Promise(r => setTimeout(r, 12_000))])
+  }
+
+  // Telcel (Radiomóvil Dipsa, RFC RDI841003QJ4): el CFDI cierra en "Cargos del
+  // mes" pero el banco cobra el "Total a pagar", que suma una "Parcialidad de
+  // Equipo" DESPUÉS del IVA — ese monto NO está en el XML, solo en el PDF. Lo
+  // leemos del texto del PDF (telcelExtra, sin Groq) y lo sumamos al importe y
+  // al total para que el gasto cuadre con el cargo del banco. Muta in-place.
+  const enrichTelcelParcialidad = async (gastos) => {
+    const pendientes = gastos.filter(g =>
+      g.rfc === 'RDI841003QJ4' && g.pdfFile && !g.parcialidadEquipo
+    )
+    if (pendientes.length === 0) return
+    const trabajo = Promise.all(pendientes.map(async (g) => {
+      try {
+        const base64 = await fileToBase64(g.pdfFile)
+        const resp = await fetchConTimeout('/api/ocr-ticket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, mediaType: 'application/pdf', telcelExtra: true }),
+        }, 10_000)
+        if (!resp.ok) return
+        const j = await resp.json()
+        const p = Number(j?.parcialidad) || 0
+        if (p > 0) {
+          const r2 = (n) => parseFloat((Number(n) + p).toFixed(2))
+          g.importe        = r2(g.importe)
+          g.totalCFDI      = r2(g.totalCFDI)
+          g.montoFacturado = r2(g.montoFacturado)
+          g.parcialidadEquipo = p   // marca idempotente: no volver a sumar
+        }
+      } catch (err) {
+        console.warn('Telcel parcialidad falló:', g.pdfFile?.name, err)
+      }
+    }))
     await Promise.race([trabajo, new Promise(r => setTimeout(r, 12_000))])
   }
 
@@ -3707,6 +3745,7 @@ export default function App() {
     // FNI (peaje): completa el Serie+Folio desde el PDF cuando el XML no lo trae
     // (ver enrichFniFoliosDesdePDF). Mismo arreglo que en la carga de carpeta.
     await enrichFniFoliosDesdePDF(allNewGastos)
+    await enrichTelcelParcialidad(allNewGastos)
 
     // STEP 3 — OCR pass for unmatched PDFs + dropped images. Asks before
     // spending money. Errors per file route through the plain alerta modal.
@@ -5401,7 +5440,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.63</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.64</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

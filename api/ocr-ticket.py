@@ -335,6 +335,27 @@ def _extract_sat(raw_pdf_bytes):
     return out
 
 
+def _extract_telcel_parcialidad(raw_pdf_bytes):
+    '''Telcel (Radiomóvil Dipsa): el CFDI XML cierra en el "Cargos del mes", pero
+    el banco cobra el "Total a pagar", que Telcel forma sumando una "Parcialidad
+    de Equipo" (financiamiento del equipo) DESPUÉS del IVA. Ese monto NO está en
+    el XML (ni en Addenda), solo impreso en el PDF. Lo leemos del texto para
+    sumarlo al importe/total del gasto. Devuelve el float o 0.0.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = ''.join(pg.get_text() for pg in doc)
+        doc.close()
+    except Exception:
+        return 0.0
+    m = re.search(r'Parcialidad de Equipo\s*\n?\s*([\d,]+\.\d{2})', text, re.I)
+    if not m:
+        return 0.0
+    try:
+        return round(float(m.group(1).replace(',', '')), 2)
+    except ValueError:
+        return 0.0
+
+
 def _to_image_data_url(base64_data, media_type):
     '''Devuelve un data URL de imagen JPEG listo para Groq.
     Convierte PDFs (página 1) a imagen y reescala lo que exceda 4MB.'''
@@ -397,6 +418,23 @@ class handler(BaseHTTPRequestHandler):
                     'folio': fni_folio or '',
                     'proveedor': 'Fondo Nacional de Infraestructura' if fni_folio else '',
                 }).encode())
+                return
+
+            # telcelExtra: el cliente ya parseó el CFDI de Telcel (Radiomóvil
+            # Dipsa) y solo quiere la "Parcialidad de Equipo" del PDF para sumarla
+            # al total. Se lee del TEXTO, SIN Groq (sin visión ni rate limit).
+            if bool(data.get('telcelExtra', False)):
+                parcialidad = 0.0
+                if media_type == 'application/pdf':
+                    try:
+                        parcialidad = _extract_telcel_parcialidad(base64.b64decode(base64_data))
+                    except Exception:
+                        parcialidad = 0.0
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'parcialidad': parcialidad}).encode())
                 return
 
             api_key = os.environ.get('SMTO_GROQ_API_KEY', '')
