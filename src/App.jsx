@@ -3417,6 +3417,9 @@ export default function App() {
     // sin XML). El servidor devuelve proveedor "ICT Holding", folio "PI No." y
     // concepto de la columna Machine. Su tipo también es COGS.
     const esICT = /ict holding/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
+    // Essemtec USA LLC: máquinas pick&place FOX2 importadas, invoice sin XML.
+    // Servidor devuelve proveedor/folio/concepto deterministas. Tipo = COGS.
+    const esEssemtec = /essemtec/i.test(`${parsed.proveedor || ''} ${parsed.concepto || ''}`)
     let proveedorFinal = parsed.proveedor || ''
     let rfcFinal = ''
     let folioFinal = parsed.folio || parsed.approval_code || ''
@@ -3468,6 +3471,9 @@ export default function App() {
       tipoFinal = 'COGS'
     } else if (esICT) {
       proveedorFinal = 'ICT Holding'
+      tipoFinal = 'COGS'
+    } else if (esEssemtec) {
+      proveedorFinal = 'Essemtec USA LLC'
       tipoFinal = 'COGS'
     } else if (esFNI) {
       proveedorFinal = 'Fondo Nacional de Infraestructura'
@@ -5371,7 +5377,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.58</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.59</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

@@ -276,6 +276,36 @@ def _extract_ict(raw_pdf_bytes):
     return out if ('folio' in out or 'concepto' in out) else None
 
 
+def _extract_essemtec(raw_pdf_bytes):
+    '''Essemtec USA LLC (proveedor de máquinas pick&place FOX2): sus INVOICE en
+    PDF no traen XML. La visión a veces las leía como "Consumo Viáticos" o folio
+    aleatorio. Folio = "Invoice no.:" (p.ej. 6692). Concepto = familia del primer
+    producto (línea tras el primer "1." de la tabla), tomando el segmento antes
+    del primer guion ("FOX2-PPD-C" → "FOX2"). Devuelve dict o None.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = doc.load_page(0).get_text()
+        doc.close()
+    except Exception:
+        return None
+    if 'ESSEMTEC' not in text.upper():
+        return None
+    out = {'proveedor': 'Essemtec USA LLC'}
+    m = re.search(r'Invoice\s*no\.?\s*[:：]?\s*([A-Za-z0-9\-]+)', text, re.I)
+    if m:
+        out['folio'] = m.group(1).strip()
+    lines = [l.strip() for l in text.splitlines()]
+    try:
+        hdr = next(i for i, l in enumerate(lines) if l.lower() == 'amount')
+        for i in range(hdr + 1, len(lines) - 1):
+            if re.fullmatch(r'1\.', lines[i]) and lines[i + 1].strip():
+                out['concepto'] = lines[i + 1].strip().split('-')[0].strip()
+                break
+    except StopIteration:
+        pass
+    return out if ('folio' in out or 'concepto' in out) else None
+
+
 def _to_image_data_url(base64_data, media_type):
     '''Devuelve un data URL de imagen JPEG listo para Groq.
     Convierte PDFs (página 1) a imagen y reescala lo que exceda 4MB.'''
@@ -427,7 +457,7 @@ class handler(BaseHTTPRequestHandler):
                     pass
                 # Vanstron (proforma invoice sin XML): folio y proveedor
                 # deterministas desde el texto del PDF.
-                for _extract in (_extract_vanstron, _extract_ict):
+                for _extract in (_extract_vanstron, _extract_ict, _extract_essemtec):
                     try:
                         ov = _extract(base64.b64decode(base64_data))
                         if ov:
