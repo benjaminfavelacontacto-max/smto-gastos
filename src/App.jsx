@@ -1203,6 +1203,13 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   // <cfdi:Comprobante> has placeholder amounts (SubTotal=1.00, Total=0.00);
   // real figures live on <Dispersion> inside <cfdi:Addenda>. IEPS feeds the
   // ISR/ISH/IEPS bucket per spec.
+  //
+  // ⚠️ El importe SALE de GralConsumos, NO de GralImporte: GralImporte ya
+  // trae el IEPS sumado (GralImporte = GralConsumos + GralIEPS). Si usáramos
+  // GralImporte, el IEPS se contaría DOS veces — una dentro del importe y otra
+  // en la columna ISH/IEPS — inflando el total. GralConsumos es el subtotal de
+  // combustible sin IEPS ni IVA, de modo que
+  //   importe(GralConsumos) + iva(GralImpuesto) + ieps(GralIEPS) = GralTotal.
   let isEDC = false, dispersion = null
   for (const el of doc.querySelectorAll('*')) {
     if (!el.localName) continue
@@ -1211,7 +1218,7 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     else if (ln === 'dispersion' && !dispersion)   dispersion = el
   }
   if (isEDC && dispersion) {
-    importe         = parseFloat(ga(dispersion, 'GralImporte',  'gralImporte')  || '0') || 0
+    importe         = parseFloat(ga(dispersion, 'GralConsumos', 'gralConsumos') || '0') || 0
     iva             = parseFloat(ga(dispersion, 'GralImpuesto', 'gralImpuesto') || '0') || 0
     ishIeps        += parseFloat(ga(dispersion, 'GralIEPS',     'gralIEPS')     || '0') || 0
     totalCFDI       = parseFloat(ga(dispersion, 'GralTotal',    'gralTotal')    || '0') || 0
@@ -5452,7 +5459,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.65</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.66</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
