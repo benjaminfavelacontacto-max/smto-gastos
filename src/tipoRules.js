@@ -404,6 +404,14 @@ const NORMAL_VARIANT = {
   'Gasolina': 'Gasolina Viáticos',
 }
 
+// Reglas por RFC EXACTO del emisor. Ganan sobre TODO (el catch-all de Hotel y las
+// reglas por nombre), porque el RFC identifica al proveedor sin ambigüedad aunque
+// la razón social venga escrita distinto en el CFDI. Solo para proveedores donde
+// el tipo es fijo por convenio SMTO, pase lo que pase en nombre/concepto.
+export const TIPO_RULES_RFC = {
+  'OOM960429832': 'Papelería',   // Operadora OMX (Office Max) → siempre Papelería
+}
+
 // Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.
 // 4321xxxx = Hardware de cómputo, 4322xxxx = Periféricos, 4323xxxx = Redes.
 const SAT_PC_PREFIXES = ['4321', '4322', '4323']
@@ -413,10 +421,19 @@ const SAT_PC_PREFIXES = ['4321', '4322', '4323']
  * @param {string} descripcion    Primera línea del concepto del CFDI
  * @param {string} categoria      'Admin'|'Servicio'|'Ventas'|'Socio'
  * @param {string} claveProdServ  Código SAT del producto (opcional)
+ * @param {string} rfc            RFC del emisor (opcional) — activa TIPO_RULES_RFC
  */
-export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ = '') {
+export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ = '', rfc = '') {
   const texto = `${proveedor || ''} ${descripcion || ''}`.toUpperCase()
   const isVentas = categoria === 'Ventas' || categoria === 'Socio'
+
+  // 0. RFC exacto — MÁXIMA prioridad. Gana sobre el catch-all de Hotel y sobre
+  //    las reglas por nombre, para proveedores con tipo fijo por convenio SMTO.
+  const rfcKey = (rfc || '').trim().toUpperCase()
+  if (rfcKey && TIPO_RULES_RFC[rfcKey]) {
+    const tipoBase = TIPO_RULES_RFC[rfcKey]
+    return isVentas ? (VENTAS_VARIANT[tipoBase] || tipoBase) : (NORMAL_VARIANT[tipoBase] || tipoBase)
+  }
 
   // FACTURIFY es plataforma de facturación usada por choferes/taxistas.
   // Cuando el concepto es "TARIFA" es la tarifa del viaje, no suscripción de software.
