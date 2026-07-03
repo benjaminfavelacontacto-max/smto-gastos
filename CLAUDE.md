@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.62
+Current version: v8.63
 
 ## Stack
 
@@ -115,7 +115,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.62
+- Current: v8.63
 
 ## Things to be careful about
 

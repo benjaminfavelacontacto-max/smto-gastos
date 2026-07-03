@@ -627,10 +627,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # y corrió el cotejo con su Saldos); para todos los demás cae al
         # folio Clara global del colaborador.
         _praw = g.get('polizaNumero') or poliza_numero
-        try:
-            poliza_row = int(_praw)
-        except (ValueError, TypeError):
-            poliza_row = _praw
+        # PÓLIZA como TEXTO para conservar los ceros a la izquierda (p.ej.
+        # "0036234032", "0610"). int() los borraba ("0036234032" → 36234032) y
+        # además rompía el lookup de USUARIO contra POLIZAS_CLARA, cuyos folios
+        # sí traen ceros.
+        poliza_row = '' if _praw is None else str(_praw).strip()
 
         # Propina-row fields. When the gasto has any propina, the main row
         # shows the NET amount (total − tip) so main_row + propina_sub_row

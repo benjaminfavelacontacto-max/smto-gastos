@@ -773,6 +773,15 @@ function parseSaldosXLSX(arrayBuffer) {
     if (!ws || !ws['!ref']) continue
     const range = XLSX.utils.decode_range(ws['!ref'])
     const getCell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })]?.v
+    // Texto FORMATEADO de la celda (.w), con fallback al valor crudo (.v). Se
+    // usa para el folio de la póliza: Excel guarda "0036234032" como número
+    // 36234032 pero lo MUESTRA con ceros a la izquierda vía formato; .v los
+    // perdería, .w los conserva tal como se ven.
+    const getCellText = (r, c) => {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })]
+      if (!cell) return ''
+      return String(cell.w ?? cell.v ?? '')
+    }
 
     // Encuentra TODAS las filas de header en la pestaña. Algunos archivos
     // de Saldos apilan varias cuentas verticalmente en una sola pestaña
@@ -803,7 +812,7 @@ function parseSaldosXLSX(arrayBuffer) {
         // (por factura) las ignora, pero el fallback de cotejo (por
         // proveedor + monto + año-mes) las usa para asignar banco a gastos
         // cuyo registro en Saldos no trae folio explícito.
-        const folio = cols.folio !== null ? String(getCell(r, cols.folio) || '').trim() : ''
+        const folio = cols.folio !== null ? getCellText(r, cols.folio).trim() : ''
         // Detección de USD: barre TODAS las columnas del renglón en busca del
         // acrónimo USD o "dólar/dolar". Algunas pestañas marcan moneda en una
         // columna fuera del set principal (Tipo / Concepto / Factura).
@@ -5392,7 +5401,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.62</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.63</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
