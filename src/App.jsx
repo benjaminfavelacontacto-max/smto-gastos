@@ -3339,7 +3339,9 @@ export default function App() {
       const importePagado = total || subtotal
       return {
         id: genId(),
-        rfc: '',
+        // El pedimento se tramita a nombre de SMTO (el importador), así que el
+        // RFC que va en el Excel es el propio de SMTO, no el de un proveedor.
+        rfc: 'SEN1504132C9',
         proveedor: parsed.proveedor || 'SMTO ENGINEERING',
         noFactura: String(parsed.folio || ('PED-' + uuid.slice(0, 6).toUpperCase())),
         fechaFac:  parsed.fecha || today,
@@ -5377,7 +5379,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.59</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.60</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
