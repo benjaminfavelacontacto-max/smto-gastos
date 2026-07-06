@@ -2759,6 +2759,10 @@ export default function App() {
   const [importSummary, setImportSummary] = useState(null)
   const [dropSummary,   setDropSummary]   = useState(null)
   const [ocrLoading,    setOcrLoading]    = useState(false)
+  // Small chooser shown by the "Cargar Foto" button: on móvil el input con
+  // capture="environment" abre la cámara directo, así que ofrecemos elegir
+  // entre tomar foto (cámara) o subir una existente (galería/archivos).
+  const [showPhotoChoice, setShowPhotoChoice] = useState(false)
   const [carpetaSuccess, setCarpetaSuccess] = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
@@ -2820,7 +2824,8 @@ export default function App() {
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
-  const photoRef  = useRef(null)
+  const photoRef  = useRef(null)       // subir foto existente (galería / archivos)
+  const cameraRef = useRef(null)       // tomar foto (capture="environment")
   const saldosRef = useRef(null)
   const nominaRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
@@ -5459,7 +5464,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.66</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.67</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5524,7 +5529,7 @@ export default function App() {
               </svg>
             )}
           />
-          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => photoRef.current?.click()} />
+          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
           <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
@@ -5653,12 +5658,21 @@ export default function App() {
         type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" style={{ display: 'none' }}
         onChange={validarBanco}
       />
+      {/* Subir foto/PDF existente — sin capture, abre galería/archivos */}
       <input
         ref={photoRef}
         type="file"
         accept="image/*,application/pdf"
-        capture="environment"
         multiple
+        style={{ display: 'none' }}
+        onChange={cargarFoto}
+      />
+      {/* Tomar foto — capture="environment" abre la cámara trasera en móvil */}
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
         style={{ display: 'none' }}
         onChange={cargarFoto}
       />
@@ -6151,12 +6165,88 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ─── OCR LOADING OVERLAY ─── */}
+      {/* ─── ELEGIR: TOMAR FOTO / SUBIR FOTO ─── */}
+      <AnimatePresence>
+        {showPhotoChoice && (
+          <motion.div
+            className="premium-overlay"
+            onClick={() => setShowPhotoChoice(false)}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="premium-modal photo-choice-modal"
+              onClick={e => e.stopPropagation()}
+              initial={{ opacity: 0, y: 20, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 26 }}
+            >
+              <button
+                className="cm-close"
+                aria-label="Cerrar"
+                onClick={() => setShowPhotoChoice(false)}
+              >
+                <X size={16} />
+              </button>
+              <h2 className="premium-title">Cargar foto</h2>
+              <p className="premium-subtitle">Elige cómo quieres agregar el comprobante.</p>
+
+              <div className="photo-choice-grid">
+                <button
+                  className="photo-choice-btn"
+                  onClick={() => { setShowPhotoChoice(false); cameraRef.current?.click() }}
+                >
+                  <span className="photo-choice-ic">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                      <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                  </span>
+                  <span className="photo-choice-t">Tomar foto</span>
+                  <span className="photo-choice-s">Usa la cámara</span>
+                </button>
+
+                <button
+                  className="photo-choice-btn"
+                  onClick={() => { setShowPhotoChoice(false); photoRef.current?.click() }}
+                >
+                  <span className="photo-choice-ic">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                      <circle cx="8.5" cy="8.5" r="1.5"/>
+                      <path d="M21 15l-5-5L5 21"/>
+                    </svg>
+                  </span>
+                  <span className="photo-choice-t">Subir foto</span>
+                  <span className="photo-choice-s">Galería o archivos</span>
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── OCR LOADING OVERLAY — animación de análisis ─── */}
       {ocrLoading && (
         <div className="cm-overlay" style={{ pointerEvents: 'auto' }}>
-          <div className="loading-msg">
-            <div className="loading-spinner" />
-            <div className="loading-text">Procesando con OCR…</div>
+          <div className="ocr-scan">
+            <div className="ocr-scan-frame">
+              <span className="ocr-scan-corner tl" />
+              <span className="ocr-scan-corner tr" />
+              <span className="ocr-scan-corner bl" />
+              <span className="ocr-scan-corner br" />
+              <svg className="ocr-scan-doc" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="8" y1="13" x2="16" y2="13"/>
+                <line x1="8" y1="17" x2="13" y2="17"/>
+              </svg>
+              <span className="ocr-scan-line" />
+            </div>
+            <div className="ocr-scan-text">Analizando foto…</div>
+            <div className="ocr-scan-sub">Extrayendo datos con OCR</div>
           </div>
         </div>
       )}
