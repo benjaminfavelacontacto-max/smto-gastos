@@ -1488,6 +1488,119 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
 }
 .tour-btn-primary:hover { filter: brightness(1.07); transform: translateY(-1px); }
 
+/* ═══════════════════════════════════════════
+   GUÍA CLARA — modal-carrusel "Cómo descargar tu estado de cuenta"
+═══════════════════════════════════════════ */
+.clg-overlay {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  animation: overlayFadeIn 0.25s ease;
+}
+.clg-modal {
+  position: relative;
+  width: 100%; max-width: 560px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 26px 26px 20px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(22, 26, 36, 0.99), rgba(15, 18, 26, 0.99));
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,0.75), 0 0 44px -14px rgba(89,211,155,0.35);
+  font-family: 'Inter', sans-serif;
+  color: #E8ECF4;
+  animation: modalSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.clg-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.55);
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s;
+}
+.clg-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
+
+.clg-head { margin-bottom: 16px; padding-right: 34px; }
+.clg-badge {
+  display: inline-block;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  color: #59D39B;
+  background: rgba(89, 211, 155, 0.12);
+  border: 1px solid rgba(89, 211, 155, 0.28);
+  border-radius: 999px;
+  padding: 3px 10px;
+  margin-bottom: 8px;
+}
+.clg-title { font-size: 19px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+
+.clg-figure { min-height: 120px; margin-bottom: 16px; }
+.clg-figure-inner { display: flex; flex-direction: column; }
+.clg-shot {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
+  margin-bottom: 16px;
+  display: block;
+}
+.clg-step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.clg-step-ic {
+  width: 34px; height: 34px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  border-radius: 10px;
+  background: rgba(89, 211, 155, 0.14);
+}
+.clg-step-title { font-size: 15.5px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.clg-body { font-size: 13.5px; line-height: 1.6; color: rgba(255,255,255,0.7); margin: 0; }
+.clg-body b { color: rgba(255,255,255,0.92); font-weight: 600; }
+.clg-warn {
+  display: inline;
+  color: #f5b338;
+  font-weight: 500;
+}
+
+.clg-dots { display: flex; gap: 6px; justify-content: center; margin: 18px 0 14px; }
+.clg-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255,255,255,0.18);
+  cursor: pointer;
+  transition: background 0.18s, width 0.18s;
+}
+.clg-dot.active { width: 20px; border-radius: 4px; background: #59D39B; }
+
+.clg-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.clg-counter { font-size: 12px; color: rgba(255,255,255,0.45); font-variant-numeric: tabular-nums; }
+.clg-actions-btns { display: flex; gap: 8px; }
+.clg-btn-ghost, .clg-btn-primary {
+  padding: 9px 18px;
+  border-radius: 9px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s;
+  font-family: inherit;
+}
+.clg-btn-ghost {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.8);
+}
+.clg-btn-ghost:hover { background: rgba(255,255,255,0.10); }
+.clg-btn-primary {
+  background: #59D39B;
+  border: none;
+  color: #062015;
+  box-shadow: 0 4px 14px rgba(89,211,155,0.30);
+}
+.clg-btn-primary:hover { filter: brightness(1.07); transform: translateY(-1px); }
+
 /* Small brand-green hint shown under the Monto USD input when validarBanco
    detected a foreign-currency tip from the bank-row delta. */
 .propina-extranjera-hint {

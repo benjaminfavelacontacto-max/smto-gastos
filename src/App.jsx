@@ -1612,6 +1612,183 @@ function GuideTour({ step, setStep }) {
 }
 
 /* ═══════════════════════════════════════════════════
+   GUÍA "CÓMO DESCARGAR TU ESTADO DE CUENTA DE CLARA"
+   Modal-carrusel paso a paso (imagen + texto) que abre un botón
+   junto a "Validar Banco". Las capturas viven en public/clara-guia/
+   y se cargan por ruta; si falta alguna, el paso muestra solo texto.
+═══════════════════════════════════════════════════ */
+
+const CLARA_GUIDE_STEPS = [
+  {
+    img: '/clara-guia/paso1.png',
+    icon: '🌐',
+    title: 'Paso 1 · Entra a Clara',
+    body: (
+      <>
+        Abre tu navegador y entra a <b>app.clara.cc</b>. También puedes ir a{' '}
+        <b>clara.com</b> y dar clic en <b>"Acceso Clientes"</b> (arriba a la derecha).
+      </>
+    ),
+  },
+  {
+    img: '/clara-guia/paso2.png',
+    icon: '🔑',
+    title: 'Paso 2 · Inicia sesión',
+    body: (
+      <>
+        En <b>"Ingresa a Clara"</b>, escribe tu <b>correo corporativo</b>{' '}
+        (ej. nombre@smto.mx) y da clic en <b>Continuar</b>. También puedes usar{' '}
+        <b>"Continuar con Google"</b> y elegir tu cuenta de Gmail, o entrar con tu{' '}
+        <b>app de autenticador</b>.
+      </>
+    ),
+  },
+  {
+    img: '/clara-guia/paso3.png',
+    icon: '📄',
+    title: 'Paso 3 · Abre "Movimientos"',
+    body: (
+      <>
+        En el menú de la izquierda, ve a <b>Cuenta → Movimientos</b>. Ahí aparecen
+        todos los cargos de las tarjetas.
+      </>
+    ),
+  },
+  {
+    img: '/clara-guia/paso4.png',
+    icon: '📅',
+    title: 'Paso 4 · Filtra por el periodo del reporte',
+    body: (
+      <>
+        Da clic en <b>"Añadir filtro" → "Fechas"</b> y elige{' '}
+        <b>"Fechas personalizadas"</b>. Pon la <b>Fecha inicial</b> y la{' '}
+        <b>Fecha final</b> del periodo de tu reporte (ej. 01/06/2026 → 30/06/2026).
+        También puedes usar el atajo <b>"Estado de cuenta actual"</b>.
+      </>
+    ),
+  },
+  {
+    img: '/clara-guia/paso5.png',
+    icon: '⬇️',
+    title: 'Paso 5 · Descarga el CSV',
+    body: (
+      <>
+        Da clic en el botón azul <b>"Descargar"</b> (arriba a la derecha) y elige{' '}
+        <b>".CSV — Solo datos de transacciones"</b>.{' '}
+        <span className="clg-warn">
+          Elige el <b>.CSV normal</b>, NO el ".CSV Enriquecido (Pro)".
+        </span>{' '}
+        Ese archivo es el que subes en <b>"Validar Banco"</b> aquí en la app.
+      </>
+    ),
+  },
+]
+
+// Imagen de un paso: si la captura aún no existe en public/clara-guia/,
+// se oculta sola (onError) y el paso queda solo con el texto.
+function ClaraStepImage({ src, alt }) {
+  const [broken, setBroken] = useState(false)
+  if (broken) return null
+  return (
+    <img
+      className="clg-shot"
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onError={() => setBroken(true)}
+    />
+  )
+}
+
+function ClaraGuideModal({ open, onClose }) {
+  const [step, setStep] = useState(0)
+  const total = CLARA_GUIDE_STEPS.length
+
+  // Reinicia al primer paso cada vez que se abre.
+  useEffect(() => { if (open) setStep(0) }, [open])
+
+  // Teclado: Esc cierra, flechas navegan.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowRight') setStep(s => Math.min(s + 1, total - 1))
+      else if (e.key === 'ArrowLeft') setStep(s => Math.max(s - 1, 0))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose, total])
+
+  if (!open) return null
+
+  const current = CLARA_GUIDE_STEPS[step]
+  const isFirst = step === 0
+  const isLast = step === total - 1
+
+  return (
+    <div className="clg-overlay" onClick={onClose}>
+      <div className="clg-modal" onClick={e => e.stopPropagation()}>
+        <button className="clg-close" aria-label="Cerrar" onClick={onClose}>
+          <X size={18} />
+        </button>
+
+        <div className="clg-head">
+          <span className="clg-badge">Guía · Clara</span>
+          <h2 className="clg-title">Cómo descargar tu estado de cuenta</h2>
+        </div>
+
+        <div className="clg-figure">
+          <motion.div
+            key={step}
+            initial={{ opacity: 0, x: 16 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 30 }}
+            className="clg-figure-inner"
+          >
+            <ClaraStepImage src={current.img} alt={current.title} />
+            <div className="clg-step-head">
+              <span className="clg-step-ic">{current.icon}</span>
+              <h3 className="clg-step-title">{current.title}</h3>
+            </div>
+            <p className="clg-body">{current.body}</p>
+          </motion.div>
+        </div>
+
+        <div className="clg-dots">
+          {CLARA_GUIDE_STEPS.map((_, i) => (
+            <span
+              key={i}
+              className={`clg-dot${i === step ? ' active' : ''}`}
+              onClick={() => setStep(i)}
+            />
+          ))}
+        </div>
+
+        <div className="clg-actions">
+          <span className="clg-counter">{step + 1} / {total}</span>
+          <div className="clg-actions-btns">
+            {!isFirst && (
+              <button className="clg-btn-ghost" onClick={() => setStep(s => s - 1)}>
+                Anterior
+              </button>
+            )}
+            {isLast ? (
+              <button className="clg-btn-primary" onClick={onClose}>
+                Entendido
+              </button>
+            ) : (
+              <button className="clg-btn-primary" onClick={() => setStep(s => s + 1)}>
+                Siguiente
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    COMPONENTE: CELDA NUMÉRICA EDITABLE
    Mantiene un "draft" (texto crudo) mientras el input tiene
    foco: muestra exactamente lo que se teclea, sin reformatear
@@ -2928,6 +3105,8 @@ export default function App() {
   const [showPhotoChoice, setShowPhotoChoice] = useState(false)
   // Recorrido guiado "Cómo utilizar": null = apagado, 0..n = paso activo.
   const [tourStep, setTourStep] = useState(null)
+  // Guía "Cómo descargar tu estado de cuenta de Clara" (modal-carrusel).
+  const [showClaraGuide, setShowClaraGuide] = useState(false)
   const [carpetaSuccess, setCarpetaSuccess] = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
@@ -5613,7 +5792,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.71</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.72</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5689,6 +5868,7 @@ export default function App() {
           />
           <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
           <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          <PremiumButton title="Cómo descargar estado de cuenta" icon="📄" variant="ghost" onClick={() => setShowClaraGuide(true)} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
               title="Cotejar con Saldos"
@@ -6410,6 +6590,7 @@ export default function App() {
 
       {/* ─── RECORRIDO GUIADO "Cómo utilizar" ─── */}
       <GuideTour step={tourStep} setStep={setTourStep} />
+      <ClaraGuideModal open={showClaraGuide} onClose={() => setShowClaraGuide(false)} />
 
       {/* ─── INLINE TOAST ─── */}
       <AnimatePresence>
