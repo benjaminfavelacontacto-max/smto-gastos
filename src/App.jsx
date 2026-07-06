@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect } from 'react'
+import { useState, useRef, useMemo, useEffect, useCallback, memo } from 'react'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -1507,7 +1507,14 @@ function NumCell({ g, upd, field, prefix, suffix, format = true, compact = false
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-function GastoRow({ g, upd, openPDF, onDelete, tiposList, isSpecial }) {
+const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial }) {
+  // Callbacks bound to this row's id. useCallback keeps their identity stable
+  // across the parent's re-renders (update/remove are themselves stable), so
+  // React.memo above can skip re-rendering every OTHER row on each keystroke —
+  // only the edited row reconciles, which is what keeps typing/deleting fluido.
+  const upd = useCallback((field, val) => update(g.id, field, val), [update, g.id])
+  const onDelete = useCallback(() => remove(g.id), [remove, g.id])
+
   // Display ↔ storage: app-wide formatDateDisplay/parseDateDisplay handle
   // the DD-MM-YYYY ↔ YYYY-MM-DD round-trip.
   const dateDisplay  = formatDateDisplay(g.fechaFac)
@@ -1774,7 +1781,7 @@ function GastoRow({ g, upd, openPDF, onDelete, tiposList, isSpecial }) {
       </td>
     </tr>
   )
-}
+})
 
 /* ═══════════════════════════════════════════════════
    COMPONENTE: MODAL DE CONCILIACIÓN (glass + framer-motion)
@@ -2987,7 +2994,11 @@ export default function App() {
   }
 
   // ── Actualizar campo de un gasto (con recálculo de propina) ──
-  const update = (id, field, value) =>
+  // useCallback con deps vacías → identidad estable entre renders. Sólo usa
+  // setLista (con updater funcional, sin cerrar sobre `lista`), así que no hay
+  // closure vieja. Estable permite que React.memo en GastoRow evite re-render
+  // de las demás filas al teclear.
+  const update = useCallback((id, field, value) =>
     setLista(prev => prev.map(g => {
       if (g.id !== id) return g
       const u = { ...g, [field]: value }
@@ -3000,7 +3011,11 @@ export default function App() {
       if (field === 'retencionISR') u.retenciones = value + (u.retencionIVA || 0)
       if (field === 'retencionIVA') u.retenciones = value + (u.retencionISR || 0)
       return u
-    }))
+    })), [])
+
+  // Eliminar un gasto por id — estable para no romper la memoización de filas.
+  const removeGasto = useCallback(id =>
+    setLista(prev => prev.filter(x => x.id !== id)), [])
 
   // ── Cargar carpeta (XMLs + PDFs) ──
   // Shared file-processing pipeline — used by folder picker and drag/drop.
@@ -5425,26 +5440,28 @@ export default function App() {
   }
 
   // ── Abrir PDF en nueva pestaña ──
-  const openPDF = pdfFile => {
+  // Estable (deps vacías, usa setModal directo) para preservar la memoización
+  // de GastoRow — así abrir un PDF no fuerza el re-render de toda la tabla.
+  const openPDF = useCallback(pdfFile => {
     if (!pdfFile) return
     try {
       const url = URL.createObjectURL(pdfFile)
       const win = window.open(url, '_blank')
-      if (!win) showModal({
+      if (!win) setModal({
         type: 'warning',
         title: 'No se pudo abrir el PDF',
         subtitle: 'Verifica que el navegador permita ventanas emergentes para este sitio.',
         primaryLabel: 'Entendido',
       })
     } catch (err) {
-      showModal({
+      setModal({
         type: 'error',
         title: 'Error al abrir el PDF',
         subtitle: err && err.message ? err.message : String(err),
         primaryLabel: 'Entendido',
       })
     }
-  }
+  }, [])
 
   /* ── RENDER ── */
   return (
@@ -5464,7 +5481,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.67</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.68</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5765,8 +5782,8 @@ export default function App() {
                 <GastoRow
                   key={g.id}
                   g={g}
-                  upd={(field, val) => update(g.id, field, val)}
-                  onDelete={() => setLista(prev => prev.filter(x => x.id !== g.id))}
+                  update={update}
+                  remove={removeGasto}
                   openPDF={openPDF}
                   tiposList={tiposList}
                   isSpecial={esColaboradorEspecial}
