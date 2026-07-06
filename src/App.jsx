@@ -5812,14 +5812,25 @@ export default function App() {
             </button>
           )}
         </div>
-        <button className="guide-btn" onClick={() => setTourStep(0)} title="Recorrido paso a paso">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          Cómo utilizar
-        </button>
+        <div className="guide-btn-group">
+          <button className="guide-btn guide-btn-clara" onClick={() => setShowClaraGuide(true)} title="Manual para descargar el estado de cuenta de Clara">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            Manual estado de cuenta Clara
+          </button>
+          <button className="guide-btn" onClick={() => setTourStep(0)} title="Recorrido paso a paso">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            Cómo utilizar
+          </button>
+        </div>
       </div>
 
       <div className="divider" />
@@ -5868,7 +5879,6 @@ export default function App() {
           />
           <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
           <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
-          <PremiumButton title="Cómo descargar estado de cuenta" icon="📄" variant="ghost" onClick={() => setShowClaraGuide(true)} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
               title="Cotejar con Saldos"

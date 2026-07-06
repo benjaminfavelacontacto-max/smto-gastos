@@ -1361,10 +1361,16 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
    RECORRIDO GUIADO — botón + spotlight + popover
 ═══════════════════════════════════════════ */
 
-/* Botón "Cómo utilizar" en el header (empujado a la derecha). */
-.guide-btn {
+/* Grupo "Manual estado de cuenta Clara" + "Cómo utilizar" (empujado a la derecha). */
+.guide-btn-group {
   margin-left: auto;
   align-self: flex-start;
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Botón "Cómo utilizar" en el header. */
+.guide-btn {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 8px 14px;
   border-radius: 10px;
@@ -1377,11 +1383,24 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   cursor: pointer;
   transition: background 0.18s, border-color 0.18s, transform 0.15s;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .guide-btn:hover {
   background: rgba(89, 211, 155, 0.18);
   border-color: rgba(89, 211, 155, 0.5);
   transform: translateY(-1px);
+}
+
+/* Variante "Manual estado de cuenta Clara" — mismo molde, acento neutro para
+   que "Cómo utilizar" (verde marca) siga siendo el CTA principal. */
+.guide-btn-clara {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.75);
+}
+.guide-btn-clara:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 /* Raíz del tour — capa por encima de todo salvo modales críticos. */
