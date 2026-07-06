@@ -1478,7 +1478,7 @@ const TOUR_STEPS = [
     targetId: 'tour-zip',
     icon: '📦',
     title: 'Paso 3 · Exportar a ZIP',
-    body: 'Descarga el ZIP con tus facturas renombradas y el archivo de Excel. Ese Excel es el que debes compartir al correo de Víctor.',
+    body: 'Descarga el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor.',
   },
 ]
 
