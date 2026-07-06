@@ -1357,6 +1357,137 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   margin-top: -6px;
 }
 
+/* ═══════════════════════════════════════════
+   RECORRIDO GUIADO — botón + spotlight + popover
+═══════════════════════════════════════════ */
+
+/* Botón "Cómo utilizar" en el header (empujado a la derecha). */
+.guide-btn {
+  margin-left: auto;
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: rgba(89, 211, 155, 0.10);
+  border: 1px solid rgba(89, 211, 155, 0.30);
+  color: #59D39B;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, transform 0.15s;
+  flex-shrink: 0;
+}
+.guide-btn:hover {
+  background: rgba(89, 211, 155, 0.18);
+  border-color: rgba(89, 211, 155, 0.5);
+  transform: translateY(-1px);
+}
+
+/* Raíz del tour — capa por encima de todo salvo modales críticos. */
+.tour-root { position: fixed; inset: 0; z-index: 1400; }
+
+/* Backdrop transparente que captura clics fuera del popover. El oscurecido
+   visible lo aporta la sombra del spotlight, no este backdrop. */
+.tour-backdrop { position: absolute; inset: 0; pointer-events: auto; }
+
+/* Spotlight: la box-shadow gigante oscurece TODO menos el rectángulo del
+   botón resaltado; el anillo verde + glow lo enmarcan. */
+.tour-spotlight {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 9999px rgba(6, 10, 18, 0.74),
+    0 0 0 2px #59D39B,
+    0 0 22px 4px rgba(89, 211, 155, 0.55);
+  pointer-events: none;
+  transition: top 0.35s cubic-bezier(0.16,1,0.3,1),
+              left 0.35s cubic-bezier(0.16,1,0.3,1),
+              width 0.35s cubic-bezier(0.16,1,0.3,1),
+              height 0.35s cubic-bezier(0.16,1,0.3,1);
+}
+
+/* Popover con el paso. */
+.tour-pop {
+  position: fixed;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  padding: 20px 20px 16px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(22, 26, 36, 0.98), rgba(15, 18, 26, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 30px 70px -20px rgba(0,0,0,0.7), 0 0 40px -12px rgba(89,211,155,0.35);
+  font-family: 'Inter', sans-serif;
+  color: #E8ECF4;
+}
+/* Flechita que apunta al botón. */
+.tour-pop::before {
+  content: '';
+  position: absolute;
+  left: 50%; transform: translateX(-50%) rotate(45deg);
+  width: 14px; height: 14px;
+  background: rgba(22, 26, 36, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+.tour-pop-below::before { top: -8px; border-right: none; border-bottom: none; }
+.tour-pop-above::before { bottom: -8px; border-left: none; border-top: none; }
+
+.tour-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.07);
+  color: rgba(255,255,255,0.55);
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s;
+}
+.tour-close:hover { background: rgba(255,255,255,0.11); color: #fff; }
+
+.tour-pop-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding-right: 28px; }
+.tour-pop-ic {
+  width: 34px; height: 34px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  border-radius: 10px;
+  background: rgba(89, 211, 155, 0.14);
+}
+.tour-pop-title { font-size: 15.5px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.tour-pop-body { font-size: 13px; line-height: 1.55; color: rgba(255,255,255,0.62); margin: 0 0 14px; }
+
+.tour-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 14px; }
+.tour-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255,255,255,0.18);
+  cursor: pointer;
+  transition: background 0.18s, width 0.18s;
+}
+.tour-dot.active { width: 20px; border-radius: 4px; background: #59D39B; }
+
+.tour-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.tour-btn-ghost, .tour-btn-primary {
+  padding: 9px 16px;
+  border-radius: 9px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s;
+  font-family: inherit;
+}
+.tour-btn-ghost {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.8);
+}
+.tour-btn-ghost:hover { background: rgba(255,255,255,0.10); }
+.tour-btn-primary {
+  background: #59D39B;
+  border: none;
+  color: #062015;
+  box-shadow: 0 4px 14px rgba(89,211,155,0.30);
+}
+.tour-btn-primary:hover { filter: brightness(1.07); transform: translateY(-1px); }
+
 /* Small brand-green hint shown under the Monto USD input when validarBanco
    detected a foreign-currency tip from the bank-row delta. */
 .propina-extranjera-hint {

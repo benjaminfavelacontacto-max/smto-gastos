@@ -1442,9 +1442,10 @@ function linkPdfsExclusive(gastos, pdfFiles) {
    COMPONENTE: BOTÓN PREMIUM
 ═══════════════════════════════════════════════════ */
 
-function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, onClick }) {
+function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, onClick, id }) {
   return (
     <button
+      id={id}
       className={`btn-premium ${variant}${isDisabled ? ' disabled' : ''}`}
       onClick={isDisabled ? undefined : onClick}
       disabled={isDisabled}
@@ -1452,6 +1453,161 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
       <span className="btn-icon">{icon}</span>
       {title}
     </button>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
+   RECORRIDO GUIADO — "Cómo utilizar"
+   Spotlight sobre cada botón clave + popover con el paso.
+═══════════════════════════════════════════════════ */
+
+const TOUR_STEPS = [
+  {
+    targetId: 'tour-carpeta',
+    icon: '📁',
+    title: 'Paso 1 · Cargar Carpeta',
+    body: 'Empieza aquí. Selecciona la carpeta que contiene tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla.',
+  },
+  {
+    targetId: 'tour-banco',
+    icon: '🏦',
+    title: 'Paso 2 · Validar Banco',
+    body: 'Antes, descarga el estado de cuenta de Clara del periodo de tu reporte. Luego súbelo aquí: la app concilia cada gasto con su cargo en el banco y detecta propinas.',
+  },
+  {
+    targetId: 'tour-zip',
+    icon: '📦',
+    title: 'Paso 3 · Exportar a ZIP',
+    body: 'Descarga el ZIP con tus facturas renombradas y el archivo de Excel. Ese Excel es el que debes compartir al correo de Víctor.',
+  },
+]
+
+function GuideTour({ step, setStep }) {
+  const [rect, setRect] = useState(null)
+  const total = TOUR_STEPS.length
+  const current = step != null ? TOUR_STEPS[step] : null
+
+  // Mide el botón objetivo (y re-mide en resize/scroll) para posicionar el
+  // spotlight y el popover. getBoundingClientRect es relativo al viewport,
+  // que es justo lo que necesita position:fixed.
+  useEffect(() => {
+    if (!current) return
+    const measure = () => {
+      const el = document.getElementById(current.targetId)
+      if (!el) { setRect(null); return }
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+      const r = el.getBoundingClientRect()
+      setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
+    }
+  }, [current])
+
+  // Teclado: Esc cierra, flechas navegan.
+  useEffect(() => {
+    if (step == null) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') setStep(null)
+      else if (e.key === 'ArrowRight') setStep(s => Math.min((s ?? 0) + 1, total - 1))
+      else if (e.key === 'ArrowLeft') setStep(s => Math.max((s ?? 0) - 1, 0))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [step, setStep, total])
+
+  if (step == null || !current) return null
+
+  const PAD = 8
+  const spot = rect ? {
+    top: rect.top - PAD,
+    left: rect.left - PAD,
+    width: rect.width + PAD * 2,
+    height: rect.height + PAD * 2,
+  } : null
+
+  // El popover se coloca debajo del spotlight (los botones viven en la barra
+  // superior, así que siempre hay espacio abajo); si no, arriba. Clamp lateral.
+  const POP_W = 340
+  let popStyle = { top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }
+  let place = 'below'
+  if (spot) {
+    const belowSpace = window.innerHeight - (spot.top + spot.height)
+    place = belowSpace > 230 ? 'below' : 'above'
+    let left = spot.left + spot.width / 2 - POP_W / 2
+    left = Math.max(16, Math.min(left, window.innerWidth - POP_W - 16))
+    const top = place === 'below' ? spot.top + spot.height + 16 : spot.top - 16
+    popStyle = place === 'below'
+      ? { top, left, transform: 'none' }
+      : { top, left, transform: 'translateY(-100%)' }
+  }
+
+  const isLast = step === total - 1
+  const isFirst = step === 0
+
+  return (
+    <div className="tour-root">
+      {/* Backdrop que bloquea la interacción con el resto de la app. */}
+      <div className="tour-backdrop" />
+
+      {/* Spotlight: la sombra gigante crea el oscurecido con un "hueco". */}
+      {spot && (
+        <div
+          className="tour-spotlight"
+          style={{ top: spot.top, left: spot.left, width: spot.width, height: spot.height }}
+        />
+      )}
+
+      {/* Popover con la explicación del paso. */}
+      <motion.div
+        key={step}
+        className={`tour-pop tour-pop-${place}`}
+        style={popStyle}
+        initial={{ opacity: 0, y: place === 'below' ? -8 : 8, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+      >
+        <button className="tour-close" aria-label="Cerrar" onClick={() => setStep(null)}>
+          <X size={16} />
+        </button>
+        <div className="tour-pop-head">
+          <span className="tour-pop-ic">{current.icon}</span>
+          <h3 className="tour-pop-title">{current.title}</h3>
+        </div>
+        <p className="tour-pop-body">{current.body}</p>
+
+        <div className="tour-dots">
+          {TOUR_STEPS.map((_, i) => (
+            <span
+              key={i}
+              className={`tour-dot${i === step ? ' active' : ''}`}
+              onClick={() => setStep(i)}
+            />
+          ))}
+        </div>
+
+        <div className="tour-actions">
+          {!isFirst && (
+            <button className="tour-btn-ghost" onClick={() => setStep(s => s - 1)}>
+              Anterior
+            </button>
+          )}
+          {isLast ? (
+            <button className="tour-btn-primary" onClick={() => setStep(null)}>
+              Entendido
+            </button>
+          ) : (
+            <button className="tour-btn-primary" onClick={() => setStep(s => s + 1)}>
+              Siguiente
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </div>
   )
 }
 
@@ -2770,6 +2926,8 @@ export default function App() {
   // capture="environment" abre la cámara directo, así que ofrecemos elegir
   // entre tomar foto (cámara) o subir una existente (galería/archivos).
   const [showPhotoChoice, setShowPhotoChoice] = useState(false)
+  // Recorrido guiado "Cómo utilizar": null = apagado, 0..n = paso activo.
+  const [tourStep, setTourStep] = useState(null)
   const [carpetaSuccess, setCarpetaSuccess] = useState(false)
   const [loading,       setLoading]       = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
@@ -5481,7 +5639,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.68</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.69</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5501,6 +5659,14 @@ export default function App() {
             </button>
           )}
         </div>
+        <button className="guide-btn" onClick={() => setTourStep(0)} title="Recorrido paso a paso">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          Cómo utilizar
+        </button>
       </div>
 
       <div className="divider" />
@@ -5533,6 +5699,7 @@ export default function App() {
             onChange={handleImportExcel}
           />
           <PremiumButton
+            id="tour-carpeta"
             title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
             variant={carpetaSuccess ? 'success' : 'primary'}
             onClick={() => folderRef.current?.click()}
@@ -5547,7 +5714,7 @@ export default function App() {
             )}
           />
           <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
-          <PremiumButton title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
               title="Cotejar con Saldos"
@@ -5600,7 +5767,7 @@ export default function App() {
         <div className="action-group">
           <PremiumButton title="Copiar a Excel"  icon="📋" variant="copy"    isDisabled={!lista.length} onClick={copiar} />
           <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
-          <PremiumButton title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
+          <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
         </div>
       </div>
 
@@ -6267,6 +6434,9 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ─── RECORRIDO GUIADO "Cómo utilizar" ─── */}
+      <GuideTour step={tourStep} setStep={setTourStep} />
 
       {/* ─── INLINE TOAST ─── */}
       <AnimatePresence>
