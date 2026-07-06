@@ -4706,32 +4706,6 @@ export default function App() {
   }
 
   // ── Copiar a portapapeles (TSV para Excel) ──
-  const copiar = () => {
-    const hdr = 'RFC PROVEEDOR\tPROVEEDOR\tNO. DE FACTURA\tFECHA FAC.\tCONCEPTO\tIMPORTE (MXP)\tIVA\tISR\tRET. ISR\tRET. IVA\tRET/ ISR IVA\tTOTAL CFDI\tGastos en USD\tTipo de Cambio\tTotal Checking\tFORMA DE PAGO\tFECHA DE COBRO\n'
-    const rows = lista.flatMap(g => {
-      const fac   = formatDateDisplay(g.fechaFac)
-      const cobro = formatDateDisplay(g.fechaCobro)
-      const r  = `${g.rfc}\t${g.proveedor.replace(/\t/g,' ')}\t${g.noFactura}\t${fac}\t${g.concepto.replace(/\t/g,' ')}\t${g.importe.toFixed(2)}\t${g.iva.toFixed(2)}\t${(g.isrTrasladado||0).toFixed(2)}\t${(g.retencionISR||0).toFixed(2)}\t${(g.retencionIVA||0).toFixed(2)}\t${g.retenciones.toFixed(2)}\t${g.totalCFDI.toFixed(2)}\t${(g.montoUSD||0).toFixed(2)}\t${(g.tipoCambio||0).toFixed(2)}\t\t${g.formaPago}\t${cobro}\n`
-      const p  = g.montoPropina > 0
-        ? `\t${g.proveedor} - PROPINA\t\t${fac}\tPROPINA\t${g.montoPropina.toFixed(2)}\t0.00\t0.00\t0.00\t0.00\t0.00\t${g.montoPropina.toFixed(2)}\t\t\t\t${g.formaPago}\t${cobro}\n`
-        : ''
-      return [r, p]
-    })
-    navigator.clipboard.writeText(hdr + rows.join(''))
-      .then(() => showModal({
-        type: 'success',
-        title: '¡Copiado al portapapeles!',
-        subtitle: 'Ve a tu Excel, haz clic en la celda donde quieres los datos y presiona Ctrl+V (o Cmd+V en Mac) para pegar.',
-        primaryLabel: 'OK',
-      }))
-      .catch(() => showModal({
-        type: 'error',
-        title: 'No se pudo copiar',
-        subtitle: 'Verifica los permisos del navegador.',
-        primaryLabel: 'Entendido',
-      }))
-  }
-
   // Canonical filename builder used by the ZIP export. Output shape:
   //   Proveedor Folio Tipo MM-DD-YY
   //   e.g. Aerocomidas 66901114763782 Consumo 03-20-26
@@ -5639,7 +5613,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.69</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.70</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -5765,7 +5739,6 @@ export default function App() {
           })()}
         </div>
         <div className="action-group">
-          <PremiumButton title="Copiar a Excel"  icon="📋" variant="copy"    isDisabled={!lista.length} onClick={copiar} />
           <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
           <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
         </div>
