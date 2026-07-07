@@ -481,8 +481,65 @@ const fetchConTimeout = async (url, opts = {}, ms = 90_000) => {
   }
 }
 
+// Instancia única del módulo wasm de libheif-js (ver index.html) — decodificar
+// es costoso, así que la promesa de inicialización se reutiliza entre fotos.
+let _libheifModPromise = null
+const getLibheifMod = () => {
+  if (!window.libheif) return null
+  if (!_libheifModPromise) _libheifModPromise = window.libheif()
+  return _libheifModPromise
+}
+
+// Decodifica un File HEIC/HEIF a un Blob JPEG usando libheif-js (wasm). Chrome
+// y Firefox no traen códec HEIC nativo (solo Safari, vía <canvas>), así que sin
+// esto las fotos de iPhone subidas desde esos navegadores fallaban en el OCR.
+const heicToJpegBlob = async (file) => {
+  const heifMod = await getLibheifMod()
+  const buf = new Uint8Array(await file.arrayBuffer())
+  const decoder = new heifMod.HeifDecoder()
+  const images = decoder.decode(buf)
+  if (!images || !images.length) throw new Error('HEIC sin imágenes decodificables')
+  const image = images[0]
+  const width = image.get_width()
+  const height = image.get_height()
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  const imageData = ctx.createImageData(width, height)
+  await new Promise((resolve, reject) => {
+    image.display(imageData, (displayData) => {
+      if (!displayData) return reject(new Error('HEIF processing error'))
+      resolve()
+    })
+  })
+  ctx.putImageData(imageData, 0, 0)
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+}
+
 const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
-  if (!file.type.startsWith('image/')) return file
+  const isHeic = /\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(file.type || '')
+  let sourceFile = file
+  if (isHeic && window.libheif) {
+    // Ruta principal (todos los navegadores): decodificamos el HEIC con
+    // libheif-js a un JPEG antes del resize. Si falla, NO tronamos: dejamos el
+    // archivo original y el <canvas> de abajo lo intenta (Safari sí lo lee) y,
+    // si tampoco puede, el img.onerror reporta un mensaje claro (no "undefined").
+    try {
+      const jpegBlob = await heicToJpegBlob(file)
+      if (!jpegBlob) throw new Error('conversión HEIC vacía')
+      sourceFile = new File(
+        [jpegBlob],
+        file.name.replace(/\.(heic|heif)$/i, '.jpg'),
+        { type: 'image/jpeg' }
+      )
+    } catch (err) {
+      console.warn('Conversión HEIC falló:', file.name, err)
+      sourceFile = file
+    }
+  } else if (!isHeic && !file.type.startsWith('image/')) {
+    return file
+  }
   return new Promise((resolve, reject) => {
     const img = new Image()
     const reader = new FileReader()
@@ -502,7 +559,7 @@ const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
           (blob) => {
             const compressed = new File(
               [blob],
-              file.name.replace(/\.(heic|heif|webp|png)$/i, '.jpg'),
+              sourceFile.name.replace(/\.(heic|heif|webp|png)$/i, '.jpg'),
               { type: 'image/jpeg' }
             )
             resolve(compressed)
@@ -511,11 +568,18 @@ const compressImage = async (file, maxWidth = 2000, quality = 0.85) => {
           quality
         )
       }
-      img.onerror = reject
+      // Rechazamos con un Error real (no el Event del handler) para que el
+      // modal muestre un mensaje útil y no "undefined". Un HEIC que llega aquí
+      // es porque libheif no cargó y el navegador no lo decodifica (Chrome/FF).
+      img.onerror = () => reject(new Error(
+        isHeic
+          ? 'No se pudo leer la foto HEIC en este navegador. Ábrela en Safari o convierte la foto a JPG antes de subirla.'
+          : 'No se pudo leer la imagen (formato no soportado o archivo dañado).'
+      ))
       img.src = e.target.result
     }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo de la foto.'))
+    reader.readAsDataURL(sourceFile)
   })
 }
 
@@ -4191,7 +4255,7 @@ export default function App() {
             showModal({
               type: 'error',
               title: 'Error de OCR',
-              subtitle: `${file.name}\n\n${err.message}`,
+              subtitle: `${file.name}\n\n${err && err.message ? err.message : String(err)}`,
               primaryLabel: 'Entendido',
             })
           }
@@ -5792,7 +5856,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.72</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.73</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6009,7 +6073,7 @@ export default function App() {
       <input
         ref={photoRef}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,.heic,.heif,application/pdf"
         multiple
         style={{ display: 'none' }}
         onChange={cargarFoto}
@@ -6018,7 +6082,7 @@ export default function App() {
       <input
         ref={cameraRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.heic,.heif"
         capture="environment"
         style={{ display: 'none' }}
         onChange={cargarFoto}

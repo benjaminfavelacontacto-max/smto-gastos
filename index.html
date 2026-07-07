@@ -21,6 +21,14 @@
           'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
       }
     </script>
+    <!-- libheif-js (CDN) — decodifica fotos HEIC/HEIF (formato nativo de iPhone)
+         en el navegador. Solo Safari decodifica HEIC de forma nativa vía
+         <canvas>; Chrome/Firefox no traen códec, así que sin esto las fotos de
+         iPhone subidas desde esos navegadores fallaban en el OCR. Se probó
+         heic2any (0.0.4) primero pero trae un libheif viejo que no soporta
+         HEIC recientes de iPhone (ERR_LIBHEIF format not supported); esta
+         versión (1.19.8, mantenida) sí los decodifica. Out-of-bundle. -->
+    <script src="https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js"></script>
   </head>
   <body>
     <div id="root"></div>
