@@ -120,7 +120,7 @@ export const TIPO_RULES = [
   ['OXXO GASCORDILLERAS', 'Gasolina'],
   ['OXXO GASTEQUEPEXPAN', 'Gasolina'],
   ['SERVICIO AUTOMOTRIZ', 'Manto Auto (Mantenimiento)'],
-  ['STARBUCKS SAN PEDRO', 'Gastos Rep (Representación)'],
+  ['STARBUCKS SAN PEDRO', 'Gastos Rep'],
   ['SUSCRIPCION MENSUAL', 'IT & SW'],
   ['TRASLADO AEROPUERTO', 'Taxi'],
   ['AEROVIAS DE MEXICO', 'Avión'],
@@ -150,7 +150,7 @@ export const TIPO_RULES = [
   ['LICENCIA DE USO', 'IT & SW'],
   ['OXXO GASCRUCERO', 'Gasolina'],
   ['REST LA COSECHA', 'Consumo Viáticos'],
-  ['STARBUCKS CITAD', 'Gastos Rep (Representación)'],
+  ['STARBUCKS CITAD', 'Gastos Rep'],
   ['TALLER MECANICO', 'Manto Auto (Mantenimiento)'],
   ['TARIFA DE VIAJE', 'Taxi'],
   ['ABC AEROLINEAS', 'Avión'],
@@ -158,8 +158,8 @@ export const TIPO_RULES = [
   ['CARLS JR STIVA', 'Consumo'],
   ['ESTACIONAMIENT', 'Estacionamiento'],
   ['GASNECTARMARIA', 'Gasolina'],
-  ['STARBUCKS CARR', 'Gastos Rep (Representación)'],
-  ['TACOS REYNALDO', 'Gastos Rep (Representación)'],
+  ['STARBUCKS CARR', 'Gastos Rep'],
+  ['TACOS REYNALDO', 'Gastos Rep'],
   ['TAR AEROLINEAS', 'Avión'],
   ['VUELA COMPANIA', 'Avión'],
   ['VUELA COMPAÑIA', 'Avión'],
@@ -173,9 +173,9 @@ export const TIPO_RULES = [
   ['REFACCIONARIA', 'Manto Auto (Mantenimiento)'],
   ['RENTA DE AUTO', 'Renta Auto'],
   ['REST FORJADOR', 'Consumo Viáticos'],
-  ['STARBUCKS EST', 'Gastos Rep (Representación)'],
-  ['STARBUCKS GDL', 'Gastos Rep (Representación)'],
-  ['STARBUCKS LAS', 'Gastos Rep (Representación)'],
+  ['STARBUCKS EST', 'Gastos Rep'],
+  ['STARBUCKS GDL', 'Gastos Rep'],
+  ['STARBUCKS LAS', 'Gastos Rep'],
   ['WYNDHAMGARDEN', 'Hotel'],
   ['AGUA POTABLE', 'Renta Oficina'],
   ['BEST WESTERN', 'Hotel'],
@@ -257,14 +257,14 @@ export const TIPO_RULES = [
   ['PAPELERIA', 'Papelería'],
   ['SAMS CLUB', 'Consumo'],
   ['STARBUCKS', 'Consumo'],
-  ['TACOS SAN', 'Gastos Rep (Representación)'],
+  ['TACOS SAN', 'Gastos Rep'],
   ['TOTALPLAY', 'IT & SW'],
   ['TST BEACH', 'Consumo'],
   ['UBER EATS', 'Consumo'],
   ['UNIFORMES', 'Uniformes'],
   ['AUTOZONE', 'Manto Auto (Mantenimiento)'],
   ['AVIACION', 'Avión'],
-  ['CAMPOMAR', 'Gastos Rep (Representación)'],
+  ['CAMPOMAR', 'Gastos Rep'],
   ['CHEDRAUI', 'Consumo'],
   ['ESTACION', 'Gasolina'],
   ['ESTAFETA', 'Envíos'],
@@ -293,14 +293,14 @@ export const TIPO_RULES = [
   ['HOSTING', 'IT & SW'],
   ['NETFLIX', 'IT & SW'],
   ['NEUFELD', 'Consumo'],
-  ['OXXO EL', 'Gastos Rep (Representación)'],
+  ['OXXO EL', 'Gastos Rep'],
   ['PARKING', 'Estacionamiento'],
   ['RECARGA', 'Casetas'],
   ['REDPACK', 'Envíos'],
   ['RENTING', 'Renta Auto'],
   ['SORIANA', 'Consumo'],
   ['SPOTIFY', 'IT & SW'],
-  ['TORTAAS', 'Gastos Rep (Representación)'],
+  ['TORTAAS', 'Gastos Rep'],
   ['VOLARIS', 'Avión'],
   ['WALMART', 'Consumo'],
   ['AIRBNB', 'Hotel'],
@@ -311,7 +311,7 @@ export const TIPO_RULES = [
   ['CAPUFE', 'Casetas'],
   ['CF SAN', 'Consumo'],
   ['CHILIS', 'Consumo'],
-  ['DENNYS', 'Gastos Rep (Representación)'],
+  ['DENNYS', 'Gastos Rep'],
   ['DQ LAS', 'Consumo'],
   ['GITHUB', 'IT & SW'],
   ['GOOGLE', 'IT & SW'],
@@ -392,9 +392,9 @@ const VENTAS_VARIANT = {
   'Gasolina': 'Gasolina Ventas Viáticos',
   'Herramientas': 'Herramientas Ventas',
   'Hotel': 'Hotel Ventas',
-  'Consumo': 'Gastos Rep (Representación)',
+  'Consumo': 'Gastos Rep',
   'Consumo Viáticos': 'Gastos Rep Viáticos',
-  'Taxi': 'Gastos Rep (Representación)',
+  'Taxi': 'Gastos Rep',
 }
 
 // Variantes para colaboradores NO-Ventas (Admin/Servicio). La gasolina siempre
@@ -439,7 +439,7 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
   // Cuando el concepto es "TARIFA" es la tarifa del viaje, no suscripción de software.
   if ((proveedor || '').toUpperCase().includes('FACTURIFY') &&
       (descripcion || '').toUpperCase().trim() === 'TARIFA') {
-    return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
+    return isVentas ? 'Gastos Rep' : 'Taxi'
   }
 
   // REFIEL → si la descripción empieza con "RENTA" es Automóvil; en cualquier
@@ -487,9 +487,9 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
   const descUpper = (descripcion || '').toUpperCase().trim()
   const isCorporate = CORPORATE_WORDS.some(w => provUpper.includes(w))
   if (descUpper === 'TARIFA' && !isCorporate) {
-    return isVentas ? 'Gastos Rep (Representación)' : 'Taxi'
+    return isVentas ? 'Gastos Rep' : 'Taxi'
   }
 
   // 4. Fallback
-  return isVentas ? 'Gastos Rep (Representación)' : 'Consumo Viáticos'
+  return isVentas ? 'Gastos Rep' : 'Consumo Viáticos'
 }
