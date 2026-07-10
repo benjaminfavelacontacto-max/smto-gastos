@@ -308,7 +308,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
         'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 11, 'N': 11, 'O': 18,
         'P': 15, 'Q': 22, 'R': 13, 'S': 13, 'T': 24,
-        'U': 14, 'V': 14, 'W': 14, 'X': 3, 'Y': 16,
+        'U': 14, 'V': 22, 'W': 14, 'X': 3, 'Y': 16,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -532,9 +532,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[8].height = 14
 
     # ═══ TABLE HEADER (row 9) — green text, mostly centered ═══
-    ws.row_dimensions[9].height = 28
+    # 34px cabe las 2 líneas del header FACTURADO "(incluye propinas)".
+    ws.row_dimensions[9].height = 34
 
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'ISR', 'ISH/IEPS', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO', 'DIFERENCIA']
+    # FACTURADO lleva un sub-rótulo "(incluye propinas)" en segunda línea para
+    # avisar que su total suma las propinas (así cuadra contra COBRADO).
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'ISR', 'ISH/IEPS', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO\n(incluye propinas)', 'DIFERENCIA']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -546,7 +549,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         cell.alignment = Alignment(
             horizontal='left' if is_left else 'center',
             vertical='center',
-            indent=2 if is_left else 0
+            indent=2 if is_left else 0,
+            wrap_text='\n' in h,  # FACTURADO usa 2 líneas
         )
         cell.fill = PatternFill(fill_type=None)
         # Top + bottom medium green on every header; left edge on B9 (first),
@@ -581,6 +585,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     )
 
     # ═══ DATA ROWS (row 10+) ═══
+    # Acumuladores para la banda de totales de las 3 columnas de conciliación.
+    # Se calculan en Python (no con fórmulas SUM) por la MISMA razón que las
+    # celdas por-renglón COBRADO/FACTURADO/DIFERENCIA se escriben como VALOR:
+    # así la fila de totales muestra el número correcto en CUALQUIER visor
+    # (Excel, Numbers, Quick Look, Google Sheets) sin depender del recálculo.
+    #  - total_cobrado_band   = Σ COBRADO (cargo real de la tarjeta, ya incluye tip)
+    #  - total_facturado_band = Σ (FACTURADO + propina) → para que cuadre vs COBRADO
+    #  - DIFERENCIA total      = total_cobrado_band − total_facturado_band
+    total_cobrado_band = 0.0
+    total_facturado_band = 0.0
     row = 10
     for idx, g in enumerate(gastos):
         ws.row_dimensions[row].height = 15
@@ -744,6 +758,13 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 cobrado = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
                 diff_num = round(cobrado - facturado - propina_actual, 2)
                 diferencia = diff_num
+            # Acumular para la banda de totales. FACTURADO suma la propina para
+            # que cuadre contra COBRADO (que ya la trae en el cargo de tarjeta).
+            # Los renglones "SIN CONCILIAR" suman su FACTURADO+propina pero NO su
+            # COBRADO (no hay cargo real) → la DIFERENCIA total delata el faltante.
+            total_facturado_band += facturado + propina_actual
+            if isinstance(cobrado, (int, float)):
+                total_cobrado_band += cobrado
         else:
             facturado = ''
             cobrado = ''
@@ -941,18 +962,48 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # FORMA PAGO (P), BANCO (Q), T/C (S), USUARIO (T), COBRADO (U),
-    # FACTURADO (V) y DIFERENCIA (W) en la banda de totales sólo llevan el
-    # fill negro (no son agregables o sólo aplican a Clara MXN Credito).
-    for c in (16, 17, 19, 20, 21, 22, 23):
+    # FORMA PAGO (P), BANCO (Q), T/C (S) y USUARIO (T) en la banda de totales
+    # sólo llevan el fill negro (no son agregables).
+    for c in (16, 17, 19, 20):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=SMTO_BLACK)
+
+    # ── Totales de conciliación: COBRADO (U), FACTURADO incl. propinas (V),
+    # DIFERENCIA (W) ── Se escriben como VALOR (no fórmula) por la misma razón
+    # que las celdas por-renglón: renderizan en cualquier visor sin recálculo.
+    total_diff_band = round(total_cobrado_band - total_facturado_band, 2)
+    band_totals = [
+        (21, round(total_cobrado_band, 2)),   # COBRADO
+        (22, round(total_facturado_band, 2)),  # FACTURADO (incluye propinas)
+    ]
+    for col, val in band_totals:
+        cell = ws.cell(row=row, column=col, value=val)
+        cell.number_format = '"$"#,##0.00'
+        cell.font = Font(name='Aptos', size=11, bold=True, color=WHITE)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
+
+    # DIFERENCIA total: color por signo (misma convención que la celda por
+    # renglón — negativo rojo, positivo verde). ±5¢ se considera cuadrado y va
+    # en blanco para no teñir de rojo un simple redondeo. Rojo claro para que
+    # sea legible sobre el fondo negro de la banda.
+    if total_diff_band < -0.05:
+        diff_color = 'F87171'
+    elif total_diff_band > 0.05:
+        diff_color = SMTO_GREEN
+    else:
+        diff_color = WHITE
+    dcell = ws.cell(row=row, column=23, value=total_diff_band)
+    dcell.number_format = '"$"#,##0.00'
+    dcell.font = Font(name='Aptos', size=11, bold=True, color=diff_color)
+    dcell.alignment = Alignment(horizontal='center', vertical='center')
+    dcell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v8.29'
+    ft.value = 'SMTO Engineering · v8.76'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
