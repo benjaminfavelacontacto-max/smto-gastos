@@ -450,8 +450,17 @@ class handler(BaseHTTPRequestHandler):
             payload = {
                 'model': GROQ_MODEL,
                 'temperature': 0,
-                'max_tokens': 1000,
+                'max_tokens': 2000,
                 'response_format': {'type': 'json_object'},
+                # qwen3.6-27b es un modelo con razonamiento. En modo JSON el
+                # reasoning_format por defecto ("raw", que mete <think>...</think>
+                # en el contenido) es INCOMPATIBLE y Groq devuelve 400
+                # json_validate_failed con failed_generation vacío. Apagamos el
+                # thinking: el OCR es extracción, no requiere cadena de
+                # pensamiento — más rápido y consume menos del rate limit free.
+                # 'hidden' es defensa extra para recibir SOLO el JSON final.
+                'reasoning_effort': 'none',
+                'reasoning_format': 'hidden',
                 'messages': [{
                     'role': 'user',
                     'content': [
