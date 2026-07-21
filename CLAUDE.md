@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.79
+Current version: v8.80
 
 ## Stack
 
@@ -103,6 +103,11 @@ rate limits.
 - Image (jpg/png/heic/webp/bmp/gif) → compressed client-side to max 2000px width @ 85% quality, then OCR with user confirmation
 - Image OCR receipts → original (compressed) image stored on the gasto as `imageDataURL`, then converted to a single-page PDF at ZIP-export time via jsPDF (loaded from CDN in `index.html`). The PDF filename follows the `buildFileName` convention.
 
+**Batch OCR + Groq TPM limit:** the free tier of `qwen/qwen3.6-27b` caps at **8000 tokens/min (TPM)**, and each OCR request is ~6000 tokens, so only ~1 receipt/min fits — a 14-image batch takes ~10 min. All OCR loops run **sequentially** (never `Promise.all` for vision calls) and share:
+- a progress indicator (`ocrProgress` state → both overlays show "N de M");
+- client-side pacing (`OCR_PACING_MS`, ~5s between requests) to avoid firing the batch as one burst;
+- the server's `Retry-After`-aware 429 retry in `ocr-ticket.py` (up to 5×), which is the precise rate-limit backoff — pacing is only a smoother. Failed files are reported to the user, not dropped silently. For real throughput, Groq's paid Dev Tier is the fix.
+
 ## Deploy workflow
 
 1. Claude Code edits files
@@ -115,7 +120,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.79
+- Current: v8.80
 
 ## Things to be careful about
 

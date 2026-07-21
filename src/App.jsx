@@ -468,6 +468,17 @@ const parseDateDisplay = (s) => {
 // la extracción de texto del server (CFDI normales, FNI ~45KB).
 const LARGE_PDF_BYTES = 600_000
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// Pausa entre facturas al procesar un LOTE con OCR. Groq (tier gratuito) limita
+// a 8000 tokens/min; disparar 14 facturas instantáneas de golpe hace que casi
+// todas choquen con el rate limit al mismo tiempo. Con una pausa breve entre
+// cada una repartimos las peticiones y bajamos las colisiones. OJO: el mecanismo
+// PRECISO sigue siendo el reintento del servidor (que respeta el Retry-After
+// real de Groq); esta pausa es solo un suavizador para no hacer ráfaga. El tope
+// duro es el TPM de Groq, así que un lote grande sigue tardando (ver Dev Tier).
+const OCR_PACING_MS = 5000
+
 // fetch con timeout (AbortController). Sin esto, una llamada OCR que se cuelga
 // (red lenta, Groq atorado) dejaría el spinner girando para siempre = sistema
 // trabado. Con timeout falla limpio, reintenta y/o se reporta al usuario.
@@ -3163,6 +3174,10 @@ export default function App() {
   const [importSummary, setImportSummary] = useState(null)
   const [dropSummary,   setDropSummary]   = useState(null)
   const [ocrLoading,    setOcrLoading]    = useState(false)
+  // Progreso del OCR por lote: null = no hay lote; {current, total} = "N de M".
+  // Lo lee el overlay para que el usuario vea avance en vez de un spinner mudo
+  // durante los minutos que tarda un lote grande (límite TPM de Groq gratuito).
+  const [ocrProgress,   setOcrProgress]   = useState(null)
   // Small chooser shown by the "Cargar Foto" button: on móvil el input con
   // capture="environment" abre la cámara directo, así que ofrecemos elegir
   // entre tomar foto (cámara) o subir una existente (galería/archivos).
@@ -3574,7 +3589,12 @@ export default function App() {
       setLoading(true)
       const results = []
       const failed = []
-      for (const file of selectedFiles) {
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i]
+        // Progreso "N de M" + pausa breve (salvo en la primera) para repartir las
+        // peticiones y no chocar todas a la vez con el rate limit de Groq.
+        setOcrProgress({ current: i + 1, total: selectedFiles.length })
+        if (i > 0) await sleep(OCR_PACING_MS)
         // Reintento: el OCR (Groq, tier gratuito) puede fallar de forma
         // transitoria por límite de tasa cuando se mandan varias facturas
         // seguidas, o por un JSON mal formado puntual. Antes el archivo se
@@ -3627,6 +3647,7 @@ export default function App() {
         }
       }
       setLoading(false)
+      setOcrProgress(null)
       return { results, failed }
     }
 
@@ -4069,7 +4090,10 @@ export default function App() {
 
     setOcrLoading(true)
     const newGastos = []
-    for (const file of files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      setOcrProgress({ current: i + 1, total: files.length })
+      if (i > 0) await sleep(OCR_PACING_MS)
       try {
         const isPdfSource = file.name.toLowerCase().endsWith('.pdf')
         const isLargePdf = isPdfSource && file.size > LARGE_PDF_BYTES
@@ -4106,6 +4130,7 @@ export default function App() {
       }
     }
     setOcrLoading(false)
+    setOcrProgress(null)
     if (newGastos.length) {
       setLista(prev => [...prev, ...newGastos])
       setToast(`✓ ${newGastos.length} ${newGastos.length === 1 ? 'foto procesada' : 'fotos procesadas'} con OCR`)
@@ -4205,7 +4230,10 @@ export default function App() {
       const continuarGrandes = userConfirmed ? await avisarPdfsGrandes(ocrFiles) : false
       if (userConfirmed && continuarGrandes) {
         setOcrLoading(true)
-        for (const file of ocrFiles) {
+        for (let i = 0; i < ocrFiles.length; i++) {
+          const file = ocrFiles[i]
+          setOcrProgress({ current: i + 1, total: ocrFiles.length })
+          if (i > 0) await sleep(OCR_PACING_MS)
           try {
             // compressImage re-encodes images to a ≤2000px-wide JPEG so
             // phone shots don't blow Vercel's 4.5 MB body cap. PDFs chicos
@@ -4261,6 +4289,7 @@ export default function App() {
           }
         }
         setOcrLoading(false)
+        setOcrProgress(null)
       }
     }
 
@@ -5856,7 +5885,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.79</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.80</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6100,7 +6129,11 @@ export default function App() {
         {loading ? (
           <div className="loading-msg">
             <div className="loading-spinner" />
-            <div className="loading-text">Procesando facturas XML…</div>
+            <div className="loading-text">
+              {ocrProgress
+                ? `Procesando factura ${ocrProgress.current} de ${ocrProgress.total}…`
+                : 'Procesando facturas XML…'}
+            </div>
           </div>
         ) : lista.length === 0 ? (
           <div
@@ -6656,7 +6689,11 @@ export default function App() {
               </svg>
               <span className="ocr-scan-line" />
             </div>
-            <div className="ocr-scan-text">Analizando foto…</div>
+            <div className="ocr-scan-text">
+              {ocrProgress && ocrProgress.total > 1
+                ? `Analizando ${ocrProgress.current} de ${ocrProgress.total}…`
+                : 'Analizando foto…'}
+            </div>
             <div className="ocr-scan-sub">Extrayendo datos con OCR</div>
           </div>
         </div>
