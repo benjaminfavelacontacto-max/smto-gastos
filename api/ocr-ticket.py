@@ -164,10 +164,14 @@ def _shrink_image(img):
     '''Reescala/recomprime una PIL.Image a JPEG <= MAX_IMG_BYTES.'''
     if img.mode not in ('RGB', 'L'):
         img = img.convert('RGB')
-    quality = 82
-    # Borde largo máx 1800px: legible para tickets y mantiene la imagen chica
-    # para que Groq responda rápido y use menos tokens (menos rate limit).
-    max_dim = 1800
+    # Calidad alta a propósito: el peso en bytes casi no importa aquí (Groq cobra
+    # tokens por DIMENSIONES de la imagen, no por bytes), así que subimos calidad
+    # para que el texto chico (código de autorización) siga legible al encoger.
+    quality = 88
+    # Borde largo máx 1200px. El tier gratuito de Groq limita a 8000 tokens/min
+    # (TPM) y una imagen de visión se cobra por área de píxeles: 1200px deja el
+    # request muy por debajo del tope y el ticket sigue siendo legible.
+    max_dim = 1200
     while True:
         w, h = img.size
         if max(w, h) > max_dim:
@@ -176,7 +180,7 @@ def _shrink_image(img):
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=quality)
         out = buf.getvalue()
-        if len(out) <= MAX_IMG_BYTES or (quality <= 45 and max_dim <= 1200):
+        if len(out) <= MAX_IMG_BYTES or (quality <= 45 and max_dim <= 800):
             return out
         # Aprieta calidad primero, luego dimensiones.
         if quality > 45:
@@ -368,13 +372,13 @@ def _to_image_data_url(base64_data, media_type):
     if media_type == 'application/pdf':
         doc = fitz.open(stream=raw, filetype='pdf')
         page = doc.load_page(0)
-        # Renderizamos apuntando a un borde largo de ~1600px (suficiente para
-        # leer texto de tickets) en vez de un zoom fijo. Así una página grande no
-        # genera un pixmap enorme: imagen más chica → Groq responde más rápido y
-        # consume menos tokens (menos rate limit). Cap a 2.0 para no agrandar
-        # tickets chiquitos de más.
+        # Renderizamos apuntando a un borde largo de ~1200px (suficiente para
+        # leer texto de tickets) en vez de un zoom fijo. En un modelo de visión
+        # los tokens se cobran por área de píxeles y el tier gratuito de Groq solo
+        # da 8000 tokens/min (TPM), así que una página grande NO debe generar un
+        # pixmap enorme. Cap a 2.0 para no agrandar tickets chiquitos de más.
         long_pt = max(page.rect.width, page.rect.height) or 1
-        zoom = min(2.0, max(1.0, 1600.0 / long_pt))
+        zoom = min(2.0, max(1.0, 1200.0 / long_pt))
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
         img = Image.open(io.BytesIO(pix.tobytes('png')))
         doc.close()
@@ -450,7 +454,9 @@ class handler(BaseHTTPRequestHandler):
             payload = {
                 'model': GROQ_MODEL,
                 'temperature': 0,
-                'max_tokens': 2000,
+                # 1000 basta de sobra para el JSON (~250 tokens) y reduce el total
+                # "Requested" que Groq cuenta contra el límite TPM de 8000/min.
+                'max_tokens': 1000,
                 'response_format': {'type': 'json_object'},
                 # qwen3.6-27b es un modelo con razonamiento. En modo JSON el
                 # reasoning_format por defecto ("raw", que mete <think>...</think>
