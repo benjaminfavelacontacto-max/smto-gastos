@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.73
+Current version: v8.77
 
 ## Stack
 
@@ -46,7 +46,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 
 ## Environment
 
-- `SMTO_GROQ_API_KEY` — set in Vercel env vars; used by api/ocr-ticket.py (free Groq vision model `meta-llama/llama-4-scout-17b-16e-instruct`). Name is SMTO-specific to avoid colliding with a shared `GROQ_API_KEY` from another project.
+- `SMTO_GROQ_API_KEY` — set in Vercel env vars; used by api/ocr-ticket.py (free Groq vision model `qwen/qwen3.6-27b`; the previous `meta-llama/llama-4-scout-17b-16e-instruct` was deprecated by Groq on 2026-07-17). Name is SMTO-specific to avoid colliding with a shared `GROQ_API_KEY` from another project.
 
 ## Features in production
 
@@ -115,7 +115,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.73
+- Current: v8.77
 
 ## Things to be careful about
 

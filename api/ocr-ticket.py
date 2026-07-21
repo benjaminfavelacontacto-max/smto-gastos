@@ -4,12 +4,16 @@ import urllib.request, urllib.error
 
 # Groq es 100% gratuito (capa free con límites de uso) y reemplaza a la API
 # de Anthropic para no generar costo al leer tickets/PDFs sin XML.
-# Modelo de visión vigente en GroqCloud (Maverick fue deprecado feb-2026).
+# Modelo de visión vigente en GroqCloud. Historial de deprecaciones:
+#   Maverick        -> feb-2026
+#   Llama-4-Scout   -> jul-17-2026 (Groq recomienda migrar a Qwen 3.6 27B;
+#                      gpt-oss-120b NO sirve porque es solo texto, sin visión).
 GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions'
-GROQ_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+GROQ_MODEL = 'qwen/qwen3.6-27b'
 
-# Límite de Groq para imágenes en base64: 4MB. Dejamos margen apuntando a ~3MB
-# de imagen cruda (base64 expande ~1.33x) y reescalando si hace falta.
+# Qwen 3.6 27B admite hasta 20MB por imagen, pero mantenemos un tope
+# conservador de ~3MB de imagen cruda (base64 expande ~1.33x) y reescalamos
+# si hace falta: es más que suficiente para un ticket y ahorra ancho de banda.
 MAX_IMG_BYTES = 3_000_000
 
 # Dependencias opcionales: se importan perezosamente para que un fallo de
