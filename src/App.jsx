@@ -224,6 +224,11 @@ const POLIZAS_CLARA = {
   'Marco Alvarado': '9481',
   'Marco Sanchez': '1159',
   'Juan Alfaro': '6660',
+  // Soporte agregados 2026-07-23 (terminación tarjeta Clara)
+  'Ernesto Rodriguez': '9164',
+  'Luis Castillo': '4375',
+  'Jorge Perales': '1294',
+  'Marcos Ascencio': '3109',
 }
 
 // Roster fiscal de empleados — fuente: RFC Empleados.xlsx. Se usa para
@@ -286,6 +291,8 @@ const EMPLEADOS_RFC = [
   { rfc: 'COTL980719GD0', nombre: 'LUIS DANIEL COVARRUBIAS TORRES' },
   { rfc: 'RORJ9407238M1', nombre: 'JESUS ERNESTO RODRIGUEZ RODRIGUEZ' },
   { rfc: 'CAGL9208034V7', nombre: 'LUIS ENRIQUE CASTILLO GOMEZ' },
+  { rfc: 'PEMJ99071253A', nombre: 'JORGE ANDRES PERALES MARTINEZ' },
+  { rfc: 'AEPM820425FH9', nombre: 'MARCOS ASCENCIO PEREZ' },
 ]
 
 // Matchea un nombre corto (extraído del concepto de Saldos, ej. "Rosalba
@@ -365,6 +372,8 @@ const COLABORADORES = [
   { categoria: 'Servicio', nombre: 'Ricardo Pacheco Glez.' },
   { categoria: 'Servicio', nombre: 'Luis Castillo' },
   { categoria: 'Servicio', nombre: 'Ernesto Rodriguez' },
+  { categoria: 'Servicio', nombre: 'Jorge Perales' },
+  { categoria: 'Servicio', nombre: 'Marcos Ascencio' },
   { categoria: 'Ventas', nombre: 'Emmanuel Navarro' },
   { categoria: 'Ventas', nombre: 'Carlos Ponce' },
   { categoria: 'Ventas', nombre: 'Gemma Gonzalez' },
@@ -5886,7 +5895,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.81</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.82</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
