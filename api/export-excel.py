@@ -1003,7 +1003,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v8.89'
+    ft.value = 'SMTO Engineering · v8.90'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)

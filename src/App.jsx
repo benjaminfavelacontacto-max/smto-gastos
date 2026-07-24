@@ -4699,22 +4699,29 @@ export default function App() {
       inv.moneda = row.moneda
       inv.esMonedaExtranjera = true
       inv.tipoCambio = row.montoUSD > 0 ? +(row.montoMXN / row.montoUSD).toFixed(4) : 0
-      let tipMxn = 0
+      let tipMxn = 0, tipExt = 0
       const ticketTotal = inv.montoExtranjero || 0
       if (row.montoUSD > ticketTotal && ticketTotal > 0) {
-        const tipExt = +(row.montoUSD - ticketTotal).toFixed(2)
-        const tipPct = (tipExt / ticketTotal) * 100
+        const delta = +(row.montoUSD - ticketTotal).toFixed(2)
+        const tipPct = (delta / ticketTotal) * 100
         if (tipPct >= 5 && tipPct <= 35) {
-          inv.propinaExtranjero = tipExt
-          tipMxn = +(tipExt * inv.tipoCambio).toFixed(2)
+          tipExt = delta
+          inv.propinaExtranjero = delta
+          tipMxn = +(delta * inv.tipoCambio).toFixed(2)
           inv.montoPropina = tipMxn
           inv.propinaPorcentaje = +tipPct.toFixed(2)
         }
       }
+      // El renglón PADRE va NETO (sin propina) en AMBAS monedas, para que padre
+      // + sub-fila de propina sumen el cargo completo. MXN neto = montoMXN −
+      // tipMxn; divisa neto = montoUSD − tipExt (= el total del ticket). La
+      // propina vive en montoPropina / propinaExtranjero. Antes el lado USD se
+      // quedaba con el total completo → padre 84.52 + propina 10 se veía doble
+      // e inflaba el KPI de USD.
       inv.importe   = +(row.montoMXN - tipMxn).toFixed(2)
       inv.totalCFDI = +(row.montoMXN - tipMxn).toFixed(2)
-      inv.montoExtranjero = row.montoUSD
-      inv.montoUSD = row.montoUSD
+      inv.montoExtranjero = +(row.montoUSD - tipExt).toFixed(2)
+      inv.montoUSD = +(row.montoUSD - tipExt).toFixed(2)
     }
     let ticketsMatched  = 0
     let foreignMatched  = 0
@@ -5975,7 +5982,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.89</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.90</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
