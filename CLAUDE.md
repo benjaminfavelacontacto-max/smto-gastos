@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.92
+Current version: v8.93
 
 ## Stack
 
@@ -55,7 +55,16 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
    - Clara MXN CSV: smartAmountMatch ±$0.01 (Pass 1) + delta-tip Pass 2 (cargo − total = propina, 5–35%, solo categorías de comida)
    - Clara USA CSV: match by authorization code
 3. OCR for PDF/image tickets via Groq API (free) — only fires for PDFs without a matching XML. PDFs are rasterized to image server-side (PyMuPDF) before OCR since Groq vision only reads images. Image-OCR receipts are wrapped into single-page PDFs at ZIP export so they ride along with the standard buildFileName naming.
-4. Multi-currency: USD, EUR, JPY, etc. with per-line exchange rate
+4. Multi-currency (varias divisas en UN mismo reporte). El OCR detecta el código
+   ISO desde el símbolo + país/idioma del ticket (€ £ ¥ RM ฿ ₩ S$ HK$ NT$ ₫ ₹…;
+   "¥" se desambigua CNY vs JPY, "$" USD/CAD/MXN). `normalizaMoneda()` en
+   App.jsx blinda la respuesta del modelo (símbolo o nombre → ISO). La columna
+   **MONEDA** es editable por renglón; **MONTO M.E.** muestra el importe con el
+   símbolo nativo. En el Excel hay **una celda de T/C editable por divisa**
+   (fila 7) y cada renglón convierte con la celda de SU moneda — nunca con la
+   del dólar. Los totales que mezclarían divisas no se inventan: la tarjeta
+   M. EXTRANJERA suma el equivalente ya convertido a MXN y el total de MONTO
+   M.E. dice "VARIAS" cuando hay más de una.
 5. Propina (tip) split into its own sub-row in Excel
 6. Collaborator selector: 50 people across 4 categories (Admin, Socio, Servicio, Ventas)
 7. Expense types filtered by category (TIPOS_VENTAS vs TIPOS_NORMALES)
@@ -81,7 +90,13 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 - Zebra-striped table, propina as sub-row beneath parent
 - Native datetime objects (no date warnings)
 - SUM formulas in totals row
-- Columns: RFC, PROVEEDOR, TIPO, FACTURA, F.FACTURA, F.COBRO, CONCEPTO, IMPORTE, IVA, RETENCIÓN, TOTAL, FORMA PAGO, MONTO EXT, T/C
+- Columns (B→X): RFC, PROVEEDOR, TIPO, PÓLIZA, FACTURA, F. FACTURA, F. COBRO,
+  CONCEPTO, IMPORTE, IVA, ISR, ISH/IEPS, RETENCIÓN, TOTAL, FORMA PAGO, BANCO,
+  **MONEDA (R)**, **MONTO M.E. (S)**, T/C, USUARIO, COBRADO, FACTURADO,
+  DIFERENCIA. Insertar una columna corre TODAS las letras de las fórmulas: KPIs,
+  autofiltro (`B9:X`), banda de totales, spacers (25) y el marcador "Falta XML"
+  (26). El import de Excel en App.jsx mapea por ENCABEZADO, no por índice, y
+  acepta el alias histórico "MONTO USD".
 
 ## Architecture notes
 
@@ -126,7 +141,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.92
+- Current: v8.93
 
 ## Things to be careful about
 

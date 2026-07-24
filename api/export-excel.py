@@ -54,12 +54,41 @@ BADGE_GREEN_FG = '047857'
 BADGE_GRAY_BG = 'F1F5F9'
 BADGE_GRAY_FG = '475569'
 
-# Currency-symbol lookup for the propina sub-row label when the parent
-# gasto is in a foreign currency.
+# Currency-symbol lookup. Se usa en DOS lugares:
+#   1) la etiqueta del sub-renglón de propina cuando el padre es extranjero;
+#   2) el number_format de la columna MONTO M.E., para que cada renglón muestre
+#      su monto con el símbolo NATIVO (€1,250.00 / RM 480.00 / ¥12,800).
+# Los símbolos con letras llevan espacio final para que no se peguen al número.
 CURRENCY_SYMBOLS = {
-    'USD': '$', 'EUR': '€', 'GBP': '£', 'JPY': '¥', 'CNY': '¥',
-    'MXN': '$', 'CAD': 'C$', 'MYR': 'RM', 'CHF': 'Fr', 'AUD': 'A$',
+    'MXN': '$',   'USD': '$',    'EUR': '€',    'GBP': '£',
+    'JPY': '¥',   'CNY': '¥',    'CAD': 'C$',   'AUD': 'A$',
+    'CHF': 'Fr ', 'MYR': 'RM ',  'SGD': 'S$',   'HKD': 'HK$',
+    'TWD': 'NT$', 'KRW': '₩',    'THB': '฿',    'VND': '₫',
+    'INR': '₹',   'PHP': '₱',    'IDR': 'Rp ',  'BRL': 'R$',
+    'SEK': 'kr ', 'NOK': 'kr ',  'DKK': 'kr ',  'PLN': 'zł ',
+    'CZK': 'Kč ', 'HUF': 'Ft ',  'TRY': '₺',    'ILS': '₪',
+    'COP': '$',   'CLP': '$',    'ARS': '$',    'PEN': 'S/ ',
 }
+
+# Monedas SIN decimales: JPY, KRW, VND, CLP, IDR se cotizan en unidades enteras.
+# Su number_format omite los centavos para que no salga "¥12,800.00".
+CURRENCY_NO_DECIMALS = {'JPY', 'KRW', 'VND', 'CLP', 'IDR', 'HUF'}
+
+
+def currency_symbol(code):
+    """Símbolo de la moneda; si no está en el mapa usa el código ISO + espacio."""
+    code = (code or 'MXN').upper()
+    return CURRENCY_SYMBOLS.get(code, code + ' ')
+
+
+def currency_format(code):
+    """number_format de Excel para montos en `code`, con su símbolo nativo."""
+    code = (code or 'MXN').upper()
+    # El símbolo va entre comillas para que Excel lo trate como literal — sin
+    # ellas, letras como "kr" o "RM" se interpretan como códigos de formato.
+    sym = currency_symbol(code).replace('"', '')
+    decimals = '' if code in CURRENCY_NO_DECIMALS else '.00'
+    return f'"{sym}"#,##0{decimals}'
 BADGE_AMBER_BG = 'FEF3C7'
 BADGE_AMBER_FG = '92400E'
 BADGE_PURPLE_BG = 'F3E8FF'
@@ -229,13 +258,29 @@ def fill_row_bg(ws, row, start_col, end_col, color):
     for c in range(start_col, end_col + 1):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=color)
 
-def style_data_cell(cell, style_type, tipo='', diff_num=None):
+def style_data_cell(cell, style_type, tipo='', diff_num=None, moneda='MXN'):
     """Aplica number_format + font (y fill en badges) a una celda de datos.
     Lo comparten el renglón principal y la sub-fila de propina para que ambos
-    se vean idénticos."""
+    se vean idénticos. `moneda` es el código ISO del renglón — sólo lo usan los
+    estilos 'currency_ext' (monto en divisa nativa) y 'moneda' (el código)."""
     if style_type == 'currency':
         cell.number_format = '"$"#,##0.00'
         cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
+    elif style_type == 'currency_ext':
+        # Monto en la divisa ORIGINAL del ticket: €1,250.00 / RM 480.00 / ¥12,800.
+        cell.number_format = currency_format(moneda)
+        cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
+    elif style_type == 'moneda':
+        # Código ISO como texto — '@' evita que Excel convierta algo como "CHF"
+        # o un código de 3 letras en otra cosa, y que MXN se alinee distinto.
+        cell.number_format = '@'
+        es_ext = (moneda or 'MXN').upper() != 'MXN'
+        cell.font = Font(name='Calibri', size=9, bold=True,
+                         color=BADGE_PURPLE_FG if es_ext else TEXT_MUTED)
+        if es_ext:
+            # Las divisas se resaltan en morado suave para que salten a la vista
+            # en un reporte con mayoría de renglones en pesos.
+            cell.fill = PatternFill('solid', start_color=BADGE_PURPLE_BG)
     elif style_type == 'currency_bold':
         cell.number_format = '"$"#,##0.00'
         cell.font = Font(name='Calibri', size=10, bold=True, color=SMTO_BLACK)
@@ -302,13 +347,17 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # Column widths — semantic (wide CONCEPTO + supplier, narrow dates).
     # Layout: A spacer, B RFC, C PROVEEDOR, D TIPO, E PÓLIZA, F FACTURA,
     # G F.FACTURA, H F.COBRO, I CONCEPTO, J IMPORTE, K IVA, L ISR (nueva),
-    # M ISH/IEPS, N RETENCIÓN, O TOTAL, P FORMA PAGO, Q BANCO, R MONTO USD,
-    # S T/C, T USUARIO, U COBRADO, V FACTURADO, W DIFERENCIA, X spacer.
+    # M ISH/IEPS, N RETENCIÓN, O TOTAL, P FORMA PAGO, Q BANCO, R MONEDA,
+    # S MONTO M.E., T T/C, U USUARIO, V COBRADO, W FACTURADO, X DIFERENCIA,
+    # Y spacer, Z marcador "Falta XML".
+    # MONEDA (R) es la columna nueva del reporte multi-divisa: lleva el código
+    # ISO de CADA renglón (MXN incluido) y es la que leen los SUMIF de los KPI
+    # y el ancla para saber qué celda de tipo de cambio le toca a la fila.
     col_widths = {
         'A': 3, 'B': 15, 'C': 30, 'D': 11, 'E': 10, 'F': 14, 'G': 11, 'H': 11,
         'I': 28, 'J': 12, 'K': 11, 'L': 11, 'M': 11, 'N': 11, 'O': 18,
-        'P': 15, 'Q': 22, 'R': 13, 'S': 13, 'T': 24,
-        'U': 14, 'V': 22, 'W': 14, 'X': 3, 'Y': 16,
+        'P': 15, 'Q': 22, 'R': 9, 'S': 14, 'T': 13, 'U': 24,
+        'V': 14, 'W': 22, 'X': 14, 'Y': 3, 'Z': 16,
     }
     for col, w in col_widths.items():
         ws.column_dimensions[col].width = w
@@ -317,7 +366,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # outer spacer cols past the totals/footer still inherit BG_PAGE.
     nrows_painted = max(80, 40 + len(gastos))
     for r in range(1, nrows_painted):
-        fill_row_bg(ws, r, 1, 24, BG_PAGE)
+        fill_row_bg(ws, r, 1, 25, BG_PAGE)
 
     # ═══ HEADER (rows 1-2) — title + colaborador labels + fields ═══
     ws.row_dimensions[1].height = 50
@@ -378,7 +427,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[3].height = 10
     ws.row_dimensions[4].height = 1
     ws['H3'].border = Border(bottom=Side(style='thin', color=EXCEL_GREEN))
-    for c in range(2, 24):
+    for c in range(2, 25):
         cell = ws.cell(row=4, column=c)
         cell.fill = PatternFill('solid', start_color=BG_PAGE)
         cell.border = Border(
@@ -403,26 +452,33 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # (col_start, col_end, label, value, number_format, value_color)
     # KPI cards are live Excel formulas referencing the data band so the
     # numbers always match the bottom totals row. REGISTROS stays a static count.
-    # 7 tarjetas sobre B:W (22 cols): la headline TOTAL FACTURADO ocupa 4 cols
-    # y las demás 3 c/u (4 + 6×3 = 22), así DIFERENCIA es del mismo tamaño que el
+    # 7 tarjetas sobre B:X (23 cols): la headline TOTAL FACTURADO ocupa 5 cols
+    # y las demás 3 c/u (5 + 6×3 = 23), así DIFERENCIA es del mismo tamaño que el
     # resto (ya no es un rectángulo grande) y la banda queda simétrica.
-    # Columnas de datos tras ISR/ISH: TOTAL=O, IVA=K, ISR=L, RETENCIÓN=N,
-    # MONTO USD=R, DIFERENCIA=W, CONCEPTO=I.
+    # Columnas de datos tras MONEDA (R): TOTAL=O, IVA=K, ISR=L, RETENCIÓN=N,
+    # MONEDA=R, MONTO M.E.=S, DIFERENCIA=X, CONCEPTO=I.
     #  - TOTAL FACTURADO = total SIN propinas (resta las sub-filas "Propina*").
     #  - TOTAL COBRADO   = total CON propinas (todo lo que cargó la tarjeta).
     suma_total   = f'SUM(O{data_first}:O{data_last})'
     suma_propina = f'SUMIF(I{data_first}:I{data_last},"Propina*",O{data_first}:O{data_last})'
     kpis = [
-        ('B', 'E', 'TOTAL FACTURADO', f'={suma_total}-{suma_propina}', '"$"#,##0.00', SMTO_GREEN),
-        ('F', 'H', 'TOTAL COBRADO',   f'={suma_total}',                '"$"#,##0.00', SMTO_GREEN),
-        ('I', 'K', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('B', 'F', 'TOTAL FACTURADO', f'={suma_total}-{suma_propina}', '"$"#,##0.00', SMTO_GREEN),
+        ('G', 'I', 'TOTAL COBRADO',   f'={suma_total}',                '"$"#,##0.00', SMTO_GREEN),
+        ('J', 'L', 'IVA TOTAL',       f'=SUM(K{data_first}:K{data_last})', '"$"#,##0.00', SMTO_BLACK),
         # RETENCIONES = ISR retenido (col L) + RETENCIÓN (col N): el ISR tiene su
         # propia columna pero sigue siendo una retención.
-        ('L', 'N', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})+SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
-        ('O', 'Q', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
-        ('R', 'T', 'USD',             f'=SUM(R{data_first}:R{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('M', 'O', 'RETENCIONES',     f'=SUM(L{data_first}:L{data_last})+SUM(N{data_first}:N{data_last})', '"$"#,##0.00', SMTO_BLACK),
+        ('P', 'R', 'REGISTROS',       num_facturas,                        '0',           SMTO_BLACK),
+        # MONEDA EXTRANJERA — suma el TOTAL **ya convertido a MXN** de todos los
+        # renglones cuya MONEDA (col R) no es MXN. Antes esta tarjeta sumaba la
+        # columna de montos nativos, así que con dos divisas en el mismo reporte
+        # sumaba peras con manzanas (100 EUR + 400 MYR = "500 USD"). El desglose
+        # por divisa vive en la banda de subtotales, no aquí.
+        ('S', 'U', 'M. EXTRANJERA (MXN)',
+         f'=SUMIF(R{data_first}:R{data_last},"<>MXN",O{data_first}:O{data_last})',
+         '"$"#,##0.00', SMTO_GREEN),
         # DIFERENCIA cobrado vs facturado — SOLO renglones Clara MXN Credito.
-        ('U', 'W', 'DIFERENCIA',      f'=SUM(W{data_first}:W{data_last})', '"$"#,##0.00', SMTO_GREEN),
+        ('V', 'X', 'DIFERENCIA',      f'=SUM(X{data_first}:X{data_last})', '"$"#,##0.00', SMTO_GREEN),
     ]
 
     for col_start, col_end, label, value, fmt, value_color in kpis:
@@ -472,9 +528,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # inside the cards even though the anchor + end cells have borders.
     MED_GREEN  = Side(style='medium', color=EXCEL_GREEN)
     THIN_LIGHT = Side(style='thin',   color=BORDER_LIGHT)
-    # Middle cells por tarjeta: B-E→C,D · F-H→G · I-K→J · L-N→M · O-Q→P ·
-    # R-T→S · U-W→V
-    for col_letter in ('C', 'D', 'G', 'J', 'M', 'P', 'S', 'V'):
+    # Middle cells por tarjeta: B-F→C,D,E · G-I→H · J-L→K · M-O→N · P-R→Q ·
+    # S-U→T · V-X→W
+    for col_letter in ('C', 'D', 'E', 'H', 'K', 'N', 'Q', 'T', 'W'):
         ws[f'{col_letter}5'].border = Border(
             left=MED_GREEN, right=MED_GREEN, top=MED_GREEN, bottom=THIN_LIGHT,
         )
@@ -483,51 +539,91 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         )
 
     # ═══ TIPO DE CAMBIO EDITABLE (solo colaboradores especiales) ═══
-    # Una sola celda en R7 que el usuario puede editar libremente. Las filas
-    # de gastos en USD usan formulas =(monto USD)*$R$7 en IMPORTE / IVA /
-    # RETENCIÓN, y =$R$7 en la columna T/C. Cambiar este valor recalcula
-    # automáticamente todas las filas USD y los KPI / totales que las suman.
+    # UNA celda editable POR CADA moneda extranjera del reporte, en la fila 7.
+    # Cada renglón se convierte con la celda de SU divisa: IMPORTE / IVA /
+    # RETENCIÓN usan =(monto nativo)*$<celda>$7 y la columna T/C muestra
+    # =$<celda>$7. Editar una celda recalcula al instante SOLO las filas de esa
+    # moneda, más los KPI y totales que las suman.
+    #
+    # Antes había una sola celda ("TIPO DE CAMBIO USD →" en R7) aplicada a TODA
+    # fila extranjera: con euros y ringgit en el mismo reporte, ambos se
+    # convertían al tipo de cambio del dólar. Por eso ahora es un bloque.
     is_especial = (colaborador or '').strip() in COLABORADORES_ESPECIALES
-    tc_ref = None
 
-    if is_especial:
+    # Divisas presentes (sin MXN). Orden estable: USD primero si aparece —es la
+    # más común— y el resto alfabético, para que el bloque no baile entre
+    # exports del mismo reporte.
+    monedas_ext = sorted({
+        (g.get('monedaCodigo') or g.get('moneda') or 'MXN').upper()
+        for g in gastos
+    } - {'MXN', '', 'XXX'}, key=lambda m: (m != 'USD', m))
+
+    # Semilla del tipo de cambio: el que ya traiga el gasto (la conciliación
+    # bancaria lo deriva como MXN ÷ monto nativo del cargo, así que es real).
+    # Sin dato, la celda queda VACÍA a propósito — inventar una tasa produciría
+    # un reporte plausible pero incorrecto; vacía, la fila muestra $0.00 en
+    # IMPORTE y salta a la vista que falta capturarla. Única excepción: USD
+    # conserva su default histórico de 17.50.
+    seed_tc = {}
+    for g in gastos:
+        m = (g.get('monedaCodigo') or g.get('moneda') or 'MXN').upper()
+        rate = g.get('tipoCambio') or 0
+        if m in monedas_ext and m not in seed_tc and rate > 0:
+            seed_tc[m] = round(float(rate), 4)
+    if 'USD' in monedas_ext:
+        seed_tc.setdefault('USD', 17.50)
+
+    tc_refs = {}  # 'EUR' -> '$U$7'
+
+    if is_especial and monedas_ext:
         ws.row_dimensions[7].height = 30
-
-        # Label en O7:Q7 — alineado a la derecha, fondo ámbar suave. Va debajo
-        # de la tarjeta USD (R-T) para que el input quede junto a ella.
-        ws.merge_cells('O7:Q7')
-        lbl_tc = ws['O7']
-        lbl_tc.value = 'TIPO DE CAMBIO USD →'
-        lbl_tc.font = Font(name='Aptos', size=11, bold=True, color=BADGE_AMBER_FG)
-        lbl_tc.alignment = Alignment(horizontal='right', vertical='center', indent=1)
-        lbl_tc.fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
-        # Pintar el resto de la celda combinada para que se vea uniforme
-        for col_letter in ('P', 'Q'):
-            ws[f'{col_letter}7'].fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
-
-        # Input editable en R7 — fondo ámbar más vivo, borde grueso naranja.
-        tc_input = ws['R7']
-        default_tc = 17.50
-        for g in gastos:
-            m = (g.get('monedaCodigo') or g.get('moneda') or 'MXN').upper()
-            rate = g.get('tipoCambio') or 0
-            if m != 'MXN' and rate > 0:
-                default_tc = round(float(rate), 4)
-                break
-        tc_input.value = default_tc
-        tc_input.number_format = '#,##0.0000'
-        tc_input.font = Font(name='Aptos', size=16, bold=True, color=BADGE_AMBER_FG)
-        tc_input.alignment = Alignment(horizontal='center', vertical='center')
-        tc_input.fill = PatternFill('solid', start_color='FDE68A')  # amber-200
         amber_side = Side(style='medium', color='F59E0B')
-        tc_input.border = Border(
-            left=amber_side, right=amber_side, top=amber_side, bottom=amber_side,
-        )
 
-        tc_ref = '$R$7'
+        # El bloque se alinea a la DERECHA de la banda (termina en X=24), igual
+        # que antes quedaba junto a su tarjeta KPI. Cada par ocupa 3 columnas
+        # (2 de etiqueta + 1 de input); con muchas divisas se compacta a 2 (1+1)
+        # para que quepan sin invadir la columna spacer A.
+        n = len(monedas_ext)
+        ancho = 3 if n <= 7 else 2
+        start = 25 - ancho * n
+        if start < 2:  # >11 divisas: solo caben las primeras; el resto usa el
+            n = (25 - 2) // ancho  # T/C por renglón que ya trae el gasto.
+            start = 25 - ancho * n
 
-    # Row 7 (cuando NO es especial) small gap + Row 8 pre-table spacer
-    if not is_especial:
+        for i, code in enumerate(monedas_ext[:n]):
+            col_lbl = start + i * ancho
+            col_in  = col_lbl + ancho - 1
+            letra_in = get_column_letter(col_in)
+
+            # Etiqueta ámbar suave: "T/C EUR →" (o "EUR →" en modo compacto).
+            if ancho == 3:
+                ws.merge_cells(start_row=7, start_column=col_lbl,
+                               end_row=7, end_column=col_in - 1)
+            lbl_tc = ws.cell(row=7, column=col_lbl,
+                             value=f'T/C {code} →' if ancho == 3 else f'{code} →')
+            lbl_tc.font = Font(name='Aptos', size=11, bold=True, color=BADGE_AMBER_FG)
+            lbl_tc.alignment = Alignment(horizontal='right', vertical='center', indent=1)
+            # Pintar TODAS las celdas de la etiqueta (openpyxl no propaga el
+            # fill dentro de un merge) para que la banda se vea uniforme.
+            for c in range(col_lbl, col_in):
+                ws.cell(row=7, column=c).fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
+
+            # Input editable — ámbar más vivo, borde grueso naranja.
+            tc_input = ws.cell(row=7, column=col_in)
+            if code in seed_tc:
+                tc_input.value = seed_tc[code]
+            tc_input.number_format = '#,##0.0000'
+            tc_input.font = Font(name='Aptos', size=16, bold=True, color=BADGE_AMBER_FG)
+            tc_input.alignment = Alignment(horizontal='center', vertical='center')
+            tc_input.fill = PatternFill('solid', start_color='FDE68A')  # amber-200
+            tc_input.border = Border(
+                left=amber_side, right=amber_side, top=amber_side, bottom=amber_side,
+            )
+
+            tc_refs[code] = f'${letra_in}$7'
+
+    # Row 7 (sin bloque de T/C) small gap + Row 8 pre-table spacer
+    if not tc_refs:
         ws.row_dimensions[7].height = 8
     ws.row_dimensions[8].height = 14
 
@@ -537,7 +633,10 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
     # FACTURADO lleva un sub-rótulo "(incluye propinas)" en segunda línea para
     # avisar que su total suma las propinas (así cuadra contra COBRADO).
-    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'ISR', 'ISH/IEPS', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONTO USD', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO\n(incluye propinas)', 'DIFERENCIA']
+    # MONEDA (R) + MONTO M.E. (S): el código ISO de cada renglón y su importe en
+    # la divisa ORIGINAL del ticket. Antes la columna se llamaba "MONTO USD",
+    # lo que era falso en cuanto el reporte traía euros, yuanes o ringgit.
+    headers = ['RFC', 'PROVEEDOR', 'TIPO', 'PÓLIZA', 'FACTURA', 'F. FACTURA', 'F. COBRO', 'CONCEPTO', 'IMPORTE', 'IVA', 'ISR', 'ISH/IEPS', 'RETENCIÓN', 'TOTAL', 'FORMA PAGO', 'BANCO', 'MONEDA', 'MONTO M.E.', 'T/C', 'USUARIO', 'COBRADO', 'FACTURADO\n(incluye propinas)', 'DIFERENCIA']
     # PROVEEDOR and CONCEPTO stay left-aligned; the rest center.
     left_align_headers = {'PROVEEDOR', 'CONCEPTO'}
 
@@ -554,12 +653,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         )
         cell.fill = PatternFill(fill_type=None)
         # Top + bottom medium green on every header; left edge on B9 (first),
-        # right edge on W9 (last, col 23) so the band reads as one bordered strip.
+        # right edge on X9 (last, col 24) so the band reads as one bordered strip.
         cell.border = Border(
             top=Side(style='medium', color=EXCEL_GREEN),
             bottom=Side(style='medium', color=EXCEL_GREEN),
             left=Side(style='medium', color=EXCEL_GREEN) if col == 2 else None,
-            right=Side(style='medium', color=EXCEL_GREEN) if col == 23 else None,
+            right=Side(style='medium', color=EXCEL_GREEN) if col == 24 else None,
         )
 
     # Autofiltro sobre el encabezado (fila 9) + todas las filas de datos
@@ -569,7 +668,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # propina) y NO incluye la banda de TOTAL CUENTA, que queda fuera del
     # filtro. Nota: TOTAL usa SUM (no SUBTOTAL), así que la fila de totales
     # no cambia al filtrar — es el comportamiento previo, intacto.
-    ws.auto_filter.ref = f'B9:W{data_last}'
+    ws.auto_filter.ref = f'B9:X{data_last}'
 
     # ¿Hubo conciliación bancaria en esta sesión? Si CUALQUIER fila trae un
     # montoCobrado real del CSV (o hizoMatch del frontend), el reporte está
@@ -670,23 +769,25 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             importe   = importe_raw
             monto_usd = monto_usd_raw
 
-        # USD passthrough: si el colaborador es especial y la factura viene
-        # en moneda extranjera, IMPORTE / IVA / RETENCIÓN / T/C usan formulas
-        # que multiplican el valor en USD por la celda editable $R$7. Cambiar
-        # esa celda recalcula toda la fila al instante. importe/iva/ret en
+        # Passthrough de divisa: si el colaborador es especial y la factura viene
+        # en moneda extranjera, IMPORTE / IVA / RETENCIÓN / T/C usan formulas que
+        # multiplican el valor nativo por la celda editable DE SU MONEDA (EUR con
+        # la de EUR, MYR con la de MYR — nunca la del dólar). Cambiar esa celda
+        # recalcula al instante todas las filas de esa divisa. importe/iva/ret en
         # la gasto vienen en 0 (la UI los muestra así hasta tener T/C); los
-        # valores reales en USD viajan en importeUSD / ivaUSD / retencionesUSD.
-        is_usd_row = (
-            is_especial
-            and tc_ref is not None
-            and (moneda_code or 'MXN').upper() not in ('MXN', '', 'XXX')
-            and (importe_usd_raw > 0 or iva_usd_raw > 0 or ret_usd_raw > 0 or monto_usd_raw > 0)
+        # valores reales en divisa viajan en importeUSD / ivaUSD / retencionesUSD
+        # (nombres históricos: son "el desglose en moneda extranjera", no USD).
+        tc_ref = tc_refs.get((moneda_code or 'MXN').upper())
+        is_fx_row = (
+            tc_ref is not None
+            and (importe_usd_raw > 0 or iva_usd_raw > 0 or ret_usd_raw > 0
+                 or monto_usd_raw > 0 or monto_ext > 0)
         )
-        if is_usd_row:
-            # Fallback: si por alguna razón no llegaron los desgloses USD,
-            # asumimos que el total USD ES el subtotal (IVA/Ret = 0) — el
-            # MXN-importe siempre coincidirá con el MONTO USD visible.
-            usd_imp = importe_usd_raw if importe_usd_raw > 0 else monto_usd_raw
+        if is_fx_row:
+            # Fallback: si por alguna razón no llegaron los desgloses en divisa,
+            # asumimos que el total nativo ES el subtotal (IVA/Ret = 0) — el
+            # importe en MXN siempre coincidirá con el MONTO M.E. visible.
+            usd_imp = importe_usd_raw if importe_usd_raw > 0 else (monto_usd_raw or monto_ext)
             usd_iva = iva_usd_raw
             usd_ret = ret_usd_raw
             importe_val = f'={usd_imp}*{tc_ref}'
@@ -697,7 +798,10 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             importe_val = importe
             iva_val     = iva
             ret_val     = ret
-            tc_val      = tipo_cambio
+            # T/C vacío (no "0.00") cuando no hay tipo de cambio: en un renglón
+            # en pesos la columna no aplica, y en uno extranjero sin tasa el
+            # hueco deja claro que falta capturarla.
+            tc_val      = tipo_cambio or None
 
         # Column order matches the headers. PROVEEDOR and CONCEPTO are the only
         # left-aligned cells; everything else centers per the reference.
@@ -776,9 +880,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         rfc_is_na = str(rfc_raw).strip().upper() in ('NA', 'N/A')
         rfc_disp = 'N/A' if rfc_is_na else rfc_raw
         rfc_align = 'center' if rfc_is_na else 'left'
-        # Layout tras agregar ISR (L=12) e ISH/IEPS (M=13): RETENCIÓN→N(14),
-        # TOTAL→O(15), FORMA→P(16), BANCO→Q(17), MONTO USD→R(18), T/C→S(19),
-        # USUARIO→T(20), COBRADO→U(21), FACTURADO→V(22), DIFERENCIA→W(23).
+        # Layout tras agregar MONEDA (R=18): RETENCIÓN→N(14), TOTAL→O(15),
+        # FORMA→P(16), BANCO→Q(17), MONEDA→R(18), MONTO M.E.→S(19), T/C→T(20),
+        # USUARIO→U(21), COBRADO→V(22), FACTURADO→W(23), DIFERENCIA→X(24).
+        moneda_disp = (moneda_code or 'MXN').upper()
+        # MONTO M.E. sólo se llena en renglones extranjeros: en un gasto en pesos
+        # la columna queda VACÍA (antes pintaba "$0.00" en cada fila nacional).
+        # `monto_ext` prefiere montoExtranjero y cae a montoUSD — un Excel viejo
+        # reimportado sólo trae el segundo.
+        monto_nativo = monto_ext or monto_usd
+        monto_ext_disp = monto_nativo if (moneda_disp != 'MXN' and monto_nativo) else None
         cells = [
             (2,  rfc_disp,               rfc_align, 'rfc'),
             # PROVEEDOR: SIEMPRE en MAYÚSCULAS en el Excel, sin importar la fuente
@@ -802,12 +913,13 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             (15, f'=J{row}+K{row}-L{row}+M{row}-N{row}', 'center', 'currency_bold'),
             (16, forma,                  'center', 'badge_pago'),
             (17, banco,                  'center', 'normal'),
-            (18, monto_usd,              'center', 'currency'),
-            (19, tc_val,                 'center', 'tipocambio'),
-            (20, usuario,                'center', 'normal'),
-            (21, cobrado,                'center', 'currency'),
-            (22, facturado,              'center', 'currency'),
-            (23, diferencia,             'center', 'diff'),
+            (18, moneda_disp,            'center', 'moneda'),
+            (19, monto_ext_disp,         'center', 'currency_ext'),
+            (20, tc_val,                 'center', 'tipocambio'),
+            (21, usuario,                'center', 'normal'),
+            (22, cobrado,                'center', 'currency'),
+            (23, facturado,              'center', 'currency'),
+            (24, diferencia,             'center', 'diff'),
         ]
 
         for col, val, align, style_type in cells:
@@ -819,25 +931,26 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 vertical='center',
                 indent=2 if align == 'left' else 0
             )
-            style_data_cell(cell, style_type, tipo=tipo, diff_num=diff_num)
+            style_data_cell(cell, style_type, tipo=tipo, diff_num=diff_num,
+                            moneda=moneda_disp)
 
         # Marca de fila no conciliada: COBRADO dice "SIN CONCILIAR" en ámbar
         # bold (mismo lenguaje visual que "⚠ Falta XML") para que el revisor
         # la distinga de un $0.00 legítimo.
         if cobrado == 'SIN CONCILIAR':
-            c_sin = ws.cell(row=row, column=21)
+            c_sin = ws.cell(row=row, column=22)
             c_sin.number_format = '@'
             c_sin.font = Font(name='Calibri', size=8.5, bold=True, color='B45309')
             c_sin.fill = PatternFill('solid', start_color='FEF3C7')
 
         # Side spacer cells keep page bg through the data band.
         ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-        ws.cell(row=row, column=24).fill = PatternFill('solid', start_color=BG_PAGE)
+        ws.cell(row=row, column=25).fill = PatternFill('solid', start_color=BG_PAGE)
 
-        # Marcador "Falta XML" a la derecha de la tabla (columna Y = 25). Solo
+        # Marcador "Falta XML" a la derecha de la tabla (columna Z = 26). Solo
         # aparece en filas rescatadas por OCR sin su CFDI XML.
         if xml_faltante:
-            mark = ws.cell(row=row, column=25, value='⚠ Falta XML')
+            mark = ws.cell(row=row, column=26, value='⚠ Falta XML')
             mark.fill = PatternFill('solid', start_color='FEF3C7')
             mark.font = Font(name='Calibri', size=9, bold=True, color='B45309')
             mark.alignment = Alignment(horizontal='left', vertical='center', indent=1)
@@ -858,26 +971,26 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
             # Pintar toda la banda primero (mismo fondo) para que las columnas
             # sin contenido (COBRADO/FACTURADO/DIFERENCIA) mantengan el tinte.
-            for c in range(2, 24):
+            for c in range(2, 25):
                 pcell = ws.cell(row=row, column=c)
                 pcell.fill = PatternFill('solid', start_color=propina_bg)
                 pcell.border = Border(bottom=Side(style='hair', color=BORDER_LIGHT))
 
             # Valores de la propina, en paralelo al renglón principal (incluye
-            # el caso USD: IMPORTE/T/C usan la celda editable de T/C).
-            if is_usd_row and propina_ext > 0:
+            # el caso divisa: IMPORTE/T/C usan la celda de T/C de SU moneda).
+            if is_fx_row and propina_ext > 0:
                 p_importe_val = f'={propina_ext}*{tc_ref}'
                 p_monto_usd   = propina_ext
                 p_tc_val      = f'={tc_ref}'
             else:
                 p_importe_val = propina_mxn
                 p_monto_usd   = propina_ext if propina_ext > 0 else 0
-                p_tc_val      = tipo_cambio
+                p_tc_val      = tipo_cambio or None
 
             # Concepto: para moneda extranjera incluye símbolo + monto nativo.
-            if propina_ext > 0 and moneda_code != 'MXN':
-                symbol = CURRENCY_SYMBOLS.get(moneda_code, moneda_code + ' ')
-                concepto_prop = f'Propina {symbol}{propina_ext:,.2f} {moneda_code}'
+            if propina_ext > 0 and moneda_disp != 'MXN':
+                symbol = currency_symbol(moneda_disp)
+                concepto_prop = f'Propina {symbol}{propina_ext:,.2f} {moneda_disp}'
             else:
                 concepto_prop = 'Propina'
 
@@ -898,9 +1011,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 (15, f'=J{row}+K{row}-L{row}+M{row}-N{row}', 'center', 'currency_bold'),  # TOTAL
                 (16, forma,                  'center', 'badge_pago'),
                 (17, banco,                  'center', 'normal'),
-                (18, p_monto_usd,            'center', 'currency'),
-                (19, p_tc_val,               'center', 'tipocambio'),
-                (20, usuario,                'center', 'normal'),
+                # La sub-fila hereda la MONEDA del padre: si el reporte se filtra
+                # por divisa, la propina viaja con su gasto.
+                (18, moneda_disp,            'center', 'moneda'),
+                (19, p_monto_usd or None,    'center', 'currency_ext'),
+                (20, p_tc_val,               'center', 'tipocambio'),
+                (21, usuario,                'center', 'normal'),
             ]
             for col, val, align, style_type in pcells:
                 cell = ws.cell(row=row, column=col, value=val)
@@ -911,12 +1027,13 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                     vertical='center',
                     indent=2 if align == 'left' else 0
                 )
-                style_data_cell(cell, style_type, tipo=tipo, diff_num=None)
+                style_data_cell(cell, style_type, tipo=tipo, diff_num=None,
+                                moneda=moneda_disp)
 
             # Outer spacers stay on page bg so the propina band fits inside
             # the table boundary like every other data row.
             ws.cell(row=row, column=1).fill = PatternFill('solid', start_color=BG_PAGE)
-            ws.cell(row=row, column=24).fill = PatternFill('solid', start_color=BG_PAGE)
+            ws.cell(row=row, column=25).fill = PatternFill('solid', start_color=BG_PAGE)
 
             row += 1
 
@@ -925,7 +1042,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     row += 1
 
     ws.row_dimensions[row].height = 32
-    for c in range(2, 24):
+    for c in range(2, 25):
         cell = ws.cell(row=row, column=c)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
         cell.border = Border()
@@ -938,8 +1055,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
     # Same SUM formulas as the KPI cards above so the two views always agree.
     # `data_first` / `data_last` cubren filas principales + sub-filas de propina.
-    # Tras agregar ISR (L) e ISH/IEPS (M): IMPORTE=J, IVA=K, ISR=L, ISH/IEPS=M,
-    # RETENCIÓN=N, TOTAL=O, MONTO USD=R. T/C (S), BANCO (Q), USUARIO (T) no se
+    # Tras agregar MONEDA (R): IMPORTE=J, IVA=K, ISR=L, ISH/IEPS=M, RETENCIÓN=N,
+    # TOTAL=O, MONTO M.E.=S. T/C (T), BANCO (Q), MONEDA (R) y USUARIO (U) no se
     # totalizan.
     totals = [
         (10, f'=SUM(J{data_first}:J{data_last})', False),  # IMPORTE
@@ -948,7 +1065,6 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         (13, f'=SUM(M{data_first}:M{data_last})', False),  # ISH/IEPS
         (14, f'=SUM(N{data_first}:N{data_last})', False),  # RETENCIÓN
         (15, f'=SUM(O{data_first}:O{data_last})', True),   # TOTAL
-        (18, f'=SUM(R{data_first}:R{data_last})', False),  # MONTO USD
     ]
     for col, val, is_main in totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -962,18 +1078,34 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         cell.alignment = Alignment(horizontal='right', vertical='center', indent=2)
         cell.fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # FORMA PAGO (P), BANCO (Q), T/C (S) y USUARIO (T) en la banda de totales
-    # sólo llevan el fill negro (no son agregables).
-    for c in (16, 17, 19, 20):
+    # MONTO M.E. (S): sumar montos nativos SOLO tiene sentido con UNA divisa en
+    # el reporte. Con dos o más, la suma sería 100 EUR + 400 MYR = 500 de nada:
+    # la celda dice "VARIAS" y el total real, ya convertido, está en la tarjeta
+    # M. EXTRANJERA (MXN) y en TOTAL.
+    tot_me = ws.cell(row=row, column=19)
+    if len(monedas_ext) == 1:
+        tot_me.value = f'=SUM(S{data_first}:S{data_last})'
+        tot_me.number_format = currency_format(monedas_ext[0])
+        tot_me.alignment = Alignment(horizontal='right', vertical='center', indent=2)
+    elif len(monedas_ext) > 1:
+        tot_me.value = 'VARIAS'
+        tot_me.number_format = '@'
+        tot_me.alignment = Alignment(horizontal='center', vertical='center')
+    tot_me.font = Font(name='Aptos', size=11, bold=len(monedas_ext) > 1, color=WHITE)
+    tot_me.fill = PatternFill('solid', start_color=SMTO_BLACK)
+
+    # FORMA PAGO (P), BANCO (Q), MONEDA (R), T/C (T) y USUARIO (U) en la banda
+    # de totales sólo llevan el fill negro (no son agregables).
+    for c in (16, 17, 18, 20, 21):
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
-    # ── Totales de conciliación: COBRADO (U), FACTURADO incl. propinas (V),
-    # DIFERENCIA (W) ── Se escriben como VALOR (no fórmula) por la misma razón
+    # ── Totales de conciliación: COBRADO (V), FACTURADO incl. propinas (W),
+    # DIFERENCIA (X) ── Se escriben como VALOR (no fórmula) por la misma razón
     # que las celdas por-renglón: renderizan en cualquier visor sin recálculo.
     total_diff_band = round(total_cobrado_band - total_facturado_band, 2)
     band_totals = [
-        (21, round(total_cobrado_band, 2)),   # COBRADO
-        (22, round(total_facturado_band, 2)),  # FACTURADO (incluye propinas)
+        (22, round(total_cobrado_band, 2)),   # COBRADO
+        (23, round(total_facturado_band, 2)),  # FACTURADO (incluye propinas)
     ]
     for col, val in band_totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -992,7 +1124,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         diff_color = SMTO_GREEN
     else:
         diff_color = WHITE
-    dcell = ws.cell(row=row, column=23, value=total_diff_band)
+    dcell = ws.cell(row=row, column=24, value=total_diff_band)
     dcell.number_format = '"$"#,##0.00'
     dcell.font = Font(name='Aptos', size=11, bold=True, color=diff_color)
     dcell.alignment = Alignment(horizontal='center', vertical='center')
@@ -1001,9 +1133,9 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
     ws.row_dimensions[row].height = 18
-    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
+    ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=24)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v8.91'
+    ft.value = 'SMTO Engineering · v8.93'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
