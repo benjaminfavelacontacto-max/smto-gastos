@@ -4994,6 +4994,29 @@ export default function App() {
       }
     )
 
+    // ── GUARDIÁN: cuadre padre + propina vs cargo del banco ──────────────
+    // Post-condición de la conciliación: en cada factura EXTRANJERA conciliada,
+    // el renglón padre + su sub-fila de propina deben sumar el cargo del banco
+    // en AMBAS monedas (MXN y divisa). fillForeignFromBank ya lo garantiza; esto
+    // atrapa cualquier caso raro nuevo o un cambio futuro que rompa el split
+    // ANTES de exportar: baja la confianza del match para que caiga en la
+    // pestaña "Revisión" (chip amarillo) en vez de generar un Excel mal en
+    // silencio. Vale para TODOS los colaboradores y reportes.
+    let descuadres = 0
+    for (const m of matchedRows) {
+      const g = nl.find(x => x.id === m.invoiceId)
+      if (!g || !g.esMonedaExtranjera) continue
+      const mxnCuadra = Math.abs((g.totalCFDI || 0) + (g.montoPropina || 0) - (m.csvAmountMXN || 0)) <= 0.02
+      const usdCuadra = Math.abs((g.montoExtranjero || 0) + (g.propinaExtranjero || 0) - (m.csvAmountUSD || 0)) <= 0.02
+      if (!mxnCuadra || !usdCuadra) {
+        m.confidence = Math.min(m.confidence, 40)
+        m.method = '⚠ Descuadre padre+propina vs cargo — revisar'
+        m.descuadre = true
+        descuadres++
+      }
+    }
+    if (descuadres > 0) console.warn(`[conciliación] ${descuadres} factura(s) extranjera(s) con descuadre → Revisión`)
+
     // Collect unmatched rows for the result modal, attaching the top-2
     // fuzzy-name suggestions from existing gastos for the "¿Quisiste decir...?"
     // hint. Pool is all gastos (matched or not) — the user might have already
@@ -5982,7 +6005,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.90</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.91</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
