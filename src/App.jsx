@@ -489,6 +489,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // duro es el TPM de Groq, así que un lote grande sigue tardando (ver Dev Tier).
 const OCR_PACING_MS = 5000
 
+// Costo aprox por factura con OCR de OpenAI (gpt-4o visión): prompt ~2,800 +
+// imagen ~900 tokens de entrada y ~300 de salida, a $2.50/$10 por 1M in/out
+// → ~$0.012 USD. ESTIMADO para mostrar ANTES de correr el lote; el server
+// devuelve el costo real por llamada en `_ocrCostUsd`. Groq (fallback) = $0.
+const OCR_COST_USD = 0.012
+const fmtUsd = (n) => (n < 0.10 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`)
+
 // fetch con timeout (AbortController). Sin esto, una llamada OCR que se cuelga
 // (red lenta, Groq atorado) dejaría el spinner girando para siempre = sistema
 // trabado. Con timeout falla limpio, reintenta y/o se reporta al usuario.
@@ -3554,7 +3561,7 @@ export default function App() {
             ...(updated > 0 ? [{ value: updated,        label: 'Actualizadas',    color: 'rgba(255,255,255,0.85)' }] : []),
             { value: xmls.length,                       label: 'XMLs leídos',     color: 'rgba(255,255,255,0.85)' },
             ...(linkedPDFs > 0 ? [{ value: linkedPDFs, label: 'PDFs vinculados', color: 'rgba(255,255,255,0.85)' }] : []),
-            ...(ocrCount > 0  ? [{ value: ocrCount,    label: 'OCR gratis',      color: '#f59e0b' }] : []),
+            ...(ocrCount > 0  ? [{ value: ocrCount, label: `OCR (≈ ${fmtUsd(ocrCount * OCR_COST_USD)})`, color: '#f59e0b' }] : []),
           ],
           primaryLabel: 'Continuar',
         })
@@ -4088,7 +4095,7 @@ export default function App() {
     const confirmed = await askConfirm({
       type: 'confirm',
       title: 'Procesar con OCR',
-      subtitle: `Se procesarán ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} con OCR. El OCR es gratuito (Groq). ¿Continuar?`,
+      subtitle: `Se procesarán ${files.length} ${files.length === 1 ? 'archivo' : 'archivos'} con OCR (OpenAI). Costo estimado: ≈ ${fmtUsd(files.length * OCR_COST_USD)} USD (~${fmtUsd(OCR_COST_USD)}/factura). ¿Continuar?`,
       primaryLabel: 'Continuar',
       secondaryLabel: 'Cancelar',
     })
@@ -4230,7 +4237,7 @@ export default function App() {
           : `Se detectaron ${ocrFiles.length} archivos sin XML.`,
         stats: [
           { value: ocrFiles.length, label: 'Archivos OCR' },
-          { value: 'Gratis', label: 'Costo' },
+          { value: `≈ ${fmtUsd(ocrFiles.length * OCR_COST_USD)}`, label: 'Costo estim. (USD)' },
         ],
         primaryLabel: 'Procesar con IA',
         secondaryLabel: 'Cancelar',
@@ -5895,7 +5902,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.83</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.84</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6487,7 +6494,7 @@ export default function App() {
               <h2 className="premium-title">Archivos sin XML detectados</h2>
               <p className="premium-subtitle">
                 {items.length} archivo{items.length === 1 ? '' : 's'} en la carpeta no {items.length === 1 ? 'tiene' : 'tienen'} un XML pareja.
-                Selecciona cuáles procesar con OCR. El OCR es gratuito (Groq).
+                Selecciona cuáles procesar con OCR (OpenAI, ~{fmtUsd(OCR_COST_USD)} USD/factura).
               </p>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '12px 0 4px', fontSize: 12 }}>
                 <button
@@ -6515,7 +6522,7 @@ export default function App() {
               <div style={{ marginTop: 12, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
                 {selectedCount === 0
                   ? 'Sin archivos seleccionados — se cargarán solo los XMLs'
-                  : `${selectedCount} seleccionado${selectedCount === 1 ? '' : 's'} · OCR gratuito`}
+                  : `${selectedCount} seleccionado${selectedCount === 1 ? '' : 's'} · ≈ ${fmtUsd(selectedCount * OCR_COST_USD)} USD`}
               </div>
               <div className="premium-actions" style={{ marginTop: 18 }}>
                 <button className="premium-btn-secondary" onClick={onCancel}>Cancelar</button>

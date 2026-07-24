@@ -20,6 +20,12 @@ GROQ_MODEL = 'qwen/qwen3.6-27b'
 OPENAI_URL   = 'https://api.openai.com/v1/chat/completions'
 OPENAI_MODEL = 'gpt-4o'
 
+# Tarifas gpt-4o (USD por 1M tokens) para calcular el costo REAL de cada OCR a
+# partir del 'usage' que devuelve OpenAI. Actualiza si cambian precios o modelo.
+# (gpt-4o al 2026-07: $2.50 in / $10.00 out por 1M.)
+OPENAI_IN_RATE  = 2.50 / 1_000_000
+OPENAI_OUT_RATE = 10.00 / 1_000_000
+
 # Qwen 3.6 27B admite hasta 20MB por imagen, pero mantenemos un tope
 # conservador de ~3MB de imagen cruda (base64 expande ~1.33x) y reescalamos
 # si hace falta: es más que suficiente para un ticket y ahorra ancho de banda.
@@ -441,7 +447,8 @@ def _ocr_openai(image_url, api_key):
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=90) as resp:
-                return _extract_content(resp.read().decode())
+                j = json.loads(resp.read().decode())
+            return j['choices'][0]['message']['content'], j.get('usage', {})
         except urllib.error.HTTPError as he:
             detail = he.read().decode(errors='replace')
             if he.code != 429 or attempt == 2:
@@ -491,7 +498,7 @@ def _ocr_groq(image_url, api_key):
     for attempt in range(5):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                return _extract_content(resp.read().decode())
+                return _extract_content(resp.read().decode()), {}
         except urllib.error.HTTPError as he:
             detail = he.read().decode(errors='replace')
             if he.code != 429 or attempt == 4:
@@ -573,15 +580,19 @@ class handler(BaseHTTPRequestHandler):
             # quota. Los fallos se acumulan y, si ninguno responde, se reportan al
             # usuario (no se pierde la factura en silencio).
             text = None
+            usage = {}
+            ocr_provider = None
             provider_errors = []
             if openai_key:
                 try:
-                    text = _ocr_openai(image_url, openai_key)
+                    text, usage = _ocr_openai(image_url, openai_key)
+                    ocr_provider = 'openai'
                 except Exception as e:
                     provider_errors.append(f'OpenAI: {e}')
             if text is None and groq_key:
                 try:
-                    text = _ocr_groq(image_url, groq_key)
+                    text, usage = _ocr_groq(image_url, groq_key)
+                    ocr_provider = 'groq'
                 except Exception as e:
                     provider_errors.append(f'Groq: {e}')
             if text is None:
@@ -623,6 +634,15 @@ class handler(BaseHTTPRequestHandler):
                             break
                     except Exception:
                         pass
+
+            # Costo REAL de este OCR (para mostrarlo/loguearlo en el cliente).
+            # Groq (fallback) es gratis; solo OpenAI cobra. Claves con guion bajo
+            # → el frontend las ignora (no ensucian el gasto ni el Excel).
+            pt = usage.get('prompt_tokens', 0)
+            ct = usage.get('completion_tokens', 0)
+            result['_ocrProvider'] = ocr_provider
+            result['_ocrTokens']   = pt + ct
+            result['_ocrCostUsd']  = round(pt * OPENAI_IN_RATE + ct * OPENAI_OUT_RATE, 6) if ocr_provider == 'openai' else 0.0
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
