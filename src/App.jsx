@@ -496,6 +496,23 @@ const OCR_PACING_MS = 5000
 const OCR_COST_USD = 0.012
 const fmtUsd = (n) => (n < 0.10 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`)
 
+// Clave de deduplicación al fusionar carpetas/lotes. Para CFDI, `rfc|folio` es
+// único y correcto. Pero los tickets de OCR (esTicket) suelen traer rfc VACÍO y
+// un "folio" (código de autorización) que a veces se REPITE entre recibos del
+// MISMO proveedor (el modelo toma un número de tienda/soporte constante, o el
+// recibo no trae auth code) → dos recibos distintos del mismo proveedor con
+// montos diferentes se colapsaban en una sola fila y se perdían. Para tickets
+// agregamos el nombre de archivo (único por documento): recibos distintos ya no
+// se fusionan, pero re-subir el MISMO archivo sí deduplica. Los pedimentos
+// (esTicket=false) conservan su folio único real y no se ven afectados.
+const gastoDedupKey = (g) => {
+  const base = `${g.rfc || ''}|${g.noFactura || ''}`
+  if (!g.esTicket) return base
+  const src = g.pdfFile?.name || g.originalFileName || g.uuid || ''
+  const monto = g.montoExtranjero || g.totalCFDI || g.total || 0
+  return `${base}|${src}|${monto}`
+}
+
 // fetch con timeout (AbortController). Sin esto, una llamada OCR que se cuelga
 // (red lenta, Groq atorado) dejaría el spinner girando para siempre = sistema
 // trabado. Con timeout falla limpio, reintenta y/o se reporta al usuario.
@@ -3525,11 +3542,11 @@ export default function App() {
       let added = 0, updated = 0
       setLista(prev => {
         const merged = [...prev]
-        const keys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
+        const keys = new Set(prev.map(g => gastoDedupKey(g)))
         for (const newG of batch) {
-          const key = `${newG.rfc}|${newG.noFactura}`
+          const key = gastoDedupKey(newG)
           if (keys.has(key)) {
-            const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
+            const idx = merged.findIndex(g => gastoDedupKey(g) === key)
             if (idx !== -1) {
               // Si el entrante trae XML real (xmlContent), el usuario re-subió
               // el XML correcto → limpia la marca xmlFaltante.
@@ -4340,13 +4357,13 @@ export default function App() {
     const applyDropMerge = (incoming) => {
       setLista(prev => {
         const merged = [...prev]
-        const keys = new Set(prev.map(g => `${g.rfc}|${g.noFactura}`))
+        const keys = new Set(prev.map(g => gastoDedupKey(g)))
         let added = 0
         let updated = 0
         for (const newG of incoming) {
-          const key = `${newG.rfc}|${newG.noFactura}`
+          const key = gastoDedupKey(newG)
           if (keys.has(key)) {
-            const idx = merged.findIndex(g => g.rfc === newG.rfc && g.noFactura === newG.noFactura)
+            const idx = merged.findIndex(g => gastoDedupKey(g) === key)
             if (idx !== -1) {
               // Si el entrante trae XML real (xmlContent), el usuario re-subió
               // el XML correcto → limpia la marca xmlFaltante.
@@ -5902,7 +5919,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.84</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.85</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
