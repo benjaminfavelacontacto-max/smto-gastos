@@ -4667,6 +4667,37 @@ export default function App() {
     // and detect a foreign-currency tip from the delta between the bank's
     // recorded foreign total and the OCR'd ticket subtotal (if the delta
     // sits in the typical 5–35% tip window).
+    // Rellena el lado peso/divisa de un ticket extranjero desde la fila del
+    // banco. Antes SOLO Pass 0 (auth code) lo hacía; Pass 1 (monto) y Pass 2
+    // (propina) dejaban importe/totalCFDI en 0, así que en el Excel FACTURADO
+    // quedaba en 0 y DIFERENCIA pintaba TODA la divisa como faltante. Ahora los
+    // tres passes usan este helper. Semántica del Excel (export-excel.py):
+    // totalCFDI = cargo MXN SIN propina, montoPropina = tip → TOTAL = totalCFDI +
+    // propina = COBRADO y DIFERENCIA = 0. La propina en divisa se calcula sobre
+    // el TOTAL del ticket (no el subtotal) para NO contar el IVA como propina.
+    const isForeignRow = row => !!(row.moneda && row.moneda !== 'MXN' && row.montoUSD > 0)
+    const fillForeignFromBank = (inv, row) => {
+      inv.monedaCodigo = row.moneda
+      inv.moneda = row.moneda
+      inv.esMonedaExtranjera = true
+      inv.tipoCambio = row.montoUSD > 0 ? +(row.montoMXN / row.montoUSD).toFixed(4) : 0
+      let tipMxn = 0
+      const ticketTotal = inv.montoExtranjero || 0
+      if (row.montoUSD > ticketTotal && ticketTotal > 0) {
+        const tipExt = +(row.montoUSD - ticketTotal).toFixed(2)
+        const tipPct = (tipExt / ticketTotal) * 100
+        if (tipPct >= 5 && tipPct <= 35) {
+          inv.propinaExtranjero = tipExt
+          tipMxn = +(tipExt * inv.tipoCambio).toFixed(2)
+          inv.montoPropina = tipMxn
+          inv.propinaPorcentaje = +tipPct.toFixed(2)
+        }
+      }
+      inv.importe   = +(row.montoMXN - tipMxn).toFixed(2)
+      inv.totalCFDI = +(row.montoMXN - tipMxn).toFixed(2)
+      inv.montoExtranjero = row.montoUSD
+      inv.montoUSD = row.montoUSD
+    }
     let ticketsMatched  = 0
     let foreignMatched  = 0
     for (const row of csvRows) {
@@ -4690,34 +4721,8 @@ export default function App() {
       // the OCR extracted a slightly different format.
       nl[idx].noFactura  = row.autorizacion
 
-      const isExtranjera = row.moneda && row.moneda !== 'MXN' && row.montoUSD > 0
-      if (isExtranjera) {
-        nl[idx].monedaCodigo       = row.moneda
-        nl[idx].moneda             = row.moneda  // keep legacy field in sync
-        nl[idx].esMonedaExtranjera = true
-        nl[idx].importe   = row.montoMXN
-        nl[idx].totalCFDI = row.montoMXN
-        nl[idx].tipoCambio = row.montoUSD > 0
-          ? +(row.montoMXN / row.montoUSD).toFixed(4)
-          : 0
-
-        // Propina detection in foreign currency: bank's foreign total > OCR'd
-        // ticket total → the delta IS the tip (sanity-checked 5–35%).
-        const ticketTotal = nl[idx].montoExtranjero || 0
-        if (row.montoUSD > ticketTotal && ticketTotal > 0) {
-          const tipDetected = +(row.montoUSD - ticketTotal).toFixed(2)
-          const tipPct = (tipDetected / ticketTotal) * 100
-          if (tipPct >= 5 && tipPct <= 35) {
-            nl[idx].propinaExtranjero = tipDetected
-            // Mirror into the MXN propina field via tipoCambio so the
-            // existing Prop $ / Prop % cells light up too.
-            nl[idx].montoPropina = +(tipDetected * nl[idx].tipoCambio).toFixed(2)
-            nl[idx].propinaPorcentaje = +tipPct.toFixed(2)
-          }
-        }
-        // After-tip foreign total goes into both the new and legacy fields.
-        nl[idx].montoExtranjero = row.montoUSD
-        nl[idx].montoUSD        = row.montoUSD
+      if (isForeignRow(row)) {
+        fillForeignFromBank(nl[idx], row)
         foreignMatched++
       } else if (row.montoMXN > 0) {
         nl[idx].totalCFDI = row.montoMXN
@@ -4867,6 +4872,9 @@ export default function App() {
           inv.propinaPorcentaje = parseFloat(matchResult.pct.toFixed(2))
           propinas++
         }
+        // Extranjera: rellena peso / T-C / propina desde el banco (igual que
+        // Pass 0) para que FACTURADO = COBRADO y no aparezca diferencia falsa.
+        if (isForeignRow(row)) fillForeignFromBank(inv, row)
         const { method, confidence } = methodFromMatch(matchResult)
         snapshotMatch(idx, row, 1, method, confidence)
         matches++
@@ -4911,16 +4919,24 @@ export default function App() {
       },
       (idx, m, dCSV, row) => {
         const inv = nl[idx]
-        const base = tipBase(inv)
-        const tip = +(m - base).toFixed(2)
-        const pct = +((tip / base) * 100).toFixed(2)
         inv.hizoMatch = true
         inv.fechaCobro = formatCobro(dCSV)
         inv.formaPago = '04'
-        inv.montoPropina = tip
-        inv.propinaPorcentaje = pct
-        propinas++
-        snapshotMatch(idx, row, 2, `Propina detectada +${pct.toFixed(1)}%`, 80)
+        if (isForeignRow(row)) {
+          // Extranjera: el helper fija peso + T-C y calcula la propina sobre el
+          // TOTAL del ticket (no el subtotal), para no contar el IVA como tip.
+          fillForeignFromBank(inv, row)
+          if ((inv.montoPropina || 0) > 0) propinas++
+          snapshotMatch(idx, row, 2, `Propina detectada +${(inv.propinaPorcentaje || 0).toFixed(1)}%`, 80)
+        } else {
+          const base = tipBase(inv)
+          const tip = +(m - base).toFixed(2)
+          const pct = +((tip / base) * 100).toFixed(2)
+          inv.montoPropina = tip
+          inv.propinaPorcentaje = pct
+          propinas++
+          snapshotMatch(idx, row, 2, `Propina detectada +${pct.toFixed(1)}%`, 80)
+        }
         matches++
       }
     )
@@ -5941,7 +5957,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.87</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.88</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
