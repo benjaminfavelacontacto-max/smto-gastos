@@ -40,12 +40,19 @@ Examples:
 ## Matching de banco (validarBanco)
 
 - Pass 0: auth code exact match (OCR tickets only)
-- Pass 1: `smartAmountMatch` with tolerance ±$0.01 ONLY
+- Pass 1: `smartAmountMatch` with tolerance ±$0.01 ONLY. OCR tickets probe BOTH
+  the OCR subtotal AND the OCR total (`totalOCR` = montoExtranjero ‖ totalCFDI) —
+  el banco cobra el total con impuestos, así que un recibo con IVA y sin propina
+  (hotel, comida) o un Uber sin subtotal cuadra por el total. El subtotal+propina
+  sigue cubriendo comidas con propina.
 - Pass 2: delta-tip match, ONLY for tip-eligible (factura, cargo) pairs — if the
   bank charge exceeds the invoice total by 5%–35%, the delta IS the propina
   (exact to the cent, taken from the real charge). Covers atypical tips (16%)
   and hand-rounded amounts that the Pass 1 ladder misses. MUST run after
-  passes 0–1 so exact matches claim their rows first.
+  passes 0–1 so exact matches claim their rows first. Same-currency gate: una
+  factura en divisa (GBP/EUR/USD) solo se compara contra el "Monto original" del
+  cargo en ESA misma moneda; una factura MXN, contra el "Monto en MXN". Nunca
+  cruzar divisas (evita propinas fantasma subtotal-en-divisa vs cargo-en-MXN).
 - Pass 3: near-exact match — charge vs (total + detected propina) differ by
   ≤1% AND ≤$20 (hand-keyed terminal amounts, minor adjustments). Binds with
   confidence 70 (< 80) so it lands in the modal's "Revisión" tab, and the

@@ -4772,8 +4772,12 @@ export default function App() {
     const asReceipt = inv => ({
       _raw: inv,  // kept so smartAmountMatch can re-check eligibility off proveedor/concepto
       isOCR: (inv.subtotal || 0) > 0 || (inv.propinaSugerida18 || inv.propinaSugerida20 || inv.propinaSugerida22) > 0,
+      isTicket: !!inv.esTicket,
       subtotalOCR: inv.subtotal || 0,
       totalCFDI: inv.totalCFDI || 0,
+      // Total OCR = lo que el banco realmente cobra (con impuestos). En moneda
+      // extranjera vive en montoExtranjero; en MXN, en totalCFDI.
+      totalOCR: inv.montoExtranjero || inv.totalCFDI || 0,
       importe: inv.importe || 0,
       propinaSugerida18: inv.propinaSugerida18 || 0,
       propinaSugerida20: inv.propinaSugerida20 || 0,
@@ -4792,6 +4796,13 @@ export default function App() {
         amount: receipt.isOCR ? receipt.subtotalOCR : receipt.totalCFDI,
         propina: 0, pct: 0, label: 'exact',
       })
+      // Tickets OCR: el banco cobra el TOTAL (con impuestos), no el subtotal.
+      // Probar también el total rescata recibos con IVA (hoteles, comidas sin
+      // propina) cuyo subtotal < total, y los Uber cuyo OCR no trajo subtotal.
+      // El subtotal + propina de abajo sigue cubriendo las comidas con propina.
+      if (receipt.isTicket && receipt.totalOCR > 0) {
+        candidates.push({ amount: receipt.totalOCR, propina: 0, pct: 0, label: 'exact' })
+      }
       if (eligible) {
         if (receipt.isOCR) {
           const sub = receipt.subtotalOCR
@@ -4882,6 +4893,17 @@ export default function App() {
     tryPass(
       (inv, m, row) => {
         if (!isEligibleForTip(inv, row)) return false
+        // Candado de moneda: comparar SOLO contra el monto en la MISMA divisa
+        // que la factura. Sin esto, un subtotal en divisa (GBP/EUR/USD) se
+        // comparaba contra el "Monto en MXN" del cargo (o un ticket USD contra
+        // un cargo EUR) e inventaba propinas fantasma cruzando monedas.
+        const invForeign = inv.esMonedaExtranjera || (inv.moneda && inv.moneda !== 'MXN')
+        if (invForeign) {
+          if (!row.moneda || row.moneda !== inv.moneda) return false
+          if (!(row.montoUSD > 0) || Math.abs(m - row.montoUSD) > 0.001) return false
+        } else if (!(row.montoMXN > 0) || Math.abs(m - row.montoMXN) > 0.001) {
+          return false
+        }
         const base = tipBase(inv)
         if (!(base > 0) || m <= base) return false
         const pct = (m - base) / base
@@ -5919,7 +5941,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.86</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.87</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
