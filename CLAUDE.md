@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.82
+Current version: v8.92
 
 ## Stack
 
@@ -62,7 +62,13 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 8. Drag & drop XMLs/PDFs/images onto the table
 9. Import previous Excel to continue a report
 10. Export ZIP: Excel + renamed XMLs/PDFs (see CONVENTIONS.md → buildFileName)
-11. PremiumModal replaces all native alert/confirm
+11. PremiumModal replaces all native alert/confirm. El modal de conciliación
+    (`ConciliacionModal`) está escrito en lenguaje llano a propósito: la gente
+    leía "Sin factura / Pendiente" como un adeudo. Trae banner "Esto no es un
+    adeudo", 5 chips con hint, 4 pestañas (Conciliados / Cargos sin comprobante
+    / No están en el estado / Revisar), nota explicativa por pestaña, leyenda de
+    colores y aritmética "factura + propina = cargo" al expandir un match. Si se
+    tocan esos textos, mantener el encuadre de "papeleo faltante", no de deuda.
 12. Validation counter per checkbox
 13. fechaCobro editable with date picker
 14. Sortable, resizable columns; sticky PROVEEDOR
@@ -120,7 +126,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.82
+- Current: v8.92
 
 ## Things to be careful about
 

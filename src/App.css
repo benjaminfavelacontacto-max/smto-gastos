@@ -2232,7 +2232,7 @@ tr.row-new {
 
 /* ── Summary bar ── */
 .cm-fs-summary {
-  padding: 26px 32px 18px;
+  padding: 18px 28px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
 }
@@ -2278,7 +2278,7 @@ tr.row-new {
 }
 
 .cm-fs-progress {
-  margin-top: 16px;
+  margin-top: 12px;
   width: 100%; height: 6px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 3px;
@@ -2290,15 +2290,35 @@ tr.row-new {
   box-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
 }
 
+.cm-fs-progress-caption {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Aviso anti-pánico del modal de conciliación */
+.cm-fs-explainer {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  background: rgba(59, 130, 246, 0.10);
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  border-radius: 12px;
+  font-size: 12.5px; line-height: 1.5;
+  color: rgba(255, 255, 255, 0.82);
+}
+.cm-fs-explainer b { color: #fff; }
+.cm-fs-explainer-icon { color: #60a5fa; flex-shrink: 0; margin-top: 1px; }
+
 .cm-fs-chips {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin-top: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
 }
 .cm-fs-chip {
   display: flex; align-items: center; gap: 10px;
-  padding: 12px 14px;
+  padding: 9px 12px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
@@ -2309,22 +2329,38 @@ tr.row-new {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30);
   border-color: rgba(255, 255, 255, 0.18);
 }
+.cm-fs-chip > div { min-width: 0; }
 .cm-fs-chip-value { font-size: 20px; font-weight: 700; color: #fff; line-height: 1; }
-.cm-fs-chip-label { font-size: 11px; color: rgba(255, 255, 255, 0.55); margin-top: 4px; letter-spacing: 0.02em; }
+.cm-fs-chip-label { font-size: 11px; color: rgba(255, 255, 255, 0.72); margin-top: 4px; letter-spacing: 0.02em; font-weight: 600; }
+.cm-fs-chip-hint  { font-size: 10px; color: rgba(255, 255, 255, 0.42); margin-top: 2px; line-height: 1.35; }
 .cm-chip-blue   svg { color: #3b82f6; }
 .cm-chip-green  svg { color: #22c55e; }
 .cm-chip-red    svg { color: #ef4444; }
+.cm-chip-amber  svg { color: #f59e0b; }
+.cm-chip-slate  svg { color: #94a3b8; }
 .cm-chip-purple svg { color: #c084fc; }
 
 .cm-fs-totals {
-  display: flex; gap: 24px; margin-top: 14px;
+  display: flex; gap: 24px; margin-top: 10px;
   font-size: 12px; color: rgba(255, 255, 255, 0.55);
 }
 .cm-fs-totals-block { display: flex; flex-direction: column; gap: 2px; }
 .cm-fs-totals-label { letter-spacing: 0.04em; text-transform: uppercase; font-size: 10px; }
 .cm-fs-totals-value { font-size: 14px; font-weight: 600; }
+.cm-fs-totals-note  { font-size: 10.5px; color: rgba(255, 255, 255, 0.42); }
 .cm-fs-totals-green { color: #22c55e; }
+.cm-fs-totals-amber { color: #f59e0b; }
 .cm-fs-totals-red   { color: #ef4444; }
+
+/* Pantallas bajas (laptops de 13"): el resumen se come la lista. Se recorta lo
+   redundante — el % ya se lee en la barra y en los chips. */
+@media (max-height: 820px) {
+  .cm-fs-summary { padding: 14px 28px 10px; }
+  .cm-fs-progress-caption { display: none; }
+  .cm-fs-explainer { margin-top: 10px; padding: 8px 12px; font-size: 12px; }
+  .cm-fs-chip-value { font-size: 18px; }
+  .cm-fs-totals { margin-top: 8px; }
+}
 
 /* ── Tabs ── */
 .cm-fs-tabs {
@@ -2360,7 +2396,9 @@ tr.row-new {
 }
 .cm-fs-badge-green  { background: rgba(34, 197, 94, 0.15);  color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.25); }
 .cm-fs-badge-red    { background: rgba(239, 68, 68, 0.15);  color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.25); }
-.cm-fs-badge-yellow { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25); }
+.cm-fs-badge-amber  { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.25); }
+.cm-fs-badge-slate  { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.28); }
+.cm-fs-badge-yellow { background: rgba(250, 204, 21, 0.15); color: #facc15; border: 1px solid rgba(250, 204, 21, 0.25); }
 
 /* ── Body / panes ── */
 .cm-fs-body {
@@ -2380,6 +2418,21 @@ tr.row-new {
   color: rgba(255, 255, 255, 0.45);
   font-size: 13px;
 }
+
+/* Nota explicativa arriba de cada pestaña — dice en una línea qué significa
+   la lista de abajo, para que nadie interprete "sin comprobante" como deuda. */
+.cm-fs-pane-note {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border-left: 3px solid;
+  font-size: 12px; line-height: 1.55;
+  color: rgba(255, 255, 255, 0.72);
+}
+.cm-fs-pane-note b { color: rgba(255, 255, 255, 0.95); }
+.cm-note-green  { background: rgba(34, 197, 94, 0.07);  border-color: #22c55e; }
+.cm-note-amber  { background: rgba(245, 158, 11, 0.08); border-color: #f59e0b; }
+.cm-note-slate  { background: rgba(148, 163, 184, 0.08); border-color: #94a3b8; }
+.cm-note-yellow { background: rgba(250, 204, 21, 0.08); border-color: #facc15; }
 
 /* ── Match / Sin / Revision cards ── */
 .cm-fs-card {
@@ -2442,6 +2495,25 @@ tr.row-new {
   max-height: 0;
   transition: max-height 0.25s ease;
 }
+/* Píldora de propina en la tarjeta de match + aritmética del detalle */
+.cm-fs-tip-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(192, 132, 252, 0.14);
+  border: 1px solid rgba(192, 132, 252, 0.30);
+  color: #d8b4fe;
+  font-size: 10.5px; font-weight: 600;
+}
+.cm-fs-math {
+  margin-top: 14px; padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  font-size: 12px; color: rgba(255, 255, 255, 0.72);
+}
+.cm-fs-math b { color: #fff; }
+
 .cm-fs-detail-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px 24px;
@@ -2495,6 +2567,10 @@ tr.row-new {
   font-style: normal; color: rgba(255, 255, 255, 0.4); margin-left: 4px;
 }
 
+/* Comprobantes subidos que no aparecen en el estado de cuenta */
+.cm-fs-nocharge-card { border-color: rgba(148, 163, 184, 0.22); }
+.cm-fs-nocharge-hint { font-size: 10.5px; color: rgba(255, 255, 255, 0.42); }
+
 /* Revisión */
 .cm-fs-rev-card { border-color: rgba(245, 158, 11, 0.25); }
 .cm-fs-rev-icon { color: #f59e0b; flex-shrink: 0; }
@@ -2535,12 +2611,36 @@ tr.row-new {
    CONCILIACION — sticky footer + toast (v7.10)
 ═══════════════════════════════════════════ */
 
+/* Leyenda de estados — última defensa contra el "¿debo dinero?" */
+.cm-fs-legend {
+  flex-shrink: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px 16px;
+  padding: 7px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.015);
+  font-size: 10.5px; color: rgba(255, 255, 255, 0.5);
+}
+.cm-fs-legend-title { font-weight: 700; color: rgba(255, 255, 255, 0.7); letter-spacing: 0.02em; }
+.cm-fs-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.cm-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.cm-dot-green  { background: #22c55e; }
+.cm-dot-amber  { background: #f59e0b; }
+.cm-dot-slate  { background: #94a3b8; }
+.cm-dot-yellow { background: #facc15; }
+
+.cm-fs-footer-hint {
+  margin-right: auto;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
 .cm-fs-footer {
   flex-shrink: 0;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  padding: 16px 24px;
+  padding: 12px 24px;
   border-top: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(8, 12, 20, 0.55);
   backdrop-filter: blur(16px) saturate(140%);
@@ -2776,6 +2876,20 @@ tr.row-new {
   .cm-fs-title { font-size: 18px; }
   .cm-fs-match-head { grid-template-columns: 1fr; gap: 6px; }
   .cm-fs-match-right { justify-content: flex-start; }
+  /* 4 pestañas no caben en un teléfono: se deslizan en horizontal. */
+  .cm-fs-tabs { padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+  .cm-fs-tabs::-webkit-scrollbar { display: none; }
+  .cm-fs-tab { padding: 12px 12px; font-size: 12px; white-space: nowrap; }
+  /* En móvil el resumen se comía la lista: los hints de cada chip y la
+     leyenda salen sobrando porque cada pestaña ya trae su propia nota. */
+  .cm-fs-chip-hint { display: none; }
+  .cm-fs-chip { align-items: flex-start; }
+  .cm-fs-explainer { font-size: 12px; line-height: 1.45; }
+  .cm-fs-totals { gap: 14px; }
+  .cm-fs-legend { display: none; }
+  .cm-fs-pane-note { font-size: 11.5px; padding: 9px 12px; }
+  .cm-fs-footer { flex-wrap: wrap; }
+  .cm-fs-footer-hint { width: 100%; margin-right: 0; }
 
   /* ── Toast ── */
   .smto-toast {

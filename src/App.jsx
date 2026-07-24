@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect, useCallback, memo } from 'react'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle } from 'lucide-react'
+import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
@@ -2282,9 +2282,12 @@ function KpiCard({ variants, accent, Icon, value }) {
 function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual }) {
   const total = Math.max(1, data.bancoRows || 0)
   const pct = Math.min(100, Math.round((data.matches / total) * 100))
+  const sinCargoRows = data.facturasSinCargo || []
+  const docsSubidos = data.docsSubidos || 0
   const cBanco    = useCountUp(data.bancoRows)
   const cMatches  = useCountUp(data.matches)
   const cSin      = useCountUp(data.sinFactura.length)
+  const cSinCargo = useCountUp(sinCargoRows.length)
   const cPropinas = useCountUp(data.propinas)
   const cPct      = useCountUp(pct)
 
@@ -2341,6 +2344,18 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
     if (filterKey === 'mxn') return (s.moneda || 'MXN') === 'MXN'
     return true   // tickets/facturas filter is only meaningful for matched rows
   }
+  const sinCargoPassesFilter = (f) => {
+    if (filterKey === 'usd') return (f.moneda || 'MXN') === 'USD'
+    if (filterKey === 'mxn') return (f.moneda || 'MXN') === 'MXN'
+    if (filterKey === 'tickets') return f.isTicket
+    if (filterKey === 'facturas') return !f.isTicket
+    return true
+  }
+  // Clara llena "Monto original" incluso en cargos en pesos, así que un match
+  // MXN traía csvAmountUSD == csvAmountMXN y la tarjeta mostraba el mismo
+  // dinero dos veces (en pesos y en "USD"). Solo es divisa si la fila lo dice.
+  const tieneDivisa = (m) => (m.csvMoneda || 'MXN') !== 'MXN' && m.csvAmountUSD > 0
+
   const matchesQuery = (txt) => {
     if (!query.trim()) return true
     const q = query.trim().toLowerCase()
@@ -2351,6 +2366,8 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
     .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
     .sort((a, b) => b.confidence - a.confidence)
   const visibleSin      = data.sinFactura.filter(s => sinFactPassesFilter(s) && matchesQuery(s.descripcion))
+  const visibleSinCargo = sinCargoRows
+    .filter(f => sinCargoPassesFilter(f) && (matchesQuery(f.proveedor) || matchesQuery(f.noFactura)))
   const visibleRevision = revisionRows
     .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
     .sort((a, b) => b.confidence - a.confidence)
@@ -2389,9 +2406,11 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
         <header className="cm-fs-summary">
           <div className="cm-fs-summary-top">
             <div className="cm-fs-summary-titles">
-              <h2 className="cm-fs-title">Conciliación Terminada</h2>
+              <h2 className="cm-fs-title">Listo — así quedó tu conciliación</h2>
               <p className="cm-fs-subtitle">
-                {cPct}% conciliado · {data.bancoRows} {data.bancoRows === 1 ? 'cargo' : 'cargos'} procesados
+                Comparamos los <b>{data.bancoRows}</b> {data.bancoRows === 1 ? 'cargo' : 'cargos'} de tu estado de
+                cuenta de Clara contra los <b>{docsSubidos}</b>{' '}
+                {docsSubidos === 1 ? 'comprobante que subiste' : 'comprobantes que subiste'}.
               </p>
             </div>
             <div className="cm-fs-summary-toolbar">
@@ -2435,33 +2454,60 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
             />
           </div>
 
+          <p className="cm-fs-progress-caption">
+            {Math.round(cPct)}% de los cargos ya tienen su comprobante
+          </p>
+
+          {/* Aviso anti-pánico: la gente leía "sin factura / pendiente" como
+              un adeudo. Este banner aclara, antes que cualquier número, que
+              esto es un checklist de documentos, no un estado de cuenta. */}
+          <div className="cm-fs-explainer">
+            <Info size={15} className="cm-fs-explainer-icon" />
+            <div>
+              <b>Esto no es un adeudo.</b> Estos cargos ya se pagaron con la tarjeta Clara. Aquí solo
+              ves <b>cuáles ya tienen su factura o ticket</b> y cuáles todavía no.
+            </div>
+          </div>
+
           <div className="cm-fs-chips">
             <div className="cm-fs-chip cm-chip-blue">
               <CreditCard size={14} />
               <div>
-                <div className="cm-fs-chip-value">{cBanco}</div>
-                <div className="cm-fs-chip-label">Total cargos</div>
+                <div className="cm-fs-chip-value">{Math.round(cBanco)}</div>
+                <div className="cm-fs-chip-label">Cargos en Clara</div>
+                <div className="cm-fs-chip-hint">líneas del estado de cuenta</div>
               </div>
             </div>
             <div className="cm-fs-chip cm-chip-green">
               <Target size={14} />
               <div>
-                <div className="cm-fs-chip-value">{cMatches}</div>
-                <div className="cm-fs-chip-label">Matches exitosos</div>
+                <div className="cm-fs-chip-value">{Math.round(cMatches)}</div>
+                <div className="cm-fs-chip-label">Ya tienen comprobante</div>
+                <div className="cm-fs-chip-hint">cargo vinculado a tu factura</div>
               </div>
             </div>
-            <div className="cm-fs-chip cm-chip-red">
-              <XCircle size={14} />
+            <div className="cm-fs-chip cm-chip-amber">
+              <FileWarning size={14} />
               <div>
-                <div className="cm-fs-chip-value">{cSin}</div>
-                <div className="cm-fs-chip-label">Sin factura</div>
+                <div className="cm-fs-chip-value">{Math.round(cSin)}</div>
+                <div className="cm-fs-chip-label">Les falta comprobante</div>
+                <div className="cm-fs-chip-hint">sube su factura o ticket</div>
+              </div>
+            </div>
+            <div className="cm-fs-chip cm-chip-slate">
+              <FileText size={14} />
+              <div>
+                <div className="cm-fs-chip-value">{Math.round(cSinCargo)}</div>
+                <div className="cm-fs-chip-label">No están en el estado</div>
+                <div className="cm-fs-chip-hint">comprobantes de otro periodo o pago</div>
               </div>
             </div>
             <div className="cm-fs-chip cm-chip-purple">
               <Sparkles size={14} />
               <div>
-                <div className="cm-fs-chip-value">{cPropinas}</div>
-                <div className="cm-fs-chip-label">Propinas detectadas</div>
+                <div className="cm-fs-chip-value">{Math.round(cPropinas)}</div>
+                <div className="cm-fs-chip-label">Propinas estimadas</div>
+                <div className="cm-fs-chip-hint">el banco cobró más que la factura</div>
               </div>
             </div>
           </div>
@@ -2469,18 +2515,19 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
           {(data.totalsMatched || data.totalsPending) && (
             <div className="cm-fs-totals">
               <div className="cm-fs-totals-block">
-                <span className="cm-fs-totals-label">Conciliado</span>
+                <span className="cm-fs-totals-label">Cargos ya comprobados</span>
                 <span className="cm-fs-totals-value cm-fs-totals-green">
                   {fmtMoney(data.totalsMatched?.mxn)} MXN
                   {data.totalsMatched?.usd > 0 && <> · {fmtMoney(data.totalsMatched.usd, 'USD')} USD</>}
                 </span>
               </div>
               <div className="cm-fs-totals-block">
-                <span className="cm-fs-totals-label">Pendiente</span>
-                <span className="cm-fs-totals-value cm-fs-totals-red">
+                <span className="cm-fs-totals-label">Cargos por comprobar</span>
+                <span className="cm-fs-totals-value cm-fs-totals-amber">
                   {fmtMoney(data.totalsPending?.mxn)} MXN
                   {data.totalsPending?.usd > 0 && <> · {fmtMoney(data.totalsPending.usd, 'USD')} USD</>}
                 </span>
+                <span className="cm-fs-totals-note">no es dinero que debas, es papeleo que falta</span>
               </div>
             </div>
           )}
@@ -2489,9 +2536,10 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
         {/* ───── TABS ───── */}
         <div className="cm-fs-tabs" role="tablist">
           {[
-            { key: 'matches',  label: 'Matches',     icon: <Check size={14} />,        count: visibleMatches.length,  badgeClass: 'cm-fs-badge-green' },
-            { key: 'sin',      label: 'Sin Factura', icon: <XCircle size={14} />,      count: visibleSin.length,      badgeClass: 'cm-fs-badge-red' },
-            { key: 'revision', label: 'Revisión',    icon: <AlertCircle size={14} />,  count: visibleRevision.length, badgeClass: 'cm-fs-badge-yellow' },
+            { key: 'matches',  label: 'Conciliados',            icon: <Check size={14} />,       count: visibleMatches.length,  badgeClass: 'cm-fs-badge-green' },
+            { key: 'sin',      label: 'Cargos sin comprobante', icon: <FileWarning size={14} />, count: visibleSin.length,      badgeClass: 'cm-fs-badge-amber' },
+            { key: 'sincargo', label: 'No están en el estado',  icon: <FileText size={14} />,    count: visibleSinCargo.length, badgeClass: 'cm-fs-badge-slate' },
+            { key: 'revision', label: 'Revisar',                icon: <AlertCircle size={14} />, count: visibleRevision.length, badgeClass: 'cm-fs-badge-yellow' },
           ].map(t => (
             <button
               key={t.key}
@@ -2529,8 +2577,12 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                   exit={{ opacity: 0, x: -16 }}
                   transition={{ duration: 0.25, ease: 'easeOut' }}
                 >
+                  <div className="cm-fs-pane-note cm-note-green">
+                    Cada tarjeta es un <b>cargo de tu estado de cuenta</b> (izquierda) que quedó vinculado
+                    con <b>el comprobante que subiste</b> (derecha). Haz clic en una para ver cómo cuadró.
+                  </div>
                   {visibleMatches.length === 0 ? (
-                    <div className="cm-fs-empty">Sin matches que cumplan los filtros.</div>
+                    <div className="cm-fs-empty">Ningún cargo conciliado cumple los filtros.</div>
                   ) : visibleMatches.map((m, i) => {
                     const id = `${m.invoiceId}-${i}`
                     const isOpen = expandedId === id
@@ -2552,7 +2604,11 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                             <ArrowRight size={14} className="cm-fs-match-arrow" />
                             <div>
                               <div className="cm-fs-match-name">{m.invoiceName}</div>
-                              <div className="cm-fs-match-sub">{m.method}</div>
+                              <div className="cm-fs-match-sub">
+                                {m.propina > 0
+                                  ? <span className="cm-fs-tip-pill"><Sparkles size={10} /> Propina estimada {fmtMoney(m.propina, m.invoiceMoneda)}</span>
+                                  : m.method}
+                              </div>
                             </div>
                           </div>
                           <div className="cm-fs-match-right">
@@ -2569,16 +2625,32 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                             })()}
                             <div className="cm-fs-match-amount">
                               {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
-                              {m.csvAmountUSD > 0 && <span>{fmtMoney(m.csvAmountUSD, 'USD')} USD</span>}
+                              {tieneDivisa(m) && <span>{fmtMoney(m.csvAmountUSD, 'USD')} {m.csvMoneda}</span>}
                             </div>
                             <ChevronDown size={14} className={`cm-fs-chev ${isOpen ? 'is-open' : ''}`} />
                           </div>
                         </div>
-                        <div className="cm-fs-match-detail" style={{ maxHeight: isOpen ? 220 : 0 }}>
+                        <div className="cm-fs-match-detail" style={{ maxHeight: isOpen ? 260 : 0 }}>
+                          {/* La aritmética explícita evita el "¿por qué el banco
+                              me cobró más que la factura?" que dispara la duda. */}
+                          <div className="cm-fs-math">
+                            {m.propina > 0 ? (
+                              <>Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)} + propina{' '}
+                                {fmtMoney(m.propina, m.invoiceMoneda)}
+                                {m.propinaPct > 0 && <> ({m.propinaPct.toFixed(1)}%)</>} ={' '}
+                                <b>{fmtMoney(tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN, m.invoiceMoneda)} cobrados por Clara</b>
+                              </>
+                            ) : (
+                              <>Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)} ={' '}
+                                <b>{fmtMoney(tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN, m.invoiceMoneda)} cobrados por Clara</b>
+                              </>
+                            )}
+                          </div>
                           <div className="cm-fs-detail-grid">
-                            <div><span>Pass</span><strong>{m.pass} — {m.method}</strong></div>
+                            <div><span>Cómo se vinculó</span><strong>{m.method}</strong></div>
                             <div><span>Factura</span><strong>{m.invoiceNumber || '—'}</strong></div>
                             <div><span>Total factura</span><strong>{fmtMoney(m.invoiceTotal, m.invoiceMoneda)}</strong></div>
+                            {m.propina > 0 && <div><span>Propina estimada</span><strong>{fmtMoney(m.propina, m.invoiceMoneda)}</strong></div>}
                             {m.csvAuth && <div><span>Código autorización</span><strong>{m.csvAuth}</strong></div>}
                             <div><span>Confianza</span><strong>{m.confidence}%</strong></div>
                           </div>
@@ -2598,13 +2670,18 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                   exit={{ opacity: 0, x: -16 }}
                   transition={{ duration: 0.25, ease: 'easeOut' }}
                 >
+                  <div className="cm-fs-pane-note cm-note-amber">
+                    Estos cargos <b>sí aparecen en tu estado de cuenta de Clara</b>, pero todavía no subiste
+                    su factura o ticket. <b>No debes ese dinero</b> — ya se pagó con la tarjeta; lo único
+                    pendiente es el comprobante para el reporte.
+                  </div>
                   {visibleSin.length === 0 ? (
-                    <div className="cm-fs-empty">Sin cargos pendientes que cumplan los filtros.</div>
+                    <div className="cm-fs-empty">Todos los cargos tienen su comprobante. 🎉</div>
                   ) : visibleSin.map((s, i) => (
                     <div key={i} className="cm-fs-card cm-fs-sin-card">
                       <div className="cm-fs-sin-head">
                         <div className="cm-fs-sin-left">
-                          <span className="cm-fs-badge cm-fs-badge-red">Sin Match</span>
+                          <span className="cm-fs-badge cm-fs-badge-amber">Falta comprobante</span>
                           <div>
                             <div className="cm-fs-match-name">{s.descripcion || 'Sin descripción'}</div>
                             <div className="cm-fs-match-sub">{formatDateDisplay(s.fecha)}</div>
@@ -2624,7 +2701,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                       </div>
                       {s.sugerencias && s.sugerencias.length > 0 && (
                         <div className="cm-fs-suggest">
-                          <span className="cm-fs-suggest-label">¿Quisiste decir…?</span>
+                          <span className="cm-fs-suggest-label">¿Será alguno de estos que ya subiste?</span>
                           {s.sugerencias.map(sg => (
                             <span key={sg.id} className="cm-fs-suggest-chip">
                               {sg.proveedor} <em>{sg.score}%</em>
@@ -2632,6 +2709,48 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                           ))}
                         </div>
                       )}
+                    </div>
+                  ))}
+                </motion.div>
+              )}
+
+              {tab === 'sincargo' && (
+                <motion.div
+                  key="sincargo"
+                  className="cm-fs-pane"
+                  initial={{ opacity: 0, x: 16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -16 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                >
+                  <div className="cm-fs-pane-note cm-note-slate">
+                    Estos comprobantes <b>sí los subiste</b>, pero no encontramos su cargo en este estado de
+                    cuenta. Es normal: suele ser de <b>otro periodo</b>, pagado con <b>otra tarjeta</b>,
+                    en <b>efectivo</b> o por <b>transferencia</b>. Se quedan en tu reporte tal cual.
+                  </div>
+                  {visibleSinCargo.length === 0 ? (
+                    <div className="cm-fs-empty">Todos tus comprobantes encontraron su cargo en Clara. 🎉</div>
+                  ) : visibleSinCargo.map((f, i) => (
+                    <div key={f.id || i} className="cm-fs-card cm-fs-nocharge-card">
+                      <div className="cm-fs-sin-head">
+                        <div className="cm-fs-sin-left">
+                          <span className="cm-fs-badge cm-fs-badge-slate">
+                            {f.isTicket ? 'Ticket' : 'Factura'}
+                          </span>
+                          <div>
+                            <div className="cm-fs-match-name">{f.proveedor}</div>
+                            <div className="cm-fs-match-sub">
+                              {formatDateDisplay(f.fecha)}{f.noFactura ? ` · ${f.noFactura}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="cm-fs-sin-right">
+                          <div className="cm-fs-match-amount">
+                            <span>{fmtMoney(f.total, f.moneda)} {f.moneda}</span>
+                          </div>
+                          <span className="cm-fs-nocharge-hint">no aparece en este estado de cuenta</span>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </motion.div>
@@ -2646,8 +2765,13 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                   exit={{ opacity: 0, x: -16 }}
                   transition={{ duration: 0.25, ease: 'easeOut' }}
                 >
+                  <div className="cm-fs-pane-note cm-note-yellow">
+                    Estos cargos <b>sí quedaron vinculados</b>, pero el monto o la propina no cuadran al
+                    centavo. Échales un ojo antes de continuar: si el proveedor y la fecha son correctos,
+                    puedes dejarlos así.
+                  </div>
                   {visibleRevision.length === 0 ? (
-                    <div className="cm-fs-empty">Todo conciliado con alta confianza.</div>
+                    <div className="cm-fs-empty">Nada que revisar: todo cuadró con alta confianza. 🎉</div>
                   ) : visibleRevision.map((m, i) => (
                     <div key={`${m.invoiceId}-${i}`} className="cm-fs-card cm-fs-rev-card">
                       <div className="cm-fs-match-head">
@@ -2676,12 +2800,14 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                           })()}
                           <div className="cm-fs-match-amount">
                             {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
-                            {m.csvAmountUSD > 0 && <span>{fmtMoney(m.csvAmountUSD, 'USD')} USD</span>}
+                            {tieneDivisa(m) && <span>{fmtMoney(m.csvAmountUSD, 'USD')} {m.csvMoneda}</span>}
                           </div>
                         </div>
                       </div>
                       <div className="cm-fs-rev-note">
-                        Confianza baja. Revisa el monto, la fecha y el proveedor antes de aceptar.
+                        {m.descuadre
+                          ? 'La factura más la propina no suman exactamente lo que cobró Clara. Revisa el monto antes de continuar.'
+                          : 'Coincidencia aproximada. Verifica proveedor, fecha y monto antes de continuar.'}
                       </div>
                     </div>
                   ))}
@@ -2691,8 +2817,18 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
           )}
         </div>
 
-        {/* ───── STICKY FOOTER ───── */}
+        {/* ───── LEYENDA + STICKY FOOTER ───── */}
+        <div className="cm-fs-legend">
+          <span className="cm-fs-legend-title">Cómo leer esto:</span>
+          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-green" />Conciliado — el cargo y tu comprobante coinciden</span>
+          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-amber" />Falta comprobante — el cargo ya se pagó, sube su factura</span>
+          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-slate" />No está en el estado — comprobante de otro periodo o pago</span>
+          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-yellow" />Revisar — cuadró, pero conviene verificarlo</span>
+        </div>
         <footer className="cm-fs-footer">
+          <span className="cm-fs-footer-hint">
+            {matchCount} {matchCount === 1 ? 'cargo quedará vinculado' : 'cargos quedarán vinculados'} en tu reporte
+          </span>
           <button
             type="button"
             className="cm-fs-btn cm-fs-btn-secondary"
@@ -2705,7 +2841,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
             className="cm-fs-btn cm-fs-btn-primary"
             onClick={onConfirm}
           >
-            Aceptar conciliación · {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+            Continuar
           </button>
         </footer>
       </motion.div>
@@ -4575,6 +4711,11 @@ export default function App() {
         csvAmountUSD: row.montoUSD || 0,
         csvMoneda: row.moneda || 'MXN',
         csvAuth: row.autorizacion || '',
+        // Propina ya aplicada por el pass que acaba de correr (Pass 1 escalera
+        // / Pass 2 delta). El modal la usa para explicar la aritmética
+        // "factura + propina = cargo" en vez de solo decir "propina detectada".
+        propina: g.montoPropina || 0,
+        propinaPct: g.propinaPorcentaje || 0,
       })
     }
     const formatCobro = d => {
@@ -5045,6 +5186,22 @@ export default function App() {
       })
     }
 
+    // Comprobantes que el usuario SÍ subió pero que no aparecen en este estado
+    // de cuenta. No es un error ni un adeudo: normalmente son de otro periodo,
+    // se pagaron con otra tarjeta o en efectivo. Se listan aparte para que
+    // nadie lea "sin cargo" como "debo dinero".
+    const facturasSinCargo = nl
+      .filter(g => !g.hizoMatch)
+      .map(g => ({
+        id: g.id,
+        proveedor: g.proveedor || '(sin proveedor)',
+        noFactura: g.noFactura || '',
+        fecha: g.fechaFac || '',
+        total: g.totalCFDI || 0,
+        moneda: g.moneda || 'MXN',
+        isTicket: !!g.esTicket,
+      }))
+
     // Surface the total foreign-currency matches at the end so the modal can
     // show "X en moneda extranjera vinculadas" — covers Pass 0 hits plus any
     // existing row already flagged esMonedaExtranjera that got matched.
@@ -5052,14 +5209,19 @@ export default function App() {
 
     // Aggregate currency totals (Matched vs Pending) for the top summary
     // bar — split MXN vs USD so the chips stay readable across mixed sheets.
+    // Ojo: en el CSV de Clara "Monto original" viene lleno SIEMPRE, también en
+    // cargos en pesos, así que montoUSD == montoMXN en un estado MXN puro.
+    // Sumar eso a ciegas pintaba un "US$24,438.80 USD" fantasma al lado del
+    // total en pesos y la gente leía el doble de dinero. Solo acumulamos la
+    // divisa cuando la fila realmente NO es MXN.
     const totalsMatched = matchedRows.reduce((acc, m) => {
       acc.mxn += m.csvAmountMXN || 0
-      acc.usd += m.csvAmountUSD || 0
+      if ((m.csvMoneda || 'MXN') !== 'MXN') acc.usd += m.csvAmountUSD || 0
       return acc
     }, { mxn: 0, usd: 0 })
     const totalsPending = sinFactura.reduce((acc, s) => {
       acc.mxn += s.montoMXN || (s.moneda === 'MXN' ? s.monto : 0)
-      acc.usd += s.montoUSD || (s.moneda === 'USD' ? s.monto : 0)
+      if ((s.moneda || 'MXN') !== 'MXN') acc.usd += s.montoUSD || s.monto || 0
       return acc
     }, { mxn: 0, usd: 0 })
 
@@ -5075,7 +5237,8 @@ export default function App() {
       matchedRows,
       totalsMatched,
       totalsPending,
-      facturasSinCargo: nl.length - matches,
+      facturasSinCargo,
+      docsSubidos: nl.length,
       ticketsMatched,
       foreignMatched: foreignMatchesTotal,
       pendingLista: nl,
@@ -6005,7 +6168,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.91</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.92</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
