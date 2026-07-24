@@ -79,6 +79,8 @@ REGLAS PARA PEDIMENTO (tipoDocumento="pedimento"):
 REGLAS PARA TICKET (tipoDocumento="ticket"):
 - proveedor: full business name as shown on receipt
 - folio: look for Approval Code, Authorization Code, Auth, Approval, Code — return ONLY the digits as a plain string. If multiple codes exist prefer the one labeled "Approval" or "Authorization". This number is critical for bank matching, so do not strip leading zeros or insert dashes. If no auth code is shown fall back to a visible Check #, Ticket # or Receipt # in the same plain-digits form.
+  - CRITICAL: NEVER use the payment card number or its last 4 digits as the folio. Masked cards like "Mastercard ••••7507", "VISA XXXX7507", "•••• 7507", "ending in 7507", "XXXXXXXXXXXX7507", "tarjeta terminación 7507" are the CARD, not an authorization code — ignore them entirely for the folio field.
+  - Ride-hailing / app receipts (Uber, DiDi, Lyft, Cabify, Bolt, InDrive) and ANY receipt that has no real Approval/Authorization/Check/Ticket/Receipt number: return folio=null. Do NOT invent a folio nor substitute a trip id, order id, support number, phone, address or card digits. The bank reconciliation will match by amount instead.
 - formaPago: 04=card/mastercard/visa, 02=cash/efectivo
 - moneda: the 3-letter ISO currency code of the amounts on the receipt. Detect it from the currency symbol AND the country/address on the ticket:
   - "€" or "EUR" -> EUR;  "£" or "GBP" -> GBP;  "¥" / "円" / "JPY" -> JPY (use CNY only if clearly from China);  "CHF" -> CHF;  "R$" -> BRL.
