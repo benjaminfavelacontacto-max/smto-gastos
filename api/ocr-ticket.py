@@ -11,6 +11,15 @@ import urllib.request, urllib.error
 GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions'
 GROQ_MODEL = 'qwen/qwen3.6-27b'
 
+# OpenAI: visión + JSON por Chat Completions (MISMO shape que Groq, por eso el
+# switch es casi drop-in). gpt-4o es conocido-bueno para OCR de tickets (lee
+# mejor el texto chico del código de autorización que el Qwen open de Groq);
+# 'gpt-4o-mini' es la opción barata. Para probar un modelo GPT-5.x hay que
+# confirmar que acepte visión y quizá cambiar 'max_tokens' por
+# 'max_completion_tokens'.
+OPENAI_URL   = 'https://api.openai.com/v1/chat/completions'
+OPENAI_MODEL = 'gpt-4o'
+
 # Qwen 3.6 27B admite hasta 20MB por imagen, pero mantenemos un tope
 # conservador de ~3MB de imagen cruda (base64 expande ~1.33x) y reescalamos
 # si hace falta: es más que suficiente para un ticket y ahorra ancho de banda.
@@ -394,6 +403,113 @@ def _to_image_data_url(base64_data, media_type):
     return 'data:image/jpeg;base64,' + base64.b64encode(jpeg).decode()
 
 
+def _extract_content(raw):
+    '''Ambos proveedores (OpenAI y Groq) responden con el shape de OpenAI:
+    choices[0].message.content trae el JSON del OCR como string.'''
+    j = json.loads(raw)
+    return j['choices'][0]['message']['content']
+
+
+def _ocr_openai(image_url, api_key):
+    '''OCR con OpenAI (Chat Completions, visión + JSON). Igual que Groq pero SIN
+    los campos reasoning_* (son específicos del Qwen de Groq) y sin el hack de
+    User-Agent (OpenAI no está detrás de Cloudflare).'''
+    payload = {
+        'model': OPENAI_MODEL,
+        'temperature': 0,
+        'max_tokens': 1000,
+        'response_format': {'type': 'json_object'},
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {'type': 'image_url', 'image_url': {'url': image_url}},
+                {'type': 'text', 'text': OCR_PROMPT},
+            ],
+        }],
+    }
+    req = urllib.request.Request(
+        OPENAI_URL,
+        data=json.dumps(payload).encode(),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            'Accept': 'application/json',
+        },
+        method='POST',
+    )
+    # Reintento suave por si pega un 429 (rate limit por minuto de OpenAI).
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                return _extract_content(resp.read().decode())
+        except urllib.error.HTTPError as he:
+            detail = he.read().decode(errors='replace')
+            if he.code != 429 or attempt == 2:
+                raise RuntimeError(f'OpenAI API {he.code}: {detail}')
+            wait = None
+            ra = he.headers.get('Retry-After') if he.headers else None
+            if ra:
+                try: wait = float(ra)
+                except ValueError: wait = None
+            time.sleep(min((wait or 3.0 * (attempt + 1)) + 0.5, 20.0))
+    raise RuntimeError('OpenAI API: sin respuesta tras reintentos')
+
+
+def _ocr_groq(image_url, api_key):
+    '''OCR con Groq (Qwen 3.6 27B). Fallback gratis. Apaga el thinking en modo
+    JSON (si no da 400 json_validate_failed) y respeta el Retry-After del 429
+    (rate limit por minuto). OJO: el 429 por DÍA (TPD 200k) no se resuelve aquí
+    porque el reset son decenas de minutos, muy por encima del tope de 30s.'''
+    payload = {
+        'model': GROQ_MODEL,
+        'temperature': 0,
+        'max_tokens': 1000,
+        'response_format': {'type': 'json_object'},
+        'reasoning_effort': 'none',
+        'reasoning_format': 'hidden',
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {'type': 'image_url', 'image_url': {'url': image_url}},
+                {'type': 'text', 'text': OCR_PROMPT},
+            ],
+        }],
+    }
+    req = urllib.request.Request(
+        GROQ_URL,
+        data=json.dumps(payload).encode(),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+            # Cloudflare (delante de Groq) banea el User-Agent por defecto de
+            # urllib (Python-urllib/x.y) con error 1010. Mandamos uno normal.
+            'User-Agent': 'smto-app/1.0 (+https://smto-app.vercel.app)',
+            'Accept': 'application/json',
+        },
+        method='POST',
+    )
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return _extract_content(resp.read().decode())
+        except urllib.error.HTTPError as he:
+            detail = he.read().decode(errors='replace')
+            if he.code != 429 or attempt == 4:
+                raise RuntimeError(f'Groq API {he.code}: {detail}')
+            wait = None
+            ra = he.headers.get('Retry-After') if he.headers else None
+            if ra:
+                try: wait = float(ra)
+                except ValueError: wait = None
+            if wait is None:
+                m = re.search(r'try again in\s*([0-9.]+)\s*s', detail, re.I)
+                if m: wait = float(m.group(1))
+            if wait is None:
+                wait = 3.0 * (attempt + 1)
+            time.sleep(min(wait + 0.5, 30.0))
+    raise RuntimeError('Groq API: sin respuesta tras reintentos')
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
@@ -445,88 +561,31 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'parcialidad': parcialidad}).encode())
                 return
 
-            api_key = os.environ.get('SMTO_GROQ_API_KEY', '')
-            if not api_key:
-                raise RuntimeError('SMTO_GROQ_API_KEY not configured in Vercel environment variables')
-
             image_url = _to_image_data_url(base64_data, media_type)
 
-            payload = {
-                'model': GROQ_MODEL,
-                'temperature': 0,
-                # 1000 basta de sobra para el JSON (~250 tokens) y reduce el total
-                # "Requested" que Groq cuenta contra el límite TPM de 8000/min.
-                'max_tokens': 1000,
-                'response_format': {'type': 'json_object'},
-                # qwen3.6-27b es un modelo con razonamiento. En modo JSON el
-                # reasoning_format por defecto ("raw", que mete <think>...</think>
-                # en el contenido) es INCOMPATIBLE y Groq devuelve 400
-                # json_validate_failed con failed_generation vacío. Apagamos el
-                # thinking: el OCR es extracción, no requiere cadena de
-                # pensamiento — más rápido y consume menos del rate limit free.
-                # 'hidden' es defensa extra para recibir SOLO el JSON final.
-                'reasoning_effort': 'none',
-                'reasoning_format': 'hidden',
-                'messages': [{
-                    'role': 'user',
-                    'content': [
-                        {'type': 'image_url', 'image_url': {'url': image_url}},
-                        {'type': 'text', 'text': OCR_PROMPT},
-                    ],
-                }],
-            }
+            openai_key = os.environ.get('SMTO_OPENAI_API_KEY', '')
+            groq_key   = os.environ.get('SMTO_GROQ_API_KEY', '')
+            if not openai_key and not groq_key:
+                raise RuntimeError('Ni SMTO_OPENAI_API_KEY ni SMTO_GROQ_API_KEY configuradas en Vercel')
 
-            req = urllib.request.Request(
-                GROQ_URL,
-                data=json.dumps(payload).encode(),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {api_key}',
-                    # Cloudflare (delante de Groq) banea el User-Agent por
-                    # defecto de urllib (Python-urllib/x.y) con error 1010.
-                    # Mandamos uno normal para que no nos bloquee.
-                    'User-Agent': 'smto-app/1.0 (+https://smto-app.vercel.app)',
-                    'Accept': 'application/json',
-                },
-                method='POST',
-            )
-            # Groq (tier gratuito) limita por tokens/minuto. Al subir varias
-            # facturas seguidas las últimas llamadas chocan con un 429 y antes
-            # se perdía la factura. Reintentamos respetando el tiempo que Groq
-            # indica (header Retry-After o el "try again in Xs" del mensaje).
-            # Vercel permite hasta 300s, así que esperar unos segundos aquí es
-            # seguro y deja que la factura entre en vez de desaparecer.
-            groq_raw = None
-            max_retries = 5
-            for attempt in range(max_retries):
+            # OpenAI primario (lee mejor el texto chico / código de autorización);
+            # Groq de fallback (gratis) si OpenAI falla, se queda sin saldo o sin
+            # quota. Los fallos se acumulan y, si ninguno responde, se reportan al
+            # usuario (no se pierde la factura en silencio).
+            text = None
+            provider_errors = []
+            if openai_key:
                 try:
-                    with urllib.request.urlopen(req, timeout=60) as resp:
-                        groq_raw = resp.read().decode()
-                    break
-                except urllib.error.HTTPError as he:
-                    detail = he.read().decode(errors='replace')
-                    # Solo reintentamos en 429 (rate limit). El resto es fatal.
-                    if he.code != 429 or attempt == max_retries - 1:
-                        raise RuntimeError(f'Groq API {he.code}: {detail}')
-                    wait = None
-                    ra = he.headers.get('Retry-After') if he.headers else None
-                    if ra:
-                        try: wait = float(ra)
-                        except ValueError: wait = None
-                    if wait is None:
-                        m = re.search(r'try again in\s*([0-9.]+)\s*s', detail, re.I)
-                        if m: wait = float(m.group(1))
-                    # Fallback con backoff si Groq no dio un tiempo explícito.
-                    if wait is None:
-                        wait = 3.0 * (attempt + 1)
-                    # Margen + tope para no exceder el límite de la función.
-                    wait = min(wait + 0.5, 30.0)
-                    time.sleep(wait)
-            if groq_raw is None:
-                raise RuntimeError('Groq API: sin respuesta tras reintentos')
-
-            groq_json = json.loads(groq_raw)
-            text = groq_json['choices'][0]['message']['content']
+                    text = _ocr_openai(image_url, openai_key)
+                except Exception as e:
+                    provider_errors.append(f'OpenAI: {e}')
+            if text is None and groq_key:
+                try:
+                    text = _ocr_groq(image_url, groq_key)
+                except Exception as e:
+                    provider_errors.append(f'Groq: {e}')
+            if text is None:
+                raise RuntimeError('OCR falló en todos los proveedores → ' + ' | '.join(provider_errors))
             clean = text.replace('```json', '').replace('```', '').strip()
             result = json.loads(clean)
 
