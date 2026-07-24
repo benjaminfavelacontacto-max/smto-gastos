@@ -812,6 +812,24 @@ function fechaDesdeNombreUS(name) {
   return `${y}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
 }
 
+// Corrige el AÑO de una fecha ISO (YYYY-MM-DD) leída por OCR. El modelo a veces
+// lee mal el año de un ticket (p.ej. "2023" en vez de "2026"); en un reporte de
+// gastos las facturas son SIEMPRE del año en curso, salvo el cruce
+// diciembre→enero (un ticket de nov/dic capturado en ene/feb del año siguiente).
+// Conserva el día y el mes del OCR (que suelen venir bien) y solo ajusta el año.
+// SOLO se usa en el path de OCR (tickets/pedimentos); los CFDI traen su fecha
+// fiscal correcta del XML y no pasan por aquí.
+function forzarAñoEnCurso(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''))
+  if (!m) return iso
+  const mes = m[2], dia = m[3]
+  const hoy = new Date()
+  let anio = hoy.getFullYear()
+  // Cruce dic-ene: si HOY es ene/feb y el ticket es de nov/dic → año anterior.
+  if ((hoy.getMonth() + 1) <= 2 && parseInt(mes, 10) >= 11) anio -= 1
+  return `${anio}-${mes}-${dia}`
+}
+
 function parseDateRobusto(text) {
   if (!text) return null
   const chars = text.trim().replace(/[^0-9/\-]/g, '')
@@ -3882,7 +3900,7 @@ export default function App() {
         rfc: 'SEN1504132C9',
         proveedor: parsed.proveedor || 'SMTO ENGINEERING',
         noFactura: String(parsed.folio || ('PED-' + uuid.slice(0, 6).toUpperCase())),
-        fechaFac:  parsed.fecha || today,
+        fechaFac:  forzarAñoEnCurso(parsed.fecha || today),
         concepto:  parsed.concepto || 'Pedimento de Importacion',
         tipo: 'Aduana',
         importe:    importePagado,
@@ -3894,7 +3912,7 @@ export default function App() {
         totalCFDI:  importePagado,
         propinaPorcentaje: 0,
         montoPropina:      0,
-        fechaCobro: parsed.fecha || today,
+        fechaCobro: forzarAñoEnCurso(parsed.fecha || today),
         formaPago: parsed.formaPago || '03',
         uuid,
         tienePDF: false,
@@ -3967,7 +3985,7 @@ export default function App() {
     let proveedorFinal = parsed.proveedor || ''
     let rfcFinal = ''
     let folioFinal = parsed.folio || parsed.approval_code || ''
-    let fechaFinal = parsed.fecha || today
+    let fechaFinal = forzarAñoEnCurso(parsed.fecha || today)
     let tipoFinal = autoDetectTipo(parsed.proveedor || '', parsed.concepto || '', usaTiposExtendidos(colaborador) ? undefined : categoriaEfectiva(colaborador), '', parsed.rfc || '')
     if (esITESO) {
       proveedorFinal = 'ITESO'
@@ -3993,7 +4011,7 @@ export default function App() {
       // Fecha determinista: Microsoft nombra sus PDF "...Office MM-DD-YY.pdf".
       // Preferimos esa fecha sobre la del OCR para que el gasto caiga en el mes
       // correcto y nunca en un mes anterior por un día/mes invertido.
-      fechaFinal = fechaDesdeNombreUS(fileName) || parsed.fecha || today
+      fechaFinal = forzarAñoEnCurso(fechaDesdeNombreUS(fileName) || parsed.fecha || today)
       // Billing Number determinista desde el nombre ("Microsoft G160071537 ...").
       // CRÍTICO: como forzamos un RFC constante para Microsoft, la dedup
       // (rfc|noFactura) colisiona si el OCR repite el folio entre dos facturas
@@ -5957,7 +5975,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.88</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.89</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
