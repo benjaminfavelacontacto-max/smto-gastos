@@ -47,7 +47,7 @@ OCR_PROMPT = '''Extract receipt/ticket/invoice data. Respond ONLY with a JSON ob
   "proveedor": "business or restaurant name",
   "concepto": "brief description (food, gas, hotel, taxi, etc)",
   "fecha": "YYYY-MM-DD or null",
-  "moneda": "3-letter ISO code: MXN, USD, EUR, GBP, JPY, CHF, CAD, etc.",
+  "moneda": "3-letter ISO code: MXN, USD, EUR, GBP, CNY, JPY, MYR, SGD, CHF, CAD, etc.",
   "subtotal": 0.00,
   "iva": 0.00,
   "propina": 0.00,
@@ -82,11 +82,12 @@ REGLAS PARA TICKET (tipoDocumento="ticket"):
   - CRITICAL: NEVER use the payment card number or its last 4 digits as the folio. Masked cards like "Mastercard ••••7507", "VISA XXXX7507", "•••• 7507", "ending in 7507", "XXXXXXXXXXXX7507", "tarjeta terminación 7507" are the CARD, not an authorization code — ignore them entirely for the folio field.
   - Ride-hailing / app receipts (Uber, DiDi, Lyft, Cabify, Bolt, InDrive) and ANY receipt that has no real Approval/Authorization/Check/Ticket/Receipt number: return folio=null. Do NOT invent a folio nor substitute a trip id, order id, support number, phone, address or card digits. The bank reconciliation will match by amount instead.
 - formaPago: 04=card/mastercard/visa, 02=cash/efectivo
-- moneda: the 3-letter ISO currency code of the amounts on the receipt. Detect it from the currency symbol AND the country/address on the ticket:
-  - "€" or "EUR" -> EUR;  "£" or "GBP" -> GBP;  "¥" / "円" / "JPY" -> JPY (use CNY only if clearly from China);  "CHF" -> CHF;  "R$" -> BRL.
-  - "$" is AMBIGUOUS: use USD if the receipt is from the USA (US city/state/ZIP, "US$", or prices say USD); CAD if from Canada; and MXN ONLY when there is positive evidence the receipt is Mexican (Mexican address, RFC, "IVA", "M.N.", "pesos", or amounts clearly in pesos).
+- moneda: the 3-letter ISO currency code of the amounts on the receipt. Detect it from the currency symbol AND the country/address/language on the ticket:
+  - Symbol map: "€" EUR · "£" GBP · "CHF"/"Fr" CHF · "zł" PLN · "Kč" CZK · "kr" = SEK/NOK/DKK by country · "₺" TRY · "R$" BRL · "RM"/"Ringgit" MYR (Malaysia — address in Kuala Lumpur/Selangor/Penang/Johor, tax line "SST") · "S$" SGD · "HK$" HKD · "NT$" TWD · "₩"/"원" KRW · "฿" THB · "₫"/"đ" VND · "₹"/"Rs" INR · "Rp" IDR · "₱" PHP.
+  - "¥" / "￥" is AMBIGUOUS: CNY if the ticket is Chinese (元, 圆, 人民币, RMB, 增值税, simplified-Chinese text or an address in China); JPY if Japanese (円, 税込, Japanese text or an address in Japan).
+  - "$" is AMBIGUOUS: USD if the receipt is from the USA (US city/state/ZIP, "US$", or prices say USD); CAD if from Canada; SGD/HKD/AUD/NZD when the ticket prints S$/HK$/A$/NZ$; and MXN ONLY when there is positive evidence the receipt is Mexican (Mexican address, RFC, "IVA", "M.N.", "pesos", or amounts clearly in pesos).
   - If an explicit ISO code is printed on the receipt, trust it over the symbol.
-  - CRITICAL: NEVER default a foreign-looking receipt (European/Asian/other address, or a non-"$" symbol like €, £, ¥) to MXN. Return MXN only with real evidence it is Mexican; if a European ticket shows "€", the answer is EUR, never MXN.
+  - CRITICAL: NEVER default a foreign-looking receipt (European/Asian/other address, or a non-"$" symbol like €, £, ¥, RM, ฿) to MXN. Return MXN only with real evidence it is Mexican; if a European ticket shows "€", the answer is EUR, never MXN.
 - subtotal: amount before tax and tip
 - iva: tax amount (Tax, IVA, Impuesto)
 - propina: tip amount (Tip, Gratuity, Propina), often HANDWRITTEN on a restaurant receipt — 0 if not present

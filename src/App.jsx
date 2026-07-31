@@ -419,7 +419,9 @@ const COLUMNS = [
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
-  { key: 'montoUSD',          label: 'Monto USD',    width: 110, sortable: true,  type: 'number' },
+  // Renombrada de "Monto USD": el monto va en la divisa original del ticket
+  // (el Excel la formatea con su símbolo dentro de la columna MONTO M.E.).
+  { key: 'montoUSD',          label: 'Monto M.E.',   width: 110, sortable: true,  type: 'number' },
   { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
 
@@ -2097,7 +2099,14 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
       {/* Proveedor — sticky column (pinned left so it stays visible when scrolling) */}
       <td className="td-proveedor">
         <input className="cell-in is-bold" value={g.proveedor} onChange={e => upd('proveedor', e.target.value)} />
-        {g.montoUSD > 0 && <span className="badge-usd">USD</span>}
+        {/* Badge con la divisa REAL del ticket (antes decía siempre "USD",
+            aunque el gasto fuera en euros o ringgit). Fila manual con monto
+            tecleado pero sin divisa detectada (moneda=MXN): conserva la
+            suposición histórica de USD — mismo comportamiento que v8.92. */}
+        {g.montoUSD > 0 && (() => {
+          const code = String(g.monedaCodigo || g.moneda || 'USD').toUpperCase()
+          return <span className="badge-usd">{code === 'MXN' ? 'USD' : code}</span>
+        })()}
       </td>
 
       {/* Concepto */}
@@ -5551,7 +5560,9 @@ export default function App() {
         total:    findCol('TOTAL'),
         forma:    findCol('FORMA PAGO'),
         banco:    findCol('BANCO'),
-        usd:      findCol('MONTO USD'),
+        // 'MONTO M.E.' es el encabezado nuevo; 'MONTO USD' el histórico —
+        // ambos deben importar (reportes viejos y nuevos).
+        usd:      findCol('MONTO M.E.', 'MONTO ME', 'MONTO USD'),
         tc:       findCol('T/C', 'TC'),
       }
       // Si faltan columnas clave, el archivo no tiene el formato del reporte:
@@ -6168,7 +6179,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.92</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.95</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

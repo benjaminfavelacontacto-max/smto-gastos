@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
-Current version: v8.92
+Current version: v8.95
 
 ## Stack
 
@@ -55,7 +55,20 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
    - Clara MXN CSV: smartAmountMatch ±$0.01 (Pass 1) + delta-tip Pass 2 (cargo − total = propina, 5–35%, solo categorías de comida)
    - Clara USA CSV: match by authorization code
 3. OCR for PDF/image tickets via Groq API (free) — only fires for PDFs without a matching XML. PDFs are rasterized to image server-side (PyMuPDF) before OCR since Groq vision only reads images. Image-OCR receipts are wrapped into single-page PDFs at ZIP export so they ride along with the standard buildFileName naming.
-4. Multi-currency: USD, EUR, JPY, etc. with per-line exchange rate
+4. Multi-currency SIN columna extra (diseño aprobado por Victor Aceves
+   2026-07-31; la variante con columna MONEDA fue RECHAZADA y revertida —
+   commits `7b952f7`/`3f12c96`). El layout del Excel se queda en 22 columnas
+   (B→W): la divisa se ve DENTRO de MONTO M.E. (col R, antes "MONTO USD") vía
+   number_format con símbolo nativo (¥50 / €82.50 / RM 480.00 — el valor sigue
+   siendo número, las plantillas de contabilidad no se rompen). El OCR detecta
+   el ISO por símbolo + país/idioma (¥ se desambigua CNY vs JPY; $ USD/CAD/MXN)
+   y `normaliza_moneda()` en export-excel.py blinda alias ("RM"→MYR). T/C: una
+   celda editable POR divisa en la fila 7, ancladas de R7 hacia la izquierda —
+   con UNA divisa el reporte es idéntico al clásico (label O7:Q7 + input R7);
+   cada fila convierte con la celda de SU moneda. Tarjeta KPI R-T: con una
+   divisa suma SUM(R) con su símbolo; con varias muestra "M. EXTRANJERA (MXN)"
+   = SUMIF(S>0, O) (equivalente ya convertido; sumar montos nativos mezclados
+   no significa nada). El import acepta ambos encabezados (MONTO M.E. / USD).
 5. Propina (tip) split into its own sub-row in Excel
 6. Collaborator selector: 50 people across 4 categories (Admin, Socio, Servicio, Ventas)
 7. Expense types filtered by category (TIPOS_VENTAS vs TIPOS_NORMALES)
@@ -81,7 +94,12 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 - Zebra-striped table, propina as sub-row beneath parent
 - Native datetime objects (no date warnings)
 - SUM formulas in totals row
-- Columns: RFC, PROVEEDOR, TIPO, FACTURA, F.FACTURA, F.COBRO, CONCEPTO, IMPORTE, IVA, RETENCIÓN, TOTAL, FORMA PAGO, MONTO EXT, T/C
+- Columns (B→W, 22 en total — NO agregar columnas: contabilidad tiene plantillas
+  que leen por letra y la variante de 23 columnas fue rechazada): RFC,
+  PROVEEDOR, TIPO, PÓLIZA, FACTURA, F. FACTURA, F. COBRO, CONCEPTO, IMPORTE,
+  IVA, ISR, ISH/IEPS, RETENCIÓN, TOTAL, FORMA PAGO, BANCO, MONTO M.E. (R,
+  símbolo nativo vía number_format), T/C, USUARIO, COBRADO, FACTURADO,
+  DIFERENCIA
 
 ## Architecture notes
 
@@ -126,7 +144,7 @@ rate limits.
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
-- Current: v8.92
+- Current: v8.95
 
 ## Things to be careful about
 
