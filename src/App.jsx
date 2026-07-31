@@ -419,56 +419,9 @@ const COLUMNS = [
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
     getValue: g => g.totalCFDI + g.montoPropina },
-  // MONEDA + MONTO M.E. (moneda extranjera). La columna se llamaba "Monto USD"
-  // y era mentira en cuanto el reporte traía euros, yuanes o ringgit: ahora el
-  // código ISO vive en su propia celda editable y el monto se muestra con el
-  // símbolo de ESA divisa.
-  { key: 'monedaCodigo',      label: 'Moneda',       width: 95,  sortable: true,  type: 'string',
-    getValue: g => (g.monedaCodigo || g.moneda || 'MXN') },
-  { key: 'montoUSD',          label: 'Monto M.E.',   width: 115, sortable: true,  type: 'number' },
+  { key: 'montoUSD',          label: 'Monto USD',    width: 110, sortable: true,  type: 'number' },
   { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
-
-/* Divisas ofrecidas en el selector de la tabla. El orden es por frecuencia real
-   de los viajes de SMTO (Norteamérica → Asia → Europa), no alfabético, para que
-   lo común quede arriba. Si el OCR devuelve un código fuera de esta lista, el
-   render lo agrega al vuelo para no perder el dato. */
-const MONEDAS_DISPONIBLES = [
-  'MXN', 'USD', 'EUR', 'GBP', 'CNY', 'JPY', 'MYR', 'SGD', 'THB', 'KRW',
-  'TWD', 'HKD', 'VND', 'INR', 'IDR', 'PHP', 'CAD', 'CHF', 'AUD', 'BRL',
-]
-
-/* Símbolo por divisa — espejo de CURRENCY_SYMBOLS en api/export-excel.py, para
-   que la tabla y el Excel muestren exactamente el mismo símbolo. */
-const MONEDA_SIMBOLOS = {
-  MXN: '$',   USD: '$',   EUR: '€',   GBP: '£',   JPY: '¥',   CNY: '¥',
-  CAD: 'C$',  AUD: 'A$',  CHF: 'Fr',  MYR: 'RM',  SGD: 'S$',  HKD: 'HK$',
-  TWD: 'NT$', KRW: '₩',   THB: '฿',   VND: '₫',   INR: '₹',   PHP: '₱',
-  IDR: 'Rp',  BRL: 'R$',
-}
-
-const simboloMoneda = (code) => MONEDA_SIMBOLOS[(code || 'MXN').toUpperCase()] || ''
-
-/* Normaliza lo que devuelve el OCR a un código ISO de 3 letras. El modelo a
-   veces contesta con el símbolo o el nombre ("RM", "yuan", "euros") y ese texto
-   terminaba tal cual en la columna MONEDA del Excel. */
-const ALIAS_MONEDA = {
-  'RM': 'MYR', 'RINGGIT': 'MYR', 'YUAN': 'CNY', 'RMB': 'CNY', 'RENMINBI': 'CNY',
-  'YEN': 'JPY', 'EURO': 'EUR', 'EUROS': 'EUR', 'LIBRA': 'GBP', 'LIBRAS': 'GBP',
-  'POUND': 'GBP', 'POUNDS': 'GBP', 'STERLING': 'GBP', 'DOLAR': 'USD',
-  'DÓLAR': 'USD', 'DOLLAR': 'USD', 'DOLLARS': 'USD', 'PESO': 'MXN',
-  'PESOS': 'MXN', 'BAHT': 'THB', 'WON': 'KRW', 'RUPIA': 'INR', 'RUPEE': 'INR',
-  'FRANCO': 'CHF', 'FRANC': 'CHF', 'REAL': 'BRL', 'REALES': 'BRL',
-  '$': 'MXN', '€': 'EUR', '£': 'GBP', '¥': 'CNY', '₩': 'KRW', '฿': 'THB',
-  '₫': 'VND', '₹': 'INR', '₱': 'PHP',
-}
-
-const normalizaMoneda = (raw) => {
-  const s = String(raw ?? '').trim().toUpperCase()
-  if (!s) return 'MXN'
-  if (/^[A-Z]{3}$/.test(s)) return s
-  return ALIAS_MONEDA[s] || 'MXN'
-}
 
 /* ═══════════════════════════════════════════════════
    UTILIDADES
@@ -2027,10 +1980,6 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
   const dateDisplay  = formatDateDisplay(g.fechaFac)
   const onDateChange = v => upd('fechaFac', parseDateDisplay(v))
 
-  // Divisa del renglón. monedaCodigo es el campo canónico; `moneda` se
-  // conserva por compatibilidad con gastos viejos y con el import de Excel.
-  const monedaRow = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
-
   // Per-row toggle for the Fecha Cobro cell: span (DD-MM-YYYY) when blurred,
   // native date picker (YYYY-MM-DD) when focused.
   const [editingCobro, setEditingCobro] = useState(false)
@@ -2148,9 +2097,7 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
       {/* Proveedor — sticky column (pinned left so it stays visible when scrolling) */}
       <td className="td-proveedor">
         <input className="cell-in is-bold" value={g.proveedor} onChange={e => upd('proveedor', e.target.value)} />
-        {/* Badge con la divisa REAL del ticket (antes decía siempre "USD",
-            aunque el gasto fuera en euros o en ringgit). */}
-        {monedaRow !== 'MXN' && g.montoUSD > 0 && <span className="badge-usd">{monedaRow}</span>}
+        {g.montoUSD > 0 && <span className="badge-usd">USD</span>}
       </td>
 
       {/* Concepto */}
@@ -2239,50 +2186,15 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
         </span>
       </td>
 
-      {/* Moneda — la detecta el OCR del símbolo del ticket; editable porque un
-          "$" ambiguo (USD/CAD/MXN) o un ticket borroso se puede equivocar.
-          Cambiarla arrastra los campos espejo (moneda / esMonedaExtranjera /
-          montoExtranjero) para que el Excel y la conciliación no se
-          desincronicen. */}
-      <td>
-        <select
-          className="cell-select"
-          value={monedaRow}
-          onChange={e => {
-            const code = e.target.value
-            const esExt = code !== 'MXN'
-            upd('monedaCodigo', code)
-            upd('moneda', code)
-            upd('esMonedaExtranjera', esExt)
-            // Al volver a pesos, el monto en divisa deja de tener sentido.
-            if (!esExt) {
-              upd('montoExtranjero', 0)
-              upd('montoUSD', 0)
-              upd('tipoCambio', 0)
-            } else if (!g.montoExtranjero && g.montoUSD) {
-              upd('montoExtranjero', g.montoUSD)
-            }
-          }}
-        >
-          {MONEDAS_DISPONIBLES.includes(monedaRow)
-            ? null
-            : <option value={monedaRow}>{monedaRow}</option>}
-          {MONEDAS_DISPONIBLES.map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-      </td>
-
-      {/* Monto M.E. — importe en la divisa ORIGINAL del ticket. Editarlo
-          auto-deriva el Tipo de Cambio a partir de totalCFDI. Cuando el Pass 0
-          de validarBanco detecta una propina en moneda extranjera, aparece aquí
-          como subtítulo verde. */}
+      {/* Monto USD — editing it auto-derives Tipo de Cambio from totalCFDI.
+          When Pass 0 of validarBanco detects a foreign-currency tip on a
+          matched ticket, it surfaces here as a small green subtitle. */}
       <td>
         <input
           type="number"
           className="cell-in"
           value={g.montoUSD || ''}
-          placeholder={`${simboloMoneda(monedaRow)}0.00`}
+          placeholder="0.00"
           step="0.01"
           onChange={e => {
             const usd = parseFloat(e.target.value) || 0
@@ -2290,20 +2202,17 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
               ? +(g.totalCFDI / usd).toFixed(2)
               : g.tipoCambio
             upd('montoUSD', usd)
-            // montoExtranjero es el campo que lee el Excel; sin esto, teclear el
-            // monto a mano dejaba la columna MONTO M.E. en blanco.
-            upd('montoExtranjero', usd)
             upd('tipoCambio', tc)
           }}
         />
         {g.propinaExtranjero > 0 && (
           <div className="propina-extranjera-hint" title="Propina detectada en moneda extranjera">
-            💵 +{simboloMoneda(monedaRow)}{g.propinaExtranjero.toFixed(2)} propina
+            💵 +${g.propinaExtranjero.toFixed(2)} propina
           </div>
         )}
       </td>
 
-      {/* Tipo de Cambio — manual override (or auto-set when Monto M.E. changes). */}
+      {/* Tipo de Cambio — manual override (or auto-set when Monto USD changes). */}
       <td>
         <input
           type="number"
@@ -2420,12 +2329,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
 
   const fmtMoney = (n, currency = 'MXN') => {
     const num = Number(n) || 0
-    const code = (currency || 'MXN').toUpperCase()
-    // US$ para dólares (no confundirlo con pesos) y el símbolo nativo para el
-    // resto: antes CUALQUIER divisa que no fuera USD se pintaba con "$", así
-    // que un cargo en euros salía como "$82.50 EUR".
-    const pre = code === 'USD' ? 'US$' : code === 'MXN' ? '$' : (simboloMoneda(code) || '')
-    return `${pre}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    return `${currency === 'USD' ? 'US$' : '$'}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
 
   const matchesPassesFilter = (m) => {
@@ -3522,9 +3426,9 @@ export default function App() {
   // [4] factura, [5] proveedor, [6] concepto, [7] tipo, [8] subtotal,
   // [9] iva, [10] isr/ish/ieps, [11] ret.isr, [12] ret.iva, [13] reten,
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
-  // 23 columnas: ...formaPago(15), banco(16, solo especiales), prop%(17),
-  // prop$(18), totalFinal(19), moneda(20), montoUSD/M.E.(21), tipoCambio(22)
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 95, 115, 80])
+  // 22 columnas: ...formaPago(15), banco(16, solo especiales), prop%(17),
+  // prop$(18), totalFinal(19), montoUSD(20), tipoCambio(21)
+  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
   const [busqueda,      setBusqueda]      = useState('')
   const searchInputRef = useRef(null)
@@ -3582,30 +3486,22 @@ export default function App() {
   // ── Métricas (cards en el encabezado de la tabla) ──
   const metrics = useMemo(() => {
     const sum = field => lista.reduce((s, g) => s + (g[field] || 0), 0)
-    // Totales POR DIVISA. Antes era un solo `totalUSD` que sumaba todos los
-    // montos extranjeros sin distinguir moneda: con euros y ringgit en el mismo
-    // reporte la tarjeta mostraba una cifra sin significado. Usa montoExtranjero
-    // y cae a montoUSD para mantener compat con rows OCR previos.
-    const porMoneda = {}
-    for (const g of lista) {
-      const code = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
-      if (code === 'MXN') continue
-      const monto = Number(g.montoExtranjero) || Number(g.montoUSD) || 0
-      if (!monto) continue
-      porMoneda[code] = +((porMoneda[code] || 0) + monto).toFixed(2)
-    }
+    // totalUSD: suma de montos en USD. Usa montoExtranjero si está, si no
+    // cae a montoUSD para mantener compat con rows OCR previos.
+    const totalUSD = lista.reduce(
+      (s, g) => s + (Number(g.montoExtranjero) || Number(g.montoUSD) || 0),
+      0
+    )
     return {
       totalFacturado:   sum('totalCFDI'),
       ivaTotal:         sum('iva'),
       retencionesTotal: sum('retenciones'),
       sinCobrar:        lista.filter(g => !g.fechaCobro).length,
       count:            lista.length,
-      porMoneda,
+      totalUSD,
     }
   }, [lista])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  const fmtDivisa = (code, n) =>
-    `${simboloMoneda(code)}${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
   // ── Búsqueda universal — substring (case + accent-insensitive) sobre
   //    todos los campos significativos del gasto. Se aplica ANTES del sort
@@ -4117,10 +4013,7 @@ export default function App() {
     const parsed = await response.json()
     const uuid = crypto.randomUUID()
     const esPedimento  = (parsed.tipoDocumento || '').toString().toLowerCase() === 'pedimento'
-    // normalizaMoneda blinda la columna MONEDA del Excel: el modelo de visión a
-    // veces contesta con el símbolo o el nombre ("RM", "yuan", "€") en vez del
-    // código ISO, y ese texto crudo terminaba en el reporte.
-    const monedaCode   = esPedimento ? 'MXN' : normalizaMoneda(parsed.moneda)
+    const monedaCode   = esPedimento ? 'MXN' : (parsed.moneda || 'MXN').toString().toUpperCase()
     const isExtranjera = !esPedimento && !!monedaCode && monedaCode !== 'MXN'
     const today = new Date().toISOString().slice(0, 10)
     let subtotal = Number(parsed.subtotal) || 0
@@ -4943,11 +4836,8 @@ export default function App() {
     // el TOTAL del ticket (no el subtotal) para NO contar el IVA como propina.
     const isForeignRow = row => !!(row.moneda && row.moneda !== 'MXN' && row.montoUSD > 0)
     const fillForeignFromBank = (inv, row) => {
-      // La divisa sale de la columna "Moneda original" del estado de Clara, no
-      // de una suposición: si el cargo fue en EUR o MYR, eso llega a la columna
-      // MONEDA del Excel. normalizaMoneda la blinda igual que al OCR.
-      inv.monedaCodigo = normalizaMoneda(row.moneda)
-      inv.moneda = inv.monedaCodigo
+      inv.monedaCodigo = row.moneda
+      inv.moneda = row.moneda
       inv.esMonedaExtranjera = true
       inv.tipoCambio = row.montoUSD > 0 ? +(row.montoMXN / row.montoUSD).toFixed(4) : 0
       let tipMxn = 0, tipExt = 0
@@ -5661,10 +5551,7 @@ export default function App() {
         total:    findCol('TOTAL'),
         forma:    findCol('FORMA PAGO'),
         banco:    findCol('BANCO'),
-        // 'MONTO USD' es el encabezado histórico: los reportes exportados antes
-        // del soporte multi-divisa lo traen así y deben seguir importándose.
-        usd:      findCol('MONTO M.E.', 'MONTO ME', 'MONTO USD'),
-        moneda:   findCol('MONEDA'),
+        usd:      findCol('MONTO USD'),
         tc:       findCol('T/C', 'TC'),
       }
       // Si faltan columnas clave, el archivo no tiene el formato del reporte:
@@ -5775,20 +5662,7 @@ export default function App() {
           validado: false,
           montoUSD,
           tipoCambio: Number(val(C.tc)) || 0,
-          // La columna MONEDA manda; si el Excel es anterior al soporte
-          // multi-divisa no existe, y ahí sí vale la vieja suposición de que
-          // todo monto extranjero era dólares.
-          ...(() => {
-            const code = C.moneda >= 0
-              ? normalizaMoneda(val(C.moneda))
-              : (montoUSD > 0 ? 'USD' : 'MXN')
-            return {
-              moneda: code,
-              monedaCodigo: code,
-              esMonedaExtranjera: code !== 'MXN',
-              montoExtranjero: code !== 'MXN' ? montoUSD : 0,
-            }
-          })(),
+          moneda: montoUSD > 0 ? 'USD' : 'MXN',
         })
         row++
       }
@@ -6294,7 +6168,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.93</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.92</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6450,25 +6324,10 @@ export default function App() {
           <div className="metric-label">Retenciones</div>
           <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
         </div>
-        {/* Moneda extranjera — con UNA divisa muestra su total con su símbolo;
-            con varias, cuántas hay (el desglose va en el tooltip), porque
-            sumarlas entre sí no significaría nada. */}
-        {(() => {
-          const divisas = Object.entries(metrics.porMoneda)
-          const detalle = divisas.map(([c, v]) => `${c} ${fmtDivisa(c, v)}`).join('  ·  ')
-          return (
-            <div className="metric-card" style={{ '--accent': '#59D39B' }} title={detalle}>
-              <div className="metric-label">
-                {divisas.length === 1 ? `Total ${divisas[0][0]}` : 'Moneda extranjera'}
-              </div>
-              <div className="metric-value">
-                {divisas.length === 0 ? fmtMoney(0)
-                  : divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1])
-                  : `${divisas.length} divisas`}
-              </div>
-            </div>
-          )
-        })()}
+        <div className="metric-card" style={{ '--accent': '#59D39B' }}>
+          <div className="metric-label">Total USD</div>
+          <div className="metric-value">{fmtMoney(metrics.totalUSD)}</div>
+        </div>
         <div className="metric-card" style={{ '--accent': '#30D158' }}>
           <div className="metric-label">Registros</div>
           <div className="metric-value">{metrics.count}</div>
