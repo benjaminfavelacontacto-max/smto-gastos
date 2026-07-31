@@ -418,12 +418,52 @@ const COLUMNS = [
   { key: 'propinaPorcentaje', label: 'Prop. %',      width: 95,  sortable: true,  type: 'number' },
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
   { key: 'totalFinal',        label: 'Total Final',  width: 130, sortable: true,  type: 'number',
-    getValue: g => g.totalCFDI + g.montoPropina },
+    // Fallback al total nativo para que los tickets extranjeros sin conciliar
+    // (lado MXN en 0) no se apilen todos como "0" al ordenar.
+    getValue: g => (g.totalCFDI + g.montoPropina)
+      || ((Number(g.montoExtranjero) || 0) + (Number(g.propinaExtranjero) || 0)) },
   // Renombrada de "Monto USD": el monto va en la divisa original del ticket
   // (el Excel la formatea con su símbolo dentro de la columna MONTO M.E.).
   { key: 'montoUSD',          label: 'Monto M.E.',   width: 110, sortable: true,  type: 'number' },
   { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
+
+/* Símbolo por divisa — espejo de CURRENCY_SYMBOLS en api/export-excel.py, para
+   que la tabla muestre exactamente el mismo símbolo que el Excel. */
+const MONEDA_SIMBOLOS = {
+  MXN: '$',   USD: '$',   EUR: '€',   GBP: '£',   JPY: '¥',   CNY: '¥',
+  CAD: 'C$',  AUD: 'A$',  CHF: 'Fr',  MYR: 'RM',  SGD: 'S$',  HKD: 'HK$',
+  TWD: 'NT$', KRW: '₩',   THB: '฿',   VND: '₫',   INR: '₹',   PHP: '₱',
+  IDR: 'Rp',  BRL: 'R$',
+}
+
+const simboloMoneda = (code) => MONEDA_SIMBOLOS[(code || 'MXN').toUpperCase()] || ''
+
+/* Normaliza el código de divisa de un gasto ("RM", "yuan", "€" → ISO). Espejo
+   de normaliza_moneda() en export-excel.py. */
+const ALIAS_MONEDA = {
+  'RM': 'MYR', 'RINGGIT': 'MYR', 'RMB': 'CNY', 'YUAN': 'CNY', 'YEN': 'JPY',
+  'EURO': 'EUR', 'EUROS': 'EUR', 'US$': 'USD', 'DOLAR': 'USD', 'DOLLAR': 'USD',
+  'LIBRA': 'GBP', 'POUND': 'GBP',
+  '€': 'EUR', '£': 'GBP', '¥': 'CNY', '₩': 'KRW', '฿': 'THB',
+  '₫': 'VND', '₹': 'INR', '₱': 'PHP',
+}
+
+const normalizaMoneda = (raw) => {
+  const s = String(raw ?? '').trim().toUpperCase()
+  if (!s) return 'MXN'
+  if (/^[A-Z]{3}$/.test(s)) return s
+  return ALIAS_MONEDA[s] || 'MXN'
+}
+
+/* Campos cuya edición recalcula el TOTAL de la fila en vivo — espejo EXACTO de
+   la fórmula del Excel (=IMPORTE+IVA−ISR+ISH/IEPS−RETENCIÓN sin ISR). Sin esto,
+   la tabla se quedaba con el total viejo (o $0.00 en filas manuales) y el
+   número correcto solo aparecía al abrir el Excel exportado. */
+const RECALC_TOTAL_FIELDS = new Set([
+  'importe', 'iva', 'isrTrasladado', 'ishIeps',
+  'retencionISR', 'retencionIVA', 'retenciones',
+])
 
 /* ═══════════════════════════════════════════════════
    UTILIDADES
@@ -1982,6 +2022,17 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
   const dateDisplay  = formatDateDisplay(g.fechaFac)
   const onDateChange = v => upd('fechaFac', parseDateDisplay(v))
 
+  // Divisa del renglón (monedaCodigo es el campo canónico; `moneda` queda por
+  // compatibilidad con gastos viejos). Ticket extranjero SIN lado MXN todavía
+  // (sin conciliar): la propina real vive en propinaExtranjero y el total real
+  // en montoExtranjero — antes esas celdas mostraban $0 en la tabla aunque el
+  // Excel sí traía los montos correctos.
+  const monedaRow = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+  const propinaNativa = monedaRow !== 'MXN' && !(Number(g.montoPropina) > 0)
+  const totalFinalMXN = (Number(g.totalCFDI) || 0) + (Number(g.montoPropina) || 0)
+  const totalNativo   = (Number(g.montoExtranjero) || 0) + (Number(g.propinaExtranjero) || 0)
+  const muestraNativo = monedaRow !== 'MXN' && totalFinalMXN === 0 && totalNativo > 0
+
   // Per-row toggle for the Fecha Cobro cell: span (DD-MM-YYYY) when blurred,
   // native date picker (YYYY-MM-DD) when focused.
   const [editingCobro, setEditingCobro] = useState(false)
@@ -2103,10 +2154,9 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             aunque el gasto fuera en euros o ringgit). Fila manual con monto
             tecleado pero sin divisa detectada (moneda=MXN): conserva la
             suposición histórica de USD — mismo comportamiento que v8.92. */}
-        {g.montoUSD > 0 && (() => {
-          const code = String(g.monedaCodigo || g.moneda || 'USD').toUpperCase()
-          return <span className="badge-usd">{code === 'MXN' ? 'USD' : code}</span>
-        })()}
+        {g.montoUSD > 0 && (
+          <span className="badge-usd">{monedaRow === 'MXN' ? 'USD' : monedaRow}</span>
+        )}
       </td>
 
       {/* Concepto */}
@@ -2185,13 +2235,27 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
       {/* Propina % — compact: rounds to 2 decimals, drops trailing zeros for typing comfort */}
       <td><NumCell g={g} upd={upd} field="propinaPorcentaje" suffix="%" compact /></td>
 
-      {/* Propina $ */}
-      <td><NumCell g={g} upd={upd} field="montoPropina" prefix="$" compact /></td>
-
-      {/* Total Final */}
+      {/* Propina $ — en ticket extranjero sin conciliar se captura/muestra en
+          la divisa del ticket (propinaExtranjero); ya conciliado (o en MXN),
+          en pesos como siempre. key fuerza remount al cambiar el binding para
+          que el draft interno del NumCell no arrastre el valor del otro campo. */}
       <td>
-        <span className={`total-val${g.hizoMatch ? ' is-blue' : ''}`}>
-          ${(g.totalCFDI + g.montoPropina).toFixed(2)}
+        {propinaNativa
+          ? <NumCell key="prop-ext" g={g} upd={upd} field="propinaExtranjero" prefix={simboloMoneda(monedaRow) || monedaRow + ' '} compact />
+          : <NumCell key="prop-mxn" g={g} upd={upd} field="montoPropina" prefix="$" compact />}
+      </td>
+
+      {/* Total Final — si el lado MXN sigue en 0 (ticket extranjero sin
+          conciliar) muestra el total NATIVO con su símbolo en vez de un
+          "$0.00" engañoso; el equivalente en pesos llega al Validar Banco. */}
+      <td>
+        <span
+          className={`total-val${g.hizoMatch ? ' is-blue' : ''}`}
+          title={muestraNativo ? `Total en ${monedaRow}. El equivalente en pesos se llena al validar con el banco.` : undefined}
+        >
+          {muestraNativo
+            ? `${simboloMoneda(monedaRow) || ''}${totalNativo.toFixed(2)} ${monedaRow}`
+            : `$${totalFinalMXN.toFixed(2)}`}
         </span>
       </td>
 
@@ -2216,7 +2280,7 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
         />
         {g.propinaExtranjero > 0 && (
           <div className="propina-extranjera-hint" title="Propina detectada en moneda extranjera">
-            💵 +${g.propinaExtranjero.toFixed(2)} propina
+            💵 +{simboloMoneda(monedaRow) || ''}{g.propinaExtranjero.toFixed(2)} propina
           </div>
         )}
       </td>
@@ -2338,7 +2402,12 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
 
   const fmtMoney = (n, currency = 'MXN') => {
     const num = Number(n) || 0
-    return `${currency === 'USD' ? 'US$' : '$'}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    const code = (currency || 'MXN').toUpperCase()
+    // US$ para dólares (no confundirlo con pesos) y el símbolo nativo para el
+    // resto: antes CUALQUIER divisa que no fuera USD se pintaba con "$", así
+    // que un cargo en yuanes salía como "$244.11 CNY".
+    const pre = code === 'USD' ? 'US$' : code === 'MXN' ? '$' : (simboloMoneda(code) || '')
+    return `${pre}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
 
   const matchesPassesFilter = (m) => {
@@ -3495,22 +3564,32 @@ export default function App() {
   // ── Métricas (cards en el encabezado de la tabla) ──
   const metrics = useMemo(() => {
     const sum = field => lista.reduce((s, g) => s + (g[field] || 0), 0)
-    // totalUSD: suma de montos en USD. Usa montoExtranjero si está, si no
-    // cae a montoUSD para mantener compat con rows OCR previos.
-    const totalUSD = lista.reduce(
-      (s, g) => s + (Number(g.montoExtranjero) || Number(g.montoUSD) || 0),
-      0
-    )
+    // Totales POR DIVISA (incluyen la propina nativa, igual que la SUM(R) del
+    // Excel). Antes era un solo `totalUSD` que sumaba todo monto extranjero
+    // sin distinguir moneda: dos tickets en yuanes (¥244.11 + ¥5) se mostraban
+    // como "TOTAL USD $249.11". Usa montoExtranjero con fallback a montoUSD
+    // para mantener compat con rows viejos.
+    const porMoneda = {}
+    for (const g of lista) {
+      const code = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+      if (code === 'MXN') continue
+      const monto = (Number(g.montoExtranjero) || Number(g.montoUSD) || 0)
+        + (Number(g.propinaExtranjero) || 0)
+      if (!monto) continue
+      porMoneda[code] = +((porMoneda[code] || 0) + monto).toFixed(2)
+    }
     return {
       totalFacturado:   sum('totalCFDI'),
       ivaTotal:         sum('iva'),
       retencionesTotal: sum('retenciones'),
       sinCobrar:        lista.filter(g => !g.fechaCobro).length,
       count:            lista.length,
-      totalUSD,
+      porMoneda,
     }
   }, [lista])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtDivisa = (code, n) =>
+    `${simboloMoneda(code) || code + ' '}${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
   // ── Búsqueda universal — substring (case + accent-insensitive) sobre
   //    todos los campos significativos del gasto. Se aplica ANTES del sort
@@ -3615,14 +3694,44 @@ export default function App() {
     setLista(prev => prev.map(g => {
       if (g.id !== id) return g
       const u = { ...g, [field]: value }
-      if (field === 'totalCFDI' && u.propinaPorcentaje > 0)
-        u.montoPropina = Math.round(value * u.propinaPorcentaje / 100 * 100) / 100
-      if (field === 'propinaPorcentaje')
-        u.montoPropina = Math.round(g.totalCFDI * value / 100 * 100) / 100
-      if (field === 'montoPropina' && g.totalCFDI > 0)
-        u.propinaPorcentaje = Math.round((value / g.totalCFDI) * 10000) / 100
+
+      // La celda "ISH/IEPS" edita isrTrasladado, pero el Excel lee ishIeps
+      // (con fallback a isrTrasladado). En filas importadas de un Excel viejo
+      // ishIeps ya venía poblado, así que editar la celda NO viajaba al
+      // reporte. Se espejan siempre.
+      if (field === 'isrTrasladado') u.ishIeps = value
+
+      // Las retenciones parciales mantienen el total de retenciones. Van ANTES
+      // del recálculo de TOTAL porque éste las lee.
       if (field === 'retencionISR') u.retenciones = value + (u.retencionIVA || 0)
       if (field === 'retencionIVA') u.retenciones = value + (u.retencionISR || 0)
+
+      // TOTAL en vivo — espejo de la fórmula del Excel (=J+K−L+M−N). Antes la
+      // app NO recalculaba totalCFDI al editar Subtotal/IVA/retenciones: la
+      // fila manual mostraba $0.00 (y Total Final mal) aunque el Excel
+      // exportado sí sacara el total correcto con su fórmula.
+      if (RECALC_TOTAL_FIELDS.has(field)) {
+        const ish = Number(u.ishIeps ?? u.isrTrasladado) || 0
+        const retNoIsr = (Number(u.retenciones) || 0) - (Number(u.retencionISR) || 0)
+        u.totalCFDI = Math.round(((Number(u.importe) || 0) + (Number(u.iva) || 0)
+          - (Number(u.retencionISR) || 0) + ish - retNoIsr) * 100) / 100
+      }
+
+      // Propina encadenada al total (editado directo o recalculado arriba).
+      const totalBase = field === 'totalCFDI' ? value : u.totalCFDI
+      if ((field === 'totalCFDI' || RECALC_TOTAL_FIELDS.has(field)) && u.propinaPorcentaje > 0)
+        u.montoPropina = Math.round(totalBase * u.propinaPorcentaje / 100 * 100) / 100
+      if (field === 'propinaPorcentaje') {
+        u.montoPropina = Math.round(g.totalCFDI * value / 100 * 100) / 100
+        // Fila extranjera: el % también aplica sobre el monto nativo — antes
+        // calculaba contra totalCFDI=0 (sin conciliar) y siempre daba $0.
+        if ((Number(g.montoExtranjero) || 0) > 0)
+          u.propinaExtranjero = Math.round(g.montoExtranjero * value / 100 * 100) / 100
+      }
+      if (field === 'montoPropina' && g.totalCFDI > 0)
+        u.propinaPorcentaje = Math.round((value / g.totalCFDI) * 10000) / 100
+      if (field === 'propinaExtranjero' && (Number(g.montoExtranjero) || 0) > 0)
+        u.propinaPorcentaje = Math.round((value / g.montoExtranjero) * 10000) / 100
       return u
     })), [])
 
@@ -6179,7 +6288,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.95</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.96</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6335,10 +6444,26 @@ export default function App() {
           <div className="metric-label">Retenciones</div>
           <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#59D39B' }}>
-          <div className="metric-label">Total USD</div>
-          <div className="metric-value">{fmtMoney(metrics.totalUSD)}</div>
-        </div>
+        {/* Divisas — con UNA moneda extranjera muestra su total con su símbolo
+            ("Total CNY ¥249.11"); con varias, cuántas hay (desglose en el
+            tooltip) porque sumarlas entre sí no significa nada. Espejo del
+            comportamiento aprobado de la tarjeta del Excel. */}
+        {(() => {
+          const divisas = Object.entries(metrics.porMoneda)
+          const detalle = divisas.map(([c, v]) => `${c} ${fmtDivisa(c, v)}`).join('  ·  ')
+          return (
+            <div className="metric-card" style={{ '--accent': '#59D39B' }} title={detalle || undefined}>
+              <div className="metric-label">
+                {divisas.length === 1 ? `Total ${divisas[0][0]}` : divisas.length > 1 ? 'Moneda extranjera' : 'Total USD'}
+              </div>
+              <div className="metric-value">
+                {divisas.length === 0 ? fmtMoney(0)
+                  : divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1])
+                  : `${divisas.length} divisas`}
+              </div>
+            </div>
+          )
+        })()}
         <div className="metric-card" style={{ '--accent': '#30D158' }}>
           <div className="metric-label">Registros</div>
           <div className="metric-value">{metrics.count}</div>
