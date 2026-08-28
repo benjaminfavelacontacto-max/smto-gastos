@@ -61,6 +61,7 @@ export const TIPO_RULES = [
   ['OPERADORA OMX',            'Papelería'],     // Office Max (razón social 'Operadora OMX', RFC OOM960429832). DEBE ir antes de 'OPERADORA OM'→Hotel, que hace prefix-match sobre esta razón social.
   ['CERVECERIA REGIOMONTANA',              'Consumo Viáticos'],  // Sierra Madre MTY (cargo banco: VELPAY *SIERRA MADRE). CFDI concepto = "CONSUMO ALIMENTOS".
   ['OPERADORA INDUSTRIAL Y COMERCIAL APODACA', 'Consumo Viáticos'],  // Restaurante aeropuerto MTY (cargo banco: THUNDER*PAPALOTE AEROP APODACA). CFDI concepto = "CONSUMO DE ALIMENTOS".
+  ['LAS NUEVAS DELICIAS GASTRONOMICAS', 'Consumo Viáticos'],  // DEBE ir antes de 'GAS'→Gasolina: "GASTRONOMICAS" contiene "GAS" como substring y el genérico la atrapaba mal.
   // ── Fin proveedores SMTO ────────────────────────────────────────────────
 
   // ── Equipo de cómputo / PC ──────────────────────────────────────────────
