@@ -28,6 +28,10 @@ export const TIPO_RULES = [
   // Agregamos la variante exacta para que la auto-detección funcione tal cual
   // viene en el CFDI sin tocar el XML.
   ['ZU&IGA',                   'Contador'],
+  // Taxista persona física — sin este override, el 'ADOLF' genérico de abajo
+  // (pensado para gasolineras) lo atrapa como 'Gasolina' antes de llegar a la
+  // regla de persona física + TARIFA que lo clasificaría bien como Taxi.
+  ['ADOLFO REYNA PEÑA',        'Taxi'],
   ['DHL ',                     'Envíos'],
   ['DHL,',                     'Envíos'],
   ['DHL EXPRESS',              'Envíos'],
