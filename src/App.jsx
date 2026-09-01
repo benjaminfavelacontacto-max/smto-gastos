@@ -120,7 +120,7 @@ const TIPOS_ESPECIALES = [
   'Uniforme',
 ]
 
-const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Miranda Navarro', 'Olivia Gil']
+const COLABORADORES_ESPECIALES = ['Alejandro Olivar', 'Victor Aceves', 'Daniel Covarrubias', 'Olivia Gil']
 
 // Socios que se configuran COMO ingenieros de soporte: en toda la lógica que
 // depende de la categoría (tipos, caseta, autodetección) se comportan como
@@ -182,7 +182,7 @@ const defaultBancoFor = (colaborador) =>
 
 /* Folio Clara de 4 dígitos por colaborador. Aparece en la columna "PÓLIZA"
    del Excel exportado. Quien no tenga tarjeta Clara queda en 'N/A'. Los
-   especiales (Olivar, Aceves, Miranda, Olivia) manejan múltiples cuentas y
+   especiales (Olivar, Aceves, Daniel, Olivia) manejan múltiples cuentas y
    su mapeo vendrá de un Excel separado en una iteración posterior. */
 const POLIZAS_CLARA = {
   'Daniel Covarrubias': '3789',
@@ -389,7 +389,6 @@ const COLABORADORES = [
   { categoria: 'Ventas', nombre: 'Hector Duarte' },
   { categoria: 'Ventas', nombre: 'Juan Sotomayor' },
   { categoria: 'Ventas', nombre: 'Marco Alvarado' },
-  { categoria: 'Admin', nombre: 'Miranda Navarro' },
   { categoria: 'Ventas', nombre: 'Marco Sanchez' },
   { categoria: 'Ventas', nombre: 'Juan Alfaro' },
 ]
@@ -414,7 +413,7 @@ const COLUMNS = [
   { key: 'totalCFDI',         label: 'Total Fac.',   width: 125, sortable: true,  type: 'number' },
   { key: 'formaPago',         label: 'Forma de Pago', width: 160, sortable: true,  type: 'string' },
   // BANCO sólo se muestra para colaboradores especiales (Alejandro, Victor,
-  // Miranda, Olivia). El render del header y del row la salta cuando no aplica.
+  // Daniel, Olivia). El render del header y del row la salta cuando no aplica.
   { key: 'banco',             label: 'Banco',        width: 195, sortable: true,  type: 'string', specialOnly: true },
   { key: 'propinaPorcentaje', label: 'Prop. %',      width: 95,  sortable: true,  type: 'number' },
   { key: 'montoPropina',      label: 'Prop. $',      width: 105, sortable: true,  type: 'number' },
@@ -6289,7 +6288,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v8.99</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.00</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

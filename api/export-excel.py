@@ -123,7 +123,7 @@ BADGE_PURPLE_FG = '6B21A8'
 COLABORADORES_ESPECIALES = {
     'Alejandro Olivar',
     'Victor Aceves',
-    'Miranda Navarro',
+    'Daniel Covarrubias',
     'Olivia Gil',
 }
 
