@@ -3166,6 +3166,13 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
   const [verSinObs, setVerSinObs] = useState(false)
   const [salir, setSalir] = useState(false)
   const confirmados = revConfirmadas.map(m => m.invoiceId)
+  // ── Propinas detectadas ── Se destacan aparte: el motor las INFIRIÓ
+  // (cargo − factura, o impresa en el ticket) y al aplicar se vuelven un
+  // renglón de propina en el reporte, así que el colaborador debe verlas.
+  const conPropina = matchedRows.filter(m => m.propina > 0)
+  const propinasAplican = conPropina.filter(seAplica)
+  const sumaPropinas = lst => lst.filter(m => (m.invoiceMoneda || 'MXN') === 'MXN').reduce((a, m) => a + (Number(m.propina) || 0), 0)
+  const origenPropina = m => /^Propina sugerida/.test(m.method) || m.pass === 0 ? 'Impresa en el ticket' : 'Estimada: cargo − factura'
   const aplicar = () => (aplicables.length ? onConfirm(excluidos, confirmados) : handleCancel())
   // Salir sin aplicar: si ya decidió algo, confirmar antes de perderlo.
   const pedirSalir = () => (Object.keys(decision).length ? setSalir(true) : handleCancel())
@@ -3474,7 +3481,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
   // facturas son ruido.
   const UMBRAL_FILTROS = 12
   const PASOS = [
-    { n: 1, label: 'Revisar coincidencias', extra: revPendientes.length ? `${revPendientes.length} pendiente${revPendientes.length === 1 ? '' : 's'}` : '' },
+    { n: 1, label: 'Revisar coincidencias', extra: [revPendientes.length ? `${revPendientes.length} pendiente${revPendientes.length === 1 ? '' : 's'}` : '', conPropina.length ? `${conPropina.length} propina${conPropina.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') },
     { n: 2, label: 'Otros pagos', extra: sinCargo.length + sinFactura.length ? `${sinCargo.length + sinFactura.length}` : '' },
     { n: 3, label: 'Finalizar', extra: '' },
   ]
@@ -3666,6 +3673,11 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                 <button className={`czw-kpi ${sinCargo.length ? 'info' : 'muted'}`} onClick={() => setPaso(2)}>
                   <b>{sinCargo.length}</b><span>sin cargo en Clara</span>
                 </button>
+                {conPropina.length > 0 && (
+                  <button className="czw-kpi tip" onClick={() => setPaso(1)} title="Propinas detectadas automáticamente al conciliar">
+                    <b>{conPropina.length}</b><span>{conPropina.length === 1 ? 'propina detectada' : 'propinas detectadas'} · {fmtMoney(sumaPropinas(conPropina))}</span>
+                  </button>
+                )}
                 {sinFactura.length > 0 && (
                   <button className="czw-kpi muted" onClick={() => setPaso(2)}>
                     <b>{sinFactura.length}</b><span>{sinFactura.length === 1 ? 'cargo sin comprobante' : 'cargos sin comprobante'}</span>
@@ -3702,6 +3714,46 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                       <h3 className="czw-h">Nada que revisar</h3>
                       <p className="czw-p">{sinObs.length === 1 ? 'La coincidencia cuadró' : `Las ${sinObs.length} coincidencias cuadraron`} según las reglas. Puedes ver el detalle si quieres.</p>
                     </>
+                  )}
+                  {conPropina.length > 0 && (
+                    <section className="czw-tips" aria-labelledby="czw-tips-t">
+                      <div className="czw-tips-head">
+                        <h3 className="czw-h" id="czw-tips-t">
+                          {conPropina.length === 1 ? 'Detectamos 1 propina' : `Detectamos ${conPropina.length} propinas`}
+                          <span className="czw-tips-total">{fmtMoney(sumaPropinas(conPropina))}</span>
+                        </h3>
+                        <p className="czw-p">Clara cobró más que la factura y la diferencia cabe como propina. Al aplicar, cada una se agrega como renglón de propina debajo de su factura. Si alguna no es propina, márcala «No corresponde».</p>
+                      </div>
+                      <div className="czw-tips-list" role="table" aria-label="Propinas detectadas">
+                        {conPropina.map(t => {
+                          const dec = decision[t.invoiceId]
+                          const fuera = !seAplica(t)
+                          return (
+                            <div key={t.invoiceId} role="row" className={`czw-tip${fuera ? ' is-fuera' : ''}`}>
+                              <div className="czw-tip-who" role="cell">
+                                <strong>{t.invoiceName}</strong>
+                                <span>{t.invoiceNumber ? `${t.invoiceNumber} · ` : ''}{origenPropina(t)}</span>
+                              </div>
+                              <div className="czw-tip-math" role="cell">
+                                <span>Factura {fmtMoney(t.invoiceTotal, t.invoiceMoneda)}</span>
+                                <span className="czw-tip-plus">+ propina <b>{fmtMoney(t.propina, t.invoiceMoneda)}</b>{t.propinaPct > 0 ? ` (${+Number(t.propinaPct).toFixed(1)}%)` : ''}</span>
+                                <span>= cobro Clara {fmtMoney(t.csvAmountMXN)}</span>
+                              </div>
+                              <div className="czw-tip-act" role="cell">
+                                {dec === 'descartada'
+                                  ? <span className="st-badge muted">No corresponde</span>
+                                  : fuera
+                                    ? <span className="st-badge warn">Por revisar</span>
+                                    : <span className="st-badge ok">Se registrará</span>}
+                                <button className={`cz-btn${dec === 'descartada' ? ' is-on' : ''}`} aria-pressed={dec === 'descartada'} onClick={() => decidir(t.invoiceId, 'descartada')}>
+                                  {dec === 'descartada' ? 'Deshacer' : 'No corresponde'}
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </section>
                   )}
                   {sinObs.length > 0 && (
                     <div className="czw-acc">
@@ -3765,6 +3817,15 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                       <CheckCircle2 size={16} />
                       <span><b>{sinObs.filter(seAplica).length}</b> {sinObs.filter(seAplica).length === 1 ? 'coincidencia sin observaciones' : 'coincidencias sin observaciones'} se aplicarán.</span>
                     </li>
+                    {conPropina.length > 0 && (
+                      <li className="tip">
+                        <Sparkles size={16} />
+                        <span>
+                          <b>{propinasAplican.length}</b> {propinasAplican.length === 1 ? 'propina detectada se registrará' : 'propinas detectadas se registrarán'} por <b>{fmtMoney(sumaPropinas(propinasAplican))}</b>, cada una como renglón de propina debajo de su factura.
+                          {conPropina.length > propinasAplican.length && <> {conPropina.length - propinasAplican.length} no se {conPropina.length - propinasAplican.length === 1 ? 'aplica' : 'aplican'}.</>}
+                        </span>
+                      </li>
+                    )}
                     {revisar.length > 0 && (
                       <li className={revPendientes.length ? 'warn' : 'ok'}>
                         <AlertTriangle size={16} />
