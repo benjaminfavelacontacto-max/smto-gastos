@@ -8,7 +8,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
-Local: /Users/benjaminfavela/Documents/SMTO/smto-app/
+Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
 Current version: v8.98
 
 ## Stack
@@ -85,6 +85,15 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 12. Validation counter per checkbox
 13. fechaCobro editable with date picker
 14. Sortable, resizable columns; sticky PROVEEDOR
+
+## Cómo agregar un colaborador
+
+Todo en `src/App.jsx`, en DOS lugares (ejemplo: Alberth Cruz, Servicio, terminación Clara 2900):
+
+1. `POLIZAS_CLARA` — folio Clara de 4 dígitos (columna PÓLIZA del Excel): `'Alberth Cruz': '2900'`. Sin tarjeta Clara queda 'N/A', no hace falta entrada.
+2. Lista de colaboradores — `{ categoria: 'Servicio', nombre: 'Alberth Cruz' }`, dentro del bloque de su categoría (Admin, Socio, Servicio, Ventas).
+
+"Soporte" = categoría `Servicio`. Los socios que se tratan como soporte van aparte en `SOCIOS_COMO_SOPORTE`. Si es empleado con nómina, su RFC va en `EMPLEADOS_RFC`. Verificar con `npm run build`.
 
 ## Excel output design
 
