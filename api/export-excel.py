@@ -7,6 +7,7 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
     from openpyxl.utils import get_column_letter
+    from openpyxl.formatting.rule import CellIsRule
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.workbook.protection import WorkbookProtection
     from PIL import Image as PILImage
@@ -966,8 +967,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # PÓLIZA, misma FORMA PAGO, mismo BANCO, mismo USUARIO y T/C. Cambia
         # sólo: FACTURA = "N/A", CONCEPTO = "Propina", IMPORTE = monto de la
         # propina, IVA = 0, ISR = 0, ISH/IEPS = 0, RETENCIÓN = 0, TOTAL = la propina.
-        # COBRADO/FACTURADO/DIFERENCIA quedan vacías (el renglón principal ya
-        # contempla la propina en su fórmula de DIFERENCIA — no duplicamos).
+        # En renglones Clara, FACTURADO (V) lleva la MISMA propina del IMPORTE,
+        # para que Σ FACTURADO "(incluye propinas)" cuadre contra Σ COBRADO.
+        # COBRADO (U) queda vacía con formato moneda: el cargo del renglón
+        # principal ya trae la propina; si Clara la cobró aparte, aquí se
+        # captura a mano y la suma de la banda de totales la toma. DIFERENCIA
+        # (W) queda vacía (el renglón principal ya contempla la propina).
         if propina_mxn > 0 or propina_ext > 0:
             ws.row_dimensions[row].height = 15
             propina_bg = 'F0FDF4'  # tinte verde muy sutil para agrupar con el padre
@@ -1018,6 +1023,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 (19, p_tc_val,               'center', 'tipocambio'),
                 (20, usuario,                'center', 'normal'),
             ]
+            if es_clara:
+                pcells.append((22, propina_actual, 'center', 'currency'))  # FACTURADO = propina
             for col, val, align, style_type in pcells:
                 cell = ws.cell(row=row, column=col, value=val)
                 cell.fill = PatternFill('solid', start_color=propina_bg)
@@ -1029,6 +1036,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 )
                 style_data_cell(cell, style_type, tipo=tipo, diff_num=None,
                                 moneda=moneda_code)
+            if es_clara:
+                # COBRADO vacía pero lista para captura manual de la propina.
+                pc = ws.cell(row=row, column=21)
+                pc.number_format = '"$"#,##0.00'
+                pc.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
+                pc.alignment = Alignment(horizontal='center', vertical='center')
 
             # Outer spacers stay on page bg so the propina band fits inside
             # the table boundary like every other data row.
@@ -1095,12 +1108,16 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         ws.cell(row=row, column=c).fill = PatternFill('solid', start_color=SMTO_BLACK)
 
     # ── Totales de conciliación: COBRADO (U), FACTURADO incl. propinas (V),
-    # DIFERENCIA (W) ── Se escriben como VALOR (no fórmula) por la misma razón
-    # que las celdas por-renglón: renderizan en cualquier visor sin recálculo.
+    # DIFERENCIA (W) ── Son fórmulas SUM vivas (no valores): las propinas que
+    # Clara no trae en el cargo se capturan A MANO en COBRADO, y el total debe
+    # reflejarlas = lo que realmente salió de Clara. FACTURADO suma facturas +
+    # propinas (cada propina vive en V de su sub-renglón). SUM ignora el texto
+    # "SIN CONCILIAR". total_*_band (Python) sólo decide el color inicial de
+    # DIFERENCIA.
     total_diff_band = round(total_cobrado_band - total_facturado_band, 2)
     band_totals = [
-        (21, round(total_cobrado_band, 2)),   # COBRADO
-        (22, round(total_facturado_band, 2)),  # FACTURADO (incluye propinas)
+        (21, f'=SUM(U{data_first}:U{data_last})'),  # COBRADO (total cargado en Clara)
+        (22, f'=SUM(V{data_first}:V{data_last})'),  # FACTURADO (incluye propinas)
     ]
     for col, val in band_totals:
         cell = ws.cell(row=row, column=col, value=val)
@@ -1119,11 +1136,22 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         diff_color = SMTO_GREEN
     else:
         diff_color = WHITE
-    dcell = ws.cell(row=row, column=23, value=total_diff_band)
+    dcell = ws.cell(row=row, column=23, value=f'=U{row}-V{row}')
     dcell.number_format = '"$"#,##0.00'
     dcell.font = Font(name='Aptos', size=11, bold=True, color=diff_color)
     dcell.alignment = Alignment(horizontal='center', vertical='center')
     dcell.fill = PatternFill('solid', start_color=SMTO_BLACK)
+    # Como DIFERENCIA es fórmula viva (cambia al capturar propinas a mano),
+    # el color por signo se mantiene con formato condicional.
+    ws.conditional_formatting.add(f'W{row}', CellIsRule(
+        operator='lessThan', formula=['-0.05'],
+        font=Font(name='Aptos', size=11, bold=True, color='F87171')))
+    ws.conditional_formatting.add(f'W{row}', CellIsRule(
+        operator='greaterThan', formula=['0.05'],
+        font=Font(name='Aptos', size=11, bold=True, color=SMTO_GREEN)))
+    ws.conditional_formatting.add(f'W{row}', CellIsRule(
+        operator='between', formula=['-0.05', '0.05'],
+        font=Font(name='Aptos', size=11, bold=True, color=WHITE)))
 
     # ═══ FOOTER — one spacer row + a right-aligned version line ═══
     row += 2  # blank spacer + footer row
