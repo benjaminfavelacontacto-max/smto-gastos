@@ -1,9 +1,11 @@
 import { useState, useRef, useMemo, useEffect, useCallback, memo } from 'react'
+import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
+import { guardarBorrador, leerBorrador, borrarBorrador, CADUCIDAD_DIAS } from './borrador'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -429,6 +431,63 @@ const COLUMNS = [
   { key: 'montoUSD',          label: 'Monto M.E.',   width: 110, sortable: true,  type: 'number' },
   { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
+
+/* Vistas de columnas de la tabla (solo presentación: ocultar una columna
+   jamás borra el dato, y el Excel/ZIP exportan todo igual). `check`,
+   `status` y `proveedor` siempre se ven. */
+const COLUMNAS_FIJAS = ['check', 'status', 'proveedor']
+const COLUMN_PRESETS = {
+  esencial:     { label: 'Esencial',     cols: ['fechaFac', 'fechaCobro', 'noFactura', 'tipo', 'totalCFDI', 'totalFinal'] },
+  contable:     { label: 'Contable',     cols: ['fechaFac', 'noFactura', 'concepto', 'tipo', 'importe', 'iva', 'isrTrasladado', 'retencionISR', 'retencionIVA', 'retenciones', 'totalCFDI', 'formaPago'] },
+  conciliacion: { label: 'Conciliación', cols: ['fechaFac', 'fechaCobro', 'noFactura', 'totalCFDI', 'formaPago', 'banco', 'propinaPorcentaje', 'montoPropina', 'totalFinal', 'montoUSD', 'tipoCambio'] },
+  todas:        { label: 'Todas',        cols: COLUMNS.map(c => c.key) },
+}
+const hiddenForPreset = key => {
+  const ver = new Set([...COLUMNAS_FIJAS, ...COLUMN_PRESETS[key].cols])
+  return COLUMNS.map(c => c.key).filter(k => !ver.has(k))
+}
+
+/* Filtros rápidos (chips) — solo filtran la VISTA; el export usa `lista`. */
+const tieneXML = g => !!(g.xmlContent || g.xmlFile)
+const necesitaRevisarMatch = g => !!g.hizoMatch && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80
+
+/* Etiqueta legible del estado bancario de un gasto (texto, no solo color).
+   Sin método guardado (p. ej. cotejo con Saldos o datos viejos) → genérico. */
+const estadoBanco = g => {
+  if (!g.hizoMatch) return { label: 'Sin conciliar', cls: 'muted', title: 'Aún no se liga a un cargo del estado de cuenta. No es un adeudo.' }
+  if (necesitaRevisarMatch(g)) return { label: 'Revisar', cls: 'warn', title: `Coincidencia por revisar: ${g.matchMetodo} (${g.matchConfianza}%)` }
+  const m = g.matchMetodo || ''
+  const label = /propina/i.test(m) ? 'Propina ✓' : /auth|autoriz/i.test(m) ? 'Código ✓' : 'Conciliado'
+  return { label, cls: 'ok', title: m ? `Conciliado con banco: ${m} (${g.matchConfianza}%)` : 'Conciliado con el banco' }
+}
+const FILTROS_RAPIDOS = [
+  { key: 'todos',       label: 'Todos',        test: () => true },
+  { key: 'porRevisar',  label: 'Por revisar',  test: g => !g.validado },
+  { key: 'sinXml',      label: 'Sin XML',      test: g => !tieneXML(g) },
+  { key: 'sinConciliar',label: 'Sin conciliar',test: g => !g.hizoMatch },
+  { key: 'conciliados', label: 'Conciliados',  test: g => !!g.hizoMatch },
+  // Solo se muestra si hay alguno: matches de confianza < 80 (mismo umbral que
+  // la pestaña "Revisar" del modal de conciliación).
+  { key: 'revisarMatch', label: 'Revisar coincidencia', test: g => necesitaRevisarMatch(g), soloSiHay: true },
+  { key: 'revisados',   label: 'Revisados',    test: g => !!g.validado },
+  // Ocultos: solo se llega desde "Requiere atención" (Resumen); como chip
+  // aparecen únicamente mientras están activos.
+  { key: 'xmlFaltante',    label: 'Recuperadas sin XML',    test: g => !!g.xmlFaltante, oculto: true },
+  { key: 'sinImporte',     label: 'Sin importe',            test: g => !(Number(g.totalCFDI) || 0) && !(Number(g.montoExtranjero) || Number(g.montoUSD) || 0), oculto: true },
+  { key: 'meSinConciliar', label: 'M.E. sin conciliar',     test: g => normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !g.hizoMatch, oculto: true },
+  { key: 'cobroAntes',     label: 'Cobro antes de factura', test: g => !!g.hizoMatch && !!g.fechaFac && !!cobroToIso(g.fechaCobro) && cobroToIso(g.fechaCobro) < g.fechaFac, oculto: true },
+]
+
+/* fechaCobro → YYYY-MM-DD para <input type="date">. Datos viejos en memoria
+   pueden traer DD/MM/YYYY del banco. */
+const cobroToIso = f => {
+  if (!f) return ''
+  if (f.includes('/')) {
+    const [d, m, y] = f.split('/')
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+  return f
+}
 
 /* Símbolo por divisa — espejo de CURRENCY_SYMBOLS en api/export-excel.py, para
    que la tabla muestre exactamente el mismo símbolo que el Excel. */
@@ -1628,6 +1687,103 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MENÚ DESPLEGABLE DE LA BARRA
+   Solo agrupa visualmente acciones que ya existen: cada item llama al
+   mismo handler que antes tenía su propio botón. El menú va en un portal a
+   <body> con position:fixed (medido del botón): el backdrop-filter de la
+   barra crea un contexto de apilamiento que lo dejaba debajo de los KPIs, y
+   así tampoco lo recorta el scroll horizontal de la barra en móvil.
+═══════════════════════════════════════════════════ */
+
+function ToolbarMenu({ id, title, icon, variant = 'primary', isDisabled = false, items = [], align = 'left', renderContent, menuClassName = '' }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const menuRef = useRef(null)
+  const visibles = items.filter(it => !it.hidden)
+
+  const toggle = () => {
+    if (isDisabled) return
+    if (open) { setOpen(false); return }
+    const r = btnRef.current.getBoundingClientRect()
+    setPos(align === 'right'
+      ? { top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) }
+      : { top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - 288)) })
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = e => {
+      if (menuRef.current?.contains(e.target) || btnRef.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    const onKey = e => {
+      if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus() }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const els = [...(menuRef.current?.querySelectorAll('.tb-menu-item:not(:disabled)') || [])]
+        if (!els.length) return
+        const i = els.indexOf(document.activeElement)
+        const next = e.key === 'ArrowDown' ? (i + 1) % els.length : (i - 1 + els.length) % els.length
+        els[next].focus()
+      }
+    }
+    const close = () => setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    // Foco al primer item para navegar con flechas.
+    requestAnimationFrame(() => menuRef.current?.querySelector('.tb-menu-item:not(:disabled)')?.focus())
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        id={id}
+        ref={btnRef}
+        className={`btn-premium ${variant}${isDisabled ? ' disabled' : ''}${open ? ' is-open' : ''}`}
+        onClick={toggle}
+        disabled={isDisabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {icon && <span className="btn-icon">{icon}</span>}
+        {title}
+        <ChevronDown size={14} className="tb-chevron" aria-hidden="true" />
+      </button>
+      {open && pos && createPortal(
+        <div className={`tb-menu ${menuClassName}`} role="menu" ref={menuRef} style={pos}>
+          {renderContent ? renderContent(() => setOpen(false)) : visibles.map(it => (
+            <button
+              key={it.label}
+              role="menuitem"
+              className="tb-menu-item"
+              disabled={it.disabled}
+              onClick={() => { setOpen(false); it.onClick() }}
+            >
+              <span className="tb-menu-ic" aria-hidden="true">{it.icon}</span>
+              <span className="tb-menu-txt">
+                <span className="tb-menu-label">{it.label}</span>
+                {it.hint && <span className="tb-menu-hint">{it.hint}</span>}
+              </span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    RECORRIDO GUIADO — "Cómo utilizar"
    Spotlight sobre cada botón clave + popover con el paso.
 ═══════════════════════════════════════════════════ */
@@ -1636,20 +1792,20 @@ const TOUR_STEPS = [
   {
     targetId: 'tour-carpeta',
     icon: '📁',
-    title: 'Paso 1 · Cargar Carpeta',
-    body: 'Empieza aquí. Selecciona la carpeta que contiene tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla.',
+    title: 'Paso 1 · Agregar comprobantes',
+    body: 'Empieza aquí. Abre este menú y elige «Cargar carpeta» para seleccionar la carpeta con tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla. En el mismo menú puedes importar un reporte previo, cargar una foto o agregar un gasto manual.',
   },
   {
     targetId: 'tour-banco',
     icon: '🏦',
-    title: 'Paso 2 · Validar Banco',
+    title: 'Paso 2 · Conciliar banco',
     body: 'Antes, descarga el estado de cuenta de Clara del periodo de tu reporte. Luego súbelo aquí: la app concilia cada gasto con su cargo en el banco y detecta propinas.',
   },
   {
     targetId: 'tour-zip',
     icon: '📦',
-    title: 'Paso 3 · Exportar a ZIP',
-    body: 'Descarga el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor: victor.aceves@smto.mx',
+    title: 'Paso 3 · Exportar',
+    body: 'Abre «Exportar» y elige «Excel + facturas (ZIP)» para descargar el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor: victor.aceves@smto.mx',
   },
 ]
 
@@ -2011,7 +2167,7 @@ function NumCell({ g, upd, field, prefix, suffix, format = true, compact = false
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial }) {
+const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial, openDetail, isActive }) {
   // Callbacks bound to this row's id. useCallback keeps their identity stable
   // across the parent's re-renders (update/remove are themselves stable), so
   // React.memo above can skip re-rendering every OTHER row on each keystroke —
@@ -2040,17 +2196,10 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
   const [editingCobro, setEditingCobro] = useState(false)
   // type="date" needs YYYY-MM-DD on its value attr. Bank-matched DD/MM/YYYY
   // from legacy in-memory data still parses correctly via this guard.
-  const cobroIso = (() => {
-    if (!g.fechaCobro) return ''
-    if (g.fechaCobro.includes('/')) {
-      const [d, m, y] = g.fechaCobro.split('/')
-      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
-    }
-    return g.fechaCobro
-  })()
+  const cobroIso = cobroToIso(g.fechaCobro)
 
   return (
-    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new'].filter(Boolean).join(' ')}>
+    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new', isActive && 'row-active'].filter(Boolean).join(' ')}>
       {/* Checkbox */}
       <td className="td-chk">
         <input
@@ -2101,12 +2250,14 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
               IMG
             </button>
           )}
-          <span
-            className={`pill ${g.hizoMatch ? 'pill-blue' : 'pill-dim'}`}
-            title={g.hizoMatch ? 'Conciliado con el Banco' : 'Pendiente en Banco'}
-          >
-            {g.hizoMatch ? '✓ OK' : '·'}
-          </span>
+          {(() => {
+            const eb = estadoBanco(g)
+            return (
+              <span className={`pill pill-banco ${eb.cls}`} title={eb.title}>
+                {g.hizoMatch ? eb.label : '·'}
+              </span>
+            )
+          })()}
         </div>
       </td>
 
@@ -2299,8 +2450,19 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
         />
       </td>
 
-      {/* Eliminar — sticky-right action column; button only visible on row hover */}
+      {/* Acciones — sticky-right: ver detalle (siempre) + eliminar (en hover) */}
       <td className="td-delete">
+        <div className="row-actions">
+        <button
+          className="btn-detail-row"
+          onClick={() => openDetail(g.id)}
+          title="Ver detalle de la factura"
+          aria-label="Ver detalle de la factura"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/>
+          </svg>
+        </button>
         <button
           className="btn-delete-row"
           onClick={onDelete}
@@ -2313,10 +2475,467 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             <path d="M9 6V4h6v2"/>
           </svg>
         </button>
+        </div>
       </td>
     </tr>
   )
 })
+
+/* ═══════════════════════════════════════════════════
+   COMPONENTE: PANEL LATERAL DE DETALLE
+   Lee y escribe el MISMO gasto de `lista` por id, a través del mismo
+   `update(id, field, value)` que usa la tabla — así el recálculo de TOTAL,
+   propina y retenciones es idéntico. Los campos con lógica propia de la
+   tabla (Monto M.E. → T/C, propina nativa) se muestran solo lectura aquí.
+═══════════════════════════════════════════════════ */
+
+function DrawerField({ label, children, hint }) {
+  return (
+    <label className="dw-field">
+      <span className="dw-label">{label}</span>
+      {children}
+      {hint && <span className="dw-hint">{hint}</span>}
+    </label>
+  )
+}
+
+function DrawerReadOnly({ label, value, mono, hint }) {
+  return (
+    <div className="dw-field">
+      <span className="dw-label">{label}</span>
+      <span className={`dw-ro${mono ? ' is-mono' : ''}`}>{value || <span className="dw-empty">—</span>}</span>
+      {hint && <span className="dw-hint">{hint}</span>}
+    </div>
+  )
+}
+
+function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPrev, onNext, posicion }) {
+  const upd = useCallback((field, val) => update(g.id, field, val), [update, g.id])
+
+  // Esc cierra; Alt+↑/↓ navega (Alt para no robar las flechas de los inputs).
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') onClose()
+      else if (e.altKey && e.key === 'ArrowUp' && onPrev) { e.preventDefault(); onPrev() }
+      else if (e.altKey && e.key === 'ArrowDown' && onNext) { e.preventDefault(); onNext() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, onPrev, onNext])
+
+  const monedaRow = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+  const totalFinalMXN = (Number(g.totalCFDI) || 0) + (Number(g.montoPropina) || 0)
+  const totalNativo = (Number(g.montoExtranjero) || 0) + (Number(g.propinaExtranjero) || 0)
+  const fmt = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtNat = n => `${simboloMoneda(monedaRow) || ''}${(Number(n) || 0).toFixed(2)} ${monedaRow}`
+  // Ticket extranjero sin conciliar: total nativo en vez de un "$0.00" engañoso.
+  const muestraTotal = () =>
+    monedaRow !== 'MXN' && totalFinalMXN === 0 && totalNativo > 0 ? fmtNat(totalNativo) : fmt(totalFinalMXN)
+
+  const docEstado = g.xmlFaltante ? { t: 'Falta XML', c: 'warn' }
+    : tieneXML(g) && g.tienePDF ? { t: 'XML + PDF', c: 'ok' }
+    : tieneXML(g) ? { t: 'Solo XML', c: 'info' }
+    : g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL ? { t: 'Captura manual', c: 'muted' }
+    : { t: 'Ticket / OCR', c: 'info' }
+
+  const verImagen = () => {
+    const w = window.open('', '_blank')
+    if (!w) return
+    const img = w.document.createElement('img')
+    img.src = g.imageDataURL
+    img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
+    w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
+    w.document.body.appendChild(img)
+  }
+
+  return (
+    <motion.aside
+      className="dw-panel"
+      role="dialog"
+      aria-label={`Detalle de ${g.proveedor || 'factura'}`}
+      initial={{ x: 40, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 40, opacity: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+    >
+      <header className="dw-head">
+        <div className="dw-nav">
+          <button className="dw-icon-btn" onClick={onPrev} disabled={!onPrev} title="Anterior (Alt+↑)" aria-label="Factura anterior">
+            <ChevronDown size={16} style={{ transform: 'rotate(180deg)' }} />
+          </button>
+          <button className="dw-icon-btn" onClick={onNext} disabled={!onNext} title="Siguiente (Alt+↓)" aria-label="Factura siguiente">
+            <ChevronDown size={16} />
+          </button>
+          {posicion && <span className="dw-pos">{posicion}</span>}
+          <button className="dw-icon-btn dw-close" onClick={onClose} title="Cerrar (Esc)" aria-label="Cerrar detalle">
+            <X size={16} />
+          </button>
+        </div>
+        <h2 className="dw-title">{g.proveedor || 'Sin proveedor'}</h2>
+        <div className="dw-sub">
+          <span className="is-mono">{g.noFactura || 'Sin folio'}</span>
+          <span>·</span>
+          <span>{formatDateDisplay(g.fechaFac) || 'Sin fecha'}</span>
+          <span>·</span>
+          <span className="dw-total">{muestraTotal()}</span>
+        </div>
+        <div className="dw-badges">
+          <span className={`st-badge ${docEstado.c}`}>{docEstado.t}</span>
+          <span className={`st-badge ${estadoBanco(g).cls}`} title={estadoBanco(g).title}>
+            {necesitaRevisarMatch(g) ? 'Revisar coincidencia' : g.hizoMatch ? 'Conciliado con banco' : 'Sin conciliar'}
+          </span>
+          <span className={`st-badge ${g.validado ? 'ok' : 'warn'}`}>{g.validado ? 'Revisado' : 'Por revisar'}</span>
+        </div>
+      </header>
+
+      <div className="dw-body">
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Documentos</h3>
+          <div className="dw-docs">
+            <button className="dw-doc-btn" disabled={!g.tienePDF} onClick={() => openPDF(g.pdfFile)}>
+              <FileText size={15} /> {g.tienePDF ? 'Abrir PDF' : 'Sin PDF'}
+            </button>
+            {g.imageDataURL && (
+              <button className="dw-doc-btn" onClick={verImagen}>
+                <FileText size={15} /> Ver imagen original
+              </button>
+            )}
+            <span className={`dw-doc-flag${tieneXML(g) ? ' ok' : ''}`}>
+              {tieneXML(g) ? <Check size={13} /> : <X size={13} />} XML {tieneXML(g) ? 'cargado' : 'no cargado'}
+            </span>
+          </div>
+          {g.uuid && g.uuid !== 'MANUAL' && <DrawerReadOnly label="UUID (folio fiscal)" value={g.uuid} mono />}
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Datos de la factura</h3>
+          <div className="dw-grid">
+            <DrawerField label="Proveedor">
+              <input className="dw-in" value={g.proveedor || ''} onChange={e => upd('proveedor', e.target.value)} />
+            </DrawerField>
+            <DrawerReadOnly label="RFC" value={g.rfc} mono />
+            <DrawerField label="Factura (folio)">
+              <input className="dw-in is-mono" value={g.noFactura || ''} onChange={e => upd('noFactura', e.target.value)} />
+            </DrawerField>
+            <DrawerField label="Fecha factura" hint="DD-MM-AAAA">
+              <input className="dw-in" value={formatDateDisplay(g.fechaFac)} onChange={e => upd('fechaFac', parseDateDisplay(e.target.value))} />
+            </DrawerField>
+            <DrawerField label="Concepto">
+              <input className="dw-in" value={g.concepto || ''} onChange={e => upd('concepto', e.target.value)} />
+            </DrawerField>
+            <DrawerField label="Tipo de gasto">
+              <select className="dw-in" value={g.tipo || ''} onChange={e => upd('tipo', e.target.value)}>
+                <option value="">— Tipo —</option>
+                {tiposList.map(t => <option key={t} value={t}>{t}</option>)}
+                {g.tipo && !tiposList.includes(g.tipo) && <option value={g.tipo}>{g.tipo}</option>}
+              </select>
+            </DrawerField>
+          </div>
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Importes</h3>
+          <div className="dw-grid dw-grid-num">
+            <DrawerField label="Subtotal"><NumCell g={g} upd={upd} field="importe" prefix="$" /></DrawerField>
+            <DrawerField label="IVA"><NumCell g={g} upd={upd} field="iva" prefix="$" /></DrawerField>
+            <DrawerField label="ISH / IEPS"><NumCell g={g} upd={upd} field="isrTrasladado" prefix="$" /></DrawerField>
+            <DrawerField label="Ret. ISR"><NumCell g={g} upd={upd} field="retencionISR" prefix="$" /></DrawerField>
+            <DrawerField label="Ret. IVA"><NumCell g={g} upd={upd} field="retencionIVA" prefix="$" /></DrawerField>
+            <DrawerField label="Retenciones"><NumCell g={g} upd={upd} field="retenciones" prefix="$" /></DrawerField>
+            <DrawerField label="Total factura"><NumCell g={g} upd={upd} field="totalCFDI" prefix="$" /></DrawerField>
+          </div>
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Pago y conciliación</h3>
+          <div className="dw-grid">
+            <DrawerField label="Forma de pago">
+              <select className="dw-in" value={g.formaPago} onChange={e => upd('formaPago', e.target.value)}>
+                <option value="04">04 - Tarjeta de Crédito</option>
+                <option value="02">02 - Efectivo</option>
+                <option value="03">03 - Transferencia</option>
+                <option value="01">01 - Efectivo (otro)</option>
+                <option value="99">99 - Por Definir</option>
+              </select>
+            </DrawerField>
+            <DrawerField label="Fecha de cobro" hint={g.hizoMatch ? 'Tomada del estado de cuenta' : 'Igual a la fecha de factura hasta conciliar'}>
+              <input type="date" className="dw-in" value={cobroToIso(g.fechaCobro)} onChange={e => upd('fechaCobro', e.target.value)} />
+            </DrawerField>
+            {isSpecial && (
+              <DrawerField label="Banco">
+                <select className="dw-in" value={g.banco || ''} onChange={e => upd('banco', e.target.value)}>
+                  <option value="">—</option>
+                  {BANCOS_DISPONIBLES.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </DrawerField>
+            )}
+            {g.hizoMatch && g.matchMetodo && (
+              <DrawerReadOnly
+                label="Cómo se concilió"
+                value={`${g.matchMetodo} · ${g.matchConfianza}%`}
+                hint={necesitaRevisarMatch(g) ? 'Confianza baja: confirma que sea el cargo correcto' : 'Calculado por el motor de conciliación'}
+              />
+            )}
+            <DrawerReadOnly label="Cobrado en banco" value={g.hizoMatch && Number(g.montoCobrado) > 0 ? fmt(g.montoCobrado) : null} hint={g.hizoMatch ? undefined : 'Se llena al conciliar'} />
+            <DrawerReadOnly label="Propina" value={Number(g.montoPropina) > 0 ? `${fmt(g.montoPropina)} (${+Number(g.propinaPorcentaje || 0).toFixed(2)}%)` : Number(g.propinaExtranjero) > 0 ? fmtNat(g.propinaExtranjero) : null} hint="Se edita en la tabla" />
+            <DrawerReadOnly label="Total final" value={muestraTotal()} />
+            {(Number(g.montoUSD) > 0 || monedaRow !== 'MXN') && (
+              <>
+                <DrawerReadOnly label={`Monto M.E. (${monedaRow === 'MXN' ? 'USD' : monedaRow})`} value={Number(g.montoUSD) > 0 ? String(g.montoUSD) : null} hint="Se edita en la tabla" />
+                <DrawerReadOnly label="Tipo de cambio" value={Number(g.tipoCambio) > 0 ? String(g.tipoCambio) : null} />
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <footer className="dw-foot">
+        <label className={`dw-review${g.validado ? ' is-on' : ''}`}>
+          <input type="checkbox" checked={!!g.validado} onChange={e => upd('validado', e.target.checked)} />
+          <span>Marcar como revisada</span>
+        </label>
+        <button className="btn-premium primary" onClick={onNext || onClose}>
+          {onNext ? 'Siguiente' : 'Cerrar'}
+        </button>
+      </footer>
+    </motion.aside>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
+   COMPONENTE: PESTAÑA RESUMEN
+   Solo lectura, derivado de `lista`. Nada aquí toca la exportación. Los
+   montos son el TOTAL facturado en pesos (misma base que el KPI); los gastos
+   en moneda extranjera aún sin convertir NO se suman (se reportan aparte),
+   para no mezclar divisas.
+═══════════════════════════════════════════════════ */
+
+const fmtMXN = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+function BarList({ rows, emptyText }) {
+  if (!rows.length) return <div className="rs-empty">{emptyText}</div>
+  const max = Math.max(...rows.map(r => r.value), 0) || 1
+  return (
+    <div className="rs-bars" role="table">
+      {rows.map(r => (
+        <div key={r.label} className="rs-bar-row" role="row" title={`${r.label}: ${fmtMXN(r.value)} · ${r.count} ${r.count === 1 ? 'registro' : 'registros'}`}>
+          <span className="rs-bar-label" role="cell">{r.label}</span>
+          <span className="rs-bar-track" role="cell" aria-hidden="true">
+            <span className="rs-bar-fill" style={{ width: `${Math.max(1.5, (r.value / max) * 100)}%` }} />
+          </span>
+          <span className="rs-bar-val" role="cell">{fmtMXN(r.value)}</span>
+          <span className="rs-bar-n" role="cell">{r.count}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ResumenPanel({ lista, avisos, onIrAFiltro }) {
+  const [criterioFecha, setCriterioFecha] = useState('fechaFac')
+
+  const datos = useMemo(() => {
+    const enPesos = lista.filter(g => (Number(g.totalCFDI) || 0) !== 0)
+    const sinConvertir = lista.filter(g =>
+      normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !(Number(g.totalCFDI) || 0))
+    const agrupa = (arr, keyFn) => {
+      const m = new Map()
+      for (const g of arr) {
+        const k = keyFn(g)
+        const cur = m.get(k) || { label: k, value: 0, count: 0 }
+        cur.value += Number(g.totalCFDI) || 0
+        cur.count++
+        m.set(k, cur)
+      }
+      return [...m.values()]
+    }
+    const porTipo = agrupa(enPesos, g => g.tipo || 'Sin tipo').sort((a, b) => b.value - a.value)
+    const provs = agrupa(enPesos, g => (g.proveedor || 'Sin proveedor').trim()).sort((a, b) => b.value - a.value)
+    const TOP = 8
+    const porProveedor = provs.length > TOP + 1
+      ? [...provs.slice(0, TOP), provs.slice(TOP).reduce((acc, r) => ({ label: `Otros (${provs.length - TOP})`, value: acc.value + r.value, count: acc.count + r.count }), { value: 0, count: 0 })]
+      : provs
+
+    const conciliadas = lista.filter(g => g.hizoMatch)
+    const facturado = enPesos.reduce((s, g) => s + (Number(g.totalCFDI) || 0), 0)
+    const cobrado = conciliadas.reduce((s, g) => s + (Number(g.montoCobrado) || 0), 0)
+
+    const monedas = new Map()
+    for (const g of lista) {
+      const c = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+      if (c === 'MXN') continue
+      const cur = monedas.get(c) || { code: c, count: 0, nativo: 0, convertidas: 0 }
+      cur.count++
+      cur.nativo += (Number(g.montoExtranjero) || Number(g.montoUSD) || 0) + (Number(g.propinaExtranjero) || 0)
+      if ((Number(g.totalCFDI) || 0) > 0) cur.convertidas++
+      monedas.set(c, cur)
+    }
+
+    const docs = { xmlPdf: 0, soloXml: 0, ticket: 0, manual: 0 }
+    for (const g of lista) {
+      if (tieneXML(g) && g.tienePDF) docs.xmlPdf++
+      else if (tieneXML(g)) docs.soloXml++
+      else if (g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL) docs.manual++
+      else docs.ticket++
+    }
+
+    return { porTipo, porProveedor, sinConvertir, facturado, cobrado, conciliadas: conciliadas.length, monedas: [...monedas.values()], docs }
+  }, [lista])
+
+  // Serie por día — fecha de factura o de cobro, elegida explícitamente.
+  // fechaCobro = fechaFac hasta conciliar, por eso se aclara en el subtítulo.
+  const porDia = useMemo(() => {
+    const m = new Map()
+    for (const g of lista) {
+      const iso = criterioFecha === 'fechaCobro' ? cobroToIso(g.fechaCobro) : (g.fechaFac || '')
+      const v = Number(g.totalCFDI) || 0
+      if (!iso || !v) continue
+      const cur = m.get(iso) || { iso, value: 0, count: 0 }
+      cur.value += v
+      cur.count++
+      m.set(iso, cur)
+    }
+    return [...m.values()].sort((a, b) => a.iso.localeCompare(b.iso))
+  }, [lista, criterioFecha])
+  const maxDia = Math.max(...porDia.map(d => d.value), 0) || 1
+
+  const n = lista.length
+  const pctBanco = n ? Math.round((datos.conciliadas / n) * 100) : 0
+  const revisadas = lista.filter(g => g.validado).length
+  const pctRev = n ? Math.round((revisadas / n) * 100) : 0
+
+  return (
+    <div className="rs-wrap">
+      {/* Requiere atención — informativo; cada aviso lleva a su filtro. */}
+      <section className="rs-card rs-atencion">
+        <div className="rs-card-head">
+          <h3>Requiere atención</h3>
+          <span className="rs-card-sub">Avisos informativos: nada se bloquea ni se cambia solo</span>
+        </div>
+        {avisos.length === 0 ? (
+          <div className="rs-ok"><CheckCircle2 size={16} /> Todo en orden: no hay avisos pendientes.</div>
+        ) : (
+          <ul className="rs-avisos">
+            {avisos.map(a => (
+              <li key={a.key}>
+                <button className={`rs-aviso ${a.nivel}`} onClick={() => onIrAFiltro(a.filtro)}>
+                  <span className="rs-aviso-ic" aria-hidden="true">
+                    {a.nivel === 'warn' ? <AlertTriangle size={15} /> : <Info size={15} />}
+                  </span>
+                  <span className="rs-aviso-txt">
+                    <span className="rs-aviso-t"><strong>{a.count}</strong> {a.titulo}</span>
+                    <span className="rs-aviso-d">{a.detalle}</span>
+                  </span>
+                  <span className="rs-aviso-go">Ver <ArrowRight size={13} /></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Progresos independientes */}
+      <section className="rs-card">
+        <div className="rs-card-head"><h3>Avance del reporte</h3></div>
+        <div className="rs-progress-grid">
+          <div className="rs-progress">
+            <div className="rs-progress-top"><span>Conciliación bancaria</span><strong>{datos.conciliadas} de {n}</strong></div>
+            <div className="metric-progress"><span style={{ width: `${pctBanco}%` }} /></div>
+            <span className="rs-progress-hint">Facturas ligadas a un cargo del estado de cuenta</span>
+          </div>
+          <div className="rs-progress">
+            <div className="rs-progress-top"><span>Revisión manual</span><strong>{revisadas} de {n}</strong></div>
+            <div className="metric-progress revision"><span style={{ width: `${pctRev}%` }} /></div>
+            <span className="rs-progress-hint">Facturas marcadas con la casilla de revisión</span>
+          </div>
+        </div>
+        <div className="rs-stats">
+          <div className="rs-stat"><span>Facturado (MXN)</span><strong>{fmtMXN(datos.facturado)}</strong></div>
+          <div className="rs-stat" title="Suma de lo que el estado de cuenta cobró en las facturas conciliadas. Solo existe después de conciliar.">
+            <span>Cobrado en banco</span>
+            <strong className={datos.conciliadas ? '' : 'is-empty'}>{datos.conciliadas ? fmtMXN(datos.cobrado) : 'Sin conciliar'}</strong>
+          </div>
+          <div className="rs-stat"><span>XML + PDF</span><strong>{datos.docs.xmlPdf}</strong></div>
+          <div className="rs-stat"><span>Solo XML</span><strong>{datos.docs.soloXml}</strong></div>
+          <div className="rs-stat"><span>Ticket / OCR</span><strong>{datos.docs.ticket}</strong></div>
+          <div className="rs-stat"><span>Captura manual</span><strong>{datos.docs.manual}</strong></div>
+        </div>
+      </section>
+
+      <div className="rs-grid-2">
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Gasto por tipo</h3>
+            <span className="rs-card-sub">Total facturado en pesos · registros</span>
+          </div>
+          <BarList rows={datos.porTipo} emptyText="Sin importes en pesos todavía." />
+        </section>
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Principales proveedores</h3>
+            <span className="rs-card-sub">Total facturado en pesos · registros</span>
+          </div>
+          <BarList rows={datos.porProveedor} emptyText="Sin importes en pesos todavía." />
+        </section>
+      </div>
+
+      <section className="rs-card">
+        <div className="rs-card-head">
+          <h3>Gasto por día</h3>
+          <div className="density-toggle" role="group" aria-label="Fecha a usar">
+            <button className={criterioFecha === 'fechaFac' ? 'active' : ''} aria-pressed={criterioFecha === 'fechaFac'} onClick={() => setCriterioFecha('fechaFac')}>Fecha de factura</button>
+            <button className={criterioFecha === 'fechaCobro' ? 'active' : ''} aria-pressed={criterioFecha === 'fechaCobro'} onClick={() => setCriterioFecha('fechaCobro')}>Fecha de cobro</button>
+          </div>
+        </div>
+        {criterioFecha === 'fechaCobro' && (
+          <p className="rs-note">Hasta conciliar, la fecha de cobro es igual a la de factura; solo las conciliadas traen la fecha real del banco.</p>
+        )}
+        {porDia.length === 0 ? <div className="rs-empty">Sin importes con fecha.</div> : (
+          <div className="rs-cols" role="table">
+            {porDia.map(d => (
+              <div key={d.iso} className="rs-col" role="row" title={`${formatDateDisplay(d.iso)}: ${fmtMXN(d.value)} · ${d.count} ${d.count === 1 ? 'registro' : 'registros'}`}>
+                <span className="rs-col-track" aria-hidden="true">
+                  <span className="rs-col-fill" style={{ height: `${Math.max(2, (d.value / maxDia) * 100)}%` }} />
+                </span>
+                <span className="rs-col-label" role="cell">{formatDateDisplay(d.iso).slice(0, 5)}</span>
+                <span className="sr-only" role="cell">{fmtMXN(d.value)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {(datos.monedas.length > 0) && (
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Moneda extranjera</h3>
+            <span className="rs-card-sub">Cada divisa por separado: no se suman entre sí</span>
+          </div>
+          <table className="rs-table">
+            <thead><tr><th>Divisa</th><th>Registros</th><th>Total en su moneda</th><th>Con monto en pesos</th></tr></thead>
+            <tbody>
+              {datos.monedas.map(m => (
+                <tr key={m.code}>
+                  <td>{m.code}</td>
+                  <td>{m.count}</td>
+                  <td>{simboloMoneda(m.code) || ''}{m.nativo.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td>
+                    <span className={`st-badge ${m.convertidas === m.count ? 'ok' : 'warn'}`}>
+                      {m.convertidas} de {m.count}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {datos.sinConvertir.length > 0 && (
+            <p className="rs-note">{datos.sinConvertir.length} {datos.sinConvertir.length === 1 ? 'gasto' : 'gastos'} en moneda extranjera aún sin monto en pesos: no entran en las gráficas de arriba hasta conciliar (no son gastos de $0).</p>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
 
 /* ═══════════════════════════════════════════════════
    COMPONENTE: MODAL DE CONCILIACIÓN (glass + framer-motion)
@@ -3466,6 +4085,33 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
+  // ── Borrador local (IndexedDB, solo este navegador) ──
+  // estado: 'cargando' → 'activo' | 'no-disponible' | 'error' | 'lleno' | 'pausado'.
+  // `lista` guarda la referencia que se escribió: si coincide con la actual,
+  // el borrador está al día.
+  const [borrador, setBorrador] = useState({ estado: 'cargando', savedAt: null, lista: null })
+  const [ofertaBorrador, setOfertaBorrador] = useState(null)   // borrador encontrado al abrir
+  useEffect(() => {
+    leerBorrador()
+      .then(r => { if (r) setOfertaBorrador(r); setBorrador(b => ({ ...b, estado: 'activo' })) })
+      .catch(() => setBorrador(b => ({ ...b, estado: 'no-disponible' })))
+  }, [])
+  // Guarda con espera de 0.8 s tras el último cambio. No escribe nada
+  // mientras se decide si recuperar el borrador encontrado (para no pisarlo).
+  useEffect(() => {
+    if (borrador.estado !== 'activo' && borrador.estado !== 'error' && borrador.estado !== 'lleno') return
+    if (ofertaBorrador) return
+    if (borrador.lista === lista) return
+    const t = setTimeout(() => {
+      const op = lista.length
+        ? guardarBorrador({ lista, colaborador, carpetaNombre, appVersion: 'v9.05' })
+        : borrarBorrador().then(() => null)
+      op.then(savedAt => setBorrador({ estado: 'activo', savedAt, lista }))
+        .catch(err => setBorrador(b => ({ ...b, estado: err?.name === 'QuotaExceededError' ? 'lleno' : 'error' })))
+    }, 800)
+    return () => clearTimeout(t)
+  }, [lista, colaborador, carpetaNombre, borrador.estado, borrador.lista, ofertaBorrador])
+
   // Auto-fit del ancho de la columna FACTURA (colWidths[4]) al folio más
   // largo presente en la lista, para que folios como "F103069-141757" o
   // "FAC102026491" nunca se corten con elipsis. Se recalcula cuando cambia
@@ -3508,10 +4154,41 @@ export default function App() {
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
   // 22 columnas: ...formaPago(15), banco(16, solo especiales), prop%(17),
   // prop$(18), totalFinal(19), montoUSD(20), tipoCambio(21)
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
+  const [colWidths, setColWidths] = useState([40, 150, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
   const [busqueda,      setBusqueda]      = useState('')
   const searchInputRef = useRef(null)
+
+  // Densidad de la tabla — preferencia de UI por navegador (no son datos
+  // fiscales). localStorage puede no existir (modo privado) → try/catch.
+  const [densidad, setDensidad] = useState(() => {
+    try { return localStorage.getItem('smto-densidad') === 'compacta' ? 'compacta' : 'comoda' } catch { return 'comoda' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('smto-densidad', densidad) } catch { /* sin storage */ }
+  }, [densidad])
+
+  // Respaldo: el reporte solo vive en memoria. Guardamos la referencia de
+  // `lista` del último export exitoso (Excel o ZIP); si cambió desde entonces
+  // hay trabajo sin respaldar → indicador en el header + aviso al salir.
+  const [ultimoExport, setUltimoExport] = useState(null)
+
+  // Columnas ocultas (preferencia de UI por navegador). Default: Esencial.
+  const [hiddenCols, setHiddenCols] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('smto-columnas-ocultas'))
+      if (Array.isArray(v)) return v
+    } catch { /* sin storage o JSON inválido */ }
+    return hiddenForPreset('esencial')
+  })
+  useEffect(() => {
+    try { localStorage.setItem('smto-columnas-ocultas', JSON.stringify(hiddenCols)) } catch { /* sin storage */ }
+  }, [hiddenCols])
+
+  const [filtroRapido, setFiltroRapido] = useState('todos')
+  const [drawerId,     setDrawerId]     = useState(null)   // gasto abierto en el panel lateral
+  const [bulkTipo,     setBulkTipo]     = useState(null)   // { tipo } mientras el modal de tipo masivo está abierto
+  const [vista,        setVista]        = useState('facturas') // 'facturas' | 'resumen' — vistas del mismo `lista`
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
@@ -3584,11 +4261,24 @@ export default function App() {
       totalFacturado:   sum('totalCFDI'),
       ivaTotal:         sum('iva'),
       retencionesTotal: sum('retenciones'),
-      sinCobrar:        lista.filter(g => !g.fechaCobro).length,
       count:            lista.length,
+      // Dos progresos INDEPENDIENTES: hizoMatch (banco) ≠ validado (manual).
+      conciliadas:      lista.filter(g => g.hizoMatch).length,
+      validadas:        lista.filter(g => g.validado).length,
       porMoneda,
     }
   }, [lista])
+
+  const sinRespaldo = lista.length > 0 && lista !== ultimoExport
+  // Con el borrador local al día no hace falta el aviso del navegador.
+  const avisarAlSalir = sinRespaldo && !(borrador.estado === 'activo' && borrador.lista === lista)
+  useEffect(() => {
+    if (!avisarAlSalir) return
+    // El navegador muestra su propio texto genérico; solo pedimos el aviso.
+    const onBeforeUnload = e => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [avisarAlSalir])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const fmtDivisa = (code, n) =>
     `${simboloMoneda(code) || code + ' '}${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -3597,10 +4287,12 @@ export default function App() {
   //    todos los campos significativos del gasto. Se aplica ANTES del sort
   //    para que el orden actuál actúe sobre el subset filtrado.
   const filteredLista = useMemo(() => {
+    const chip = FILTROS_RAPIDOS.find(f => f.key === filtroRapido)
+    const base = chip && filtroRapido !== 'todos' ? lista.filter(chip.test) : lista
     const q = busqueda.trim()
-    if (!q) return lista
+    if (!q) return base
     const nq = q.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
-    return lista.filter(g => {
+    return base.filter(g => {
       const haystack = [
         g.rfc, g.proveedor, g.noFactura, g.concepto, g.tipo,
         g.fechaFac, g.fechaCobro, g.formaPago, g.polizaNumero,
@@ -3615,7 +4307,11 @@ export default function App() {
         .toLowerCase()
       return haystack.includes(nq)
     })
-  }, [lista, busqueda])
+  }, [lista, busqueda, filtroRapido])
+
+  const conteoFiltros = useMemo(() => Object.fromEntries(
+    FILTROS_RAPIDOS.map(f => [f.key, lista.filter(f.test).length])
+  ), [lista])
 
   // ── Sort — three-state cycle (asc → desc → unsorted), null-safe, with
   //          date detection that accepts both YYYY-MM-DD and DD/MM/YYYY.
@@ -4783,7 +5479,7 @@ export default function App() {
     // (the new default). Matched rows will overwrite this with the CSV's
     // dCSV; unmatched rows keep the invoice date so the FECHA DE COBRO
     // column never shows a blank.
-    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '' }))
+    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '', matchMetodo: '', matchConfianza: 0 }))
 
     // Normalize for fuzzy-suggestion comparison: strip accents, lowercase,
     // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
@@ -4903,6 +5599,39 @@ export default function App() {
       csvRows.push({ dCSV, amounts, descripcion, matched: false, autorizacion, moneda, montoUSD, montoMXN, categoria })
     }
     const bancoRows = csvRows.length
+
+    // ── Vista previa antes de conciliar ── Solo informa qué se leyó del
+    // archivo (formato, movimientos, periodo); el usuario confirma y la
+    // conciliación corre exactamente igual que antes. Cancelar no toca nada.
+    {
+      const fechas = csvRows.map(r => r.dCSV).sort((a, b) => a - b)
+      const monedas = [...new Set(csvRows.map(r => r.moneda || 'MXN'))]
+      const conAuth = csvRows.some(r => r.autorizacion)
+      const formato = isClara
+        ? `Clara · ${isExcel ? 'Excel' : 'CSV'}${monedas.some(m => m !== 'MXN') ? ' · con moneda extranjera' : ''}`
+        : `Estado de cuenta genérico · ${isExcel ? 'Excel' : 'CSV'}`
+      const periodo = fechas.length
+        ? `${formatDateDisplay(formatCobro(fechas[0]))} al ${formatDateDisplay(formatCobro(fechas[fechas.length - 1]))}`
+        : 'Sin fechas legibles'
+      const avisos = []
+      if (!bancoRows) avisos.push('⚠ No encontramos movimientos con fecha y monto. Revisa que sea el estado de cuenta correcto.')
+      if (!isClara) avisos.push('No es un archivo de Clara: se buscarán fechas y montos en cada renglón (sin códigos de autorización).')
+      if (isClara && conAuth) avisos.push('Trae códigos de autorización: los tickets con OCR se pueden ligar por código.')
+      if (lista.some(g => g.hizoMatch)) avisos.push('Ya hay una conciliación aplicada: esta la reemplaza (podrás revisar antes de aplicar).')
+      const continuar = await askConfirm({
+        type: bancoRows ? 'confirm' : 'warning',
+        title: 'Revisa el estado de cuenta',
+        subtitle: `${file.name}\n${formato}\nPeriodo: ${periodo}${avisos.length ? '\n\n' + avisos.join('\n') : ''}`,
+        stats: [
+          { value: bancoRows, label: bancoRows === 1 ? 'Movimiento' : 'Movimientos', color: '#38BDF8' },
+          { value: lista.length, label: lista.length === 1 ? 'Gasto en reporte' : 'Gastos en reporte', color: '#59D39B' },
+          { value: monedas.join(' · ') || '—', label: 'Moneda', color: 'rgba(255,255,255,0.7)' },
+        ],
+        primaryLabel: 'Conciliar',
+        secondaryLabel: 'Cancelar',
+      })
+      if (!continuar) { e.target.value = ''; return }
+    }
 
     // Date is a TIEBREAKER, not a filter. Pick the invoice whose fechaFac is
     // closest in time to the bank row's date. Invoices with no parseable date
@@ -5345,6 +6074,14 @@ export default function App() {
       return acc
     }, { mxn: 0, usd: 0 })
 
+    // Método y confianza FINALES del motor (ya con el guardián aplicado) en
+    // cada gasto, para que la tabla y el panel expliquen el match sin
+    // recalcular nada. No viajan al Excel (export usa campos explícitos).
+    for (const m of matchedRows) {
+      const g = nl.find(x => x.id === m.invoiceId)
+      if (g) { g.matchMetodo = m.method; g.matchConfianza = m.confidence }
+    }
+
     // Defer setLista — the modal now confirms/cancels the apply step.
     // pendingLista travels with the result object; onConfirm flushes it,
     // onCancel discards it. matchedRows/sinFactura are pre-snapshotted so
@@ -5594,6 +6331,7 @@ export default function App() {
     })
     a.click()
     URL.revokeObjectURL(a.href)
+    setUltimoExport(lista)
 
     // 4) Success modal — generic PremiumModal with three stats. Si se detectó
     //    PDF idéntico entre folios distintos, el modal pasa a 'warning' y lista
@@ -6231,6 +6969,7 @@ export default function App() {
       const a = Object.assign(document.createElement('a'), { href: url, download: filename })
       a.click()
       URL.revokeObjectURL(url)
+      setUltimoExport(lista)
       setExportExito({
         title: '¡Excel Generado!',
         subtitle: 'Reporte descargado en formato oficial SMTO',
@@ -6272,6 +7011,106 @@ export default function App() {
     }
   }, [])
 
+  // ── Borrador: recuperar / descartar / borrar ──
+  const recuperarBorrador = () => {
+    const r = ofertaBorrador
+    if (!r) return
+    setLista(r.lista)
+    if (r.colaborador) {
+      setColaborador(COLABORADORES.find(c => c.nombre === r.colaborador.nombre) || r.colaborador)
+      setShowColabModal(false)
+    }
+    if (r.carpetaNombre) setCarpetaNombre(r.carpetaNombre)
+    // Lo recuperado ya está guardado: marcar al día evita reescribirlo.
+    setBorrador({ estado: 'activo', savedAt: r.savedAt, lista: r.lista })
+    setOfertaBorrador(null)
+    setToast(`✓ Borrador recuperado · ${r.count} ${r.count === 1 ? 'gasto' : 'gastos'}`)
+  }
+  const descartarBorrador = () => {
+    borrarBorrador().catch(() => {})
+    setOfertaBorrador(null)
+  }
+  const borrarBorradorManual = async () => {
+    const ok = await askConfirm({
+      type: 'warning',
+      title: '¿Borrar el borrador de este navegador?',
+      subtitle: 'Se elimina la copia guardada en este navegador y se deja de guardar en esta sesión. El reporte que ves en pantalla no cambia. Si no lo has exportado, se perderá al cerrar o recargar la página.',
+      primaryLabel: 'Borrar borrador',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!ok) return
+    try { await borrarBorrador() } catch { /* sin storage: nada que borrar */ }
+    setBorrador({ estado: 'pausado', savedAt: null, lista: null })
+    setToast('Borrador borrado de este navegador')
+  }
+  const borradorAlDia = borrador.estado === 'activo' && borrador.lista === lista && lista.length > 0
+  const horaBorrador = borrador.savedAt
+    ? new Date(borrador.savedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  // ── Vista: columnas visibles, panel de detalle y acciones masivas ──
+  // Las columnas se ocultan con CSS (nth-child) para no tocar el render de
+  // GastoRow; el índice cuenta la columna BANCO solo si se dibuja.
+  const columnasRender = COLUMNS.filter(c => !c.specialOnly || esColaboradorEspecial)
+  const presetActivo = Object.keys(COLUMN_PRESETS).find(k => {
+    const h = hiddenForPreset(k)
+    return h.length === hiddenCols.length && h.every(x => hiddenCols.includes(x))
+  })
+  const cssColumnasOcultas = columnasRender
+    .map((c, i) => hiddenCols.includes(c.key) && !COLUMNAS_FIJAS.includes(c.key) ? i + 1 : 0)
+    .filter(Boolean)
+    .map(n => `.tabla-gastos > thead > tr > th:nth-child(${n}), .tabla-gastos > tbody > tr > td:nth-child(${n}) { display: none; }`)
+    .join('\n')
+  const toggleColumna = key =>
+    setHiddenCols(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  const hayFiltros = filtroRapido !== 'todos' || !!busqueda.trim()
+
+  const drawerGasto = drawerId ? lista.find(g => g.id === drawerId) : null
+  const drawerIdx = drawerGasto ? sortedLista.findIndex(g => g.id === drawerId) : -1
+  // Si el gasto abierto se elimina, se cierra el panel.
+  useEffect(() => { if (drawerId && !drawerGasto) setDrawerId(null) }, [drawerId, drawerGasto])
+  const closeDrawer = useCallback(() => setDrawerId(null), [])
+
+  // "Requiere atención" — avisos informativos derivados del estado actual.
+  // Cada uno lleva a su filtro en Facturas; ninguno bloquea ni corrige nada.
+  const avisos = [
+    { key: 'revisarMatch', filtro: 'revisarMatch', nivel: 'warn', titulo: 'coincidencias bancarias por revisar', detalle: 'La conciliación las ligó con confianza baja: confirma que sea el cargo correcto.' },
+    { key: 'xmlFaltante', filtro: 'xmlFaltante', nivel: 'warn', titulo: 'recuperadas sin XML', detalle: 'Se leyeron por OCR porque su XML venía vacío o dañado. Pide el XML al proveedor.' },
+    { key: 'sinImporte', filtro: 'sinImporte', nivel: 'warn', titulo: 'sin importe capturado', detalle: 'Tienen total $0 y ningún monto en moneda extranjera.' },
+    { key: 'meSinConciliar', filtro: 'meSinConciliar', nivel: 'info', titulo: 'en moneda extranjera sin conciliar', detalle: 'Su equivalente en pesos llega al conciliar con el banco. No son gastos de $0.' },
+    { key: 'sinXml', filtro: 'sinXml', nivel: 'info', titulo: 'sin XML', detalle: 'Tickets, fotos o capturas manuales. Revisa si alguno sí tiene factura.' },
+    { key: 'porRevisar', filtro: 'porRevisar', nivel: 'info', titulo: 'sin revisión manual', detalle: 'Aún no tienen marcada la casilla de revisión.' },
+    { key: 'cobroAntes', filtro: 'cobroAntes', nivel: 'info', titulo: 'cobradas antes de la fecha de factura', detalle: 'Suele ser normal (la factura se emitió días después del pago). Solo informativo.' },
+  ].map(a => ({ ...a, count: conteoFiltros[a.filtro] || 0 })).filter(a => a.count > 0)
+  const avisosFuertes = avisos.filter(a => a.nivel === 'warn').reduce((s, a) => s + a.count, 0)
+  const irAFiltro = key => { setFiltroRapido(key); setBusqueda(''); setVista('facturas') }
+
+  // Acciones masivas sobre las filas VISIBLES (filtro + búsqueda actuales).
+  // Solo tocan `validado` y `tipo`, que no tienen efectos colaterales en update().
+  const marcarVisiblesRevisadas = async valor => {
+    const ids = new Set(sortedLista.map(g => g.id))
+    const n = ids.size
+    if (!n) return
+    const plural = n === 1 ? 'factura' : `${n} facturas`
+    const ok = await askConfirm({
+      type: 'warning',
+      title: valor ? `¿Marcar ${plural} como revisada${n === 1 ? '' : 's'}?` : `¿Quitar la marca de revisión a ${plural}?`,
+      subtitle: `Se aplica a ${n === 1 ? 'la factura que ves' : `las ${n} facturas que ves`} ahora en la tabla (con los filtros actuales). Solo cambia la casilla de revisión manual: no concilia ni modifica importes.`,
+      primaryLabel: valor ? 'Marcar revisadas' : 'Quitar marca',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!ok) return
+    setLista(prev => prev.map(g => ids.has(g.id) ? { ...g, validado: valor } : g))
+    setToast(valor ? `✓ ${n} ${n === 1 ? 'factura marcada' : 'facturas marcadas'} como revisada${n === 1 ? '' : 's'}` : `Marca de revisión quitada a ${n} ${n === 1 ? 'factura' : 'facturas'}`)
+  }
+  const aplicarTipoMasivo = () => {
+    if (!bulkTipo?.tipo) return
+    const ids = new Set(sortedLista.map(g => g.id))
+    setLista(prev => prev.map(g => ids.has(g.id) ? { ...g, tipo: bulkTipo.tipo } : g))
+    setToast(`✓ Tipo «${bulkTipo.tipo}» aplicado a ${ids.size} ${ids.size === 1 ? 'factura' : 'facturas'}`)
+    setBulkTipo(null)
+  }
+
   /* ── RENDER ── */
   return (
     <div className="app">
@@ -6284,14 +7123,53 @@ export default function App() {
         }} />
       )}
 
+      {/* ─── RECUPERAR BORRADOR (encontrado al abrir la app) ─── */}
+      {ofertaBorrador && (
+        <div className="premium-overlay borrador-overlay">
+          <div className="premium-modal" style={{ maxWidth: 480 }} role="dialog" aria-labelledby="borrador-title">
+            <div className="premium-icon-wrap" style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.25)' }}>
+              <FileSpreadsheet size={28} color="#38BDF8" />
+            </div>
+            <h2 className="premium-title" id="borrador-title">¿Continuar donde te quedaste?</h2>
+            <p className="premium-subtitle">
+              Encontramos un reporte sin terminar guardado en este navegador
+              {ofertaBorrador.colaborador ? ` de ${ofertaBorrador.colaborador.nombre}` : ''}, del{' '}
+              {new Date(ofertaBorrador.savedAt).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(/\.$/, '')}.
+            </p>
+            <div className="premium-stats">
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: '#38BDF8' }}>{ofertaBorrador.count}</div><div className="premium-stat-label">{ofertaBorrador.count === 1 ? 'Gasto' : 'Gastos'}</div></div>
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: '#59D39B' }}>{ofertaBorrador.lista.filter(g => g.hizoMatch).length}</div><div className="premium-stat-label">Conciliados</div></div>
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: 'rgba(255,255,255,0.7)' }}>{ofertaBorrador.lista.filter(g => g.validado).length}</div><div className="premium-stat-label">Revisados</div></div>
+            </div>
+            {ofertaBorrador.avisos.length > 0 && (
+              <p className="borrador-aviso">⚠ {ofertaBorrador.avisos.join(' ')}</p>
+            )}
+            <p className="borrador-nota">
+              El borrador vive solo en este navegador. «Empezar de cero» lo borra definitivamente; hazlo si usas una computadora compartida.
+            </p>
+            <div className="premium-actions" style={{ marginTop: 18 }}>
+              <button className="premium-btn-secondary" onClick={descartarBorrador}>Empezar de cero</button>
+              <button className="premium-btn-primary" autoFocus onClick={recuperarBorrador}>Recuperar reporte</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── CABECERA ─── */}
       <div className="header">
         <div className="header-logo">
-          <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
+          <img src="/logo.png" alt="SMTO" style={{ height: '40px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.04</span></h1>
+          <h1 className="header-title">Control de gastos<span className="version-badge">v9.05</span></h1>
           <div className="header-sub">
+            {colaborador && (
+              <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
+                <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
+                <span>{colaborador.nombre}</span>
+                <span className="colab-chip-cat">{colaborador.categoria}</span>
+              </button>
+            )}
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
               {carpetaNombre}
@@ -6302,56 +7180,64 @@ export default function App() {
               {lista.length} registros
             </span>
           </div>
-          {colaborador && (
-            <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
-              <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
-              <span>{colaborador.nombre}</span>
-              <span className="colab-chip-cat">{colaborador.categoria}</span>
-            </button>
-          )}
         </div>
-        <div className="guide-btn-group">
-          <button className="guide-btn guide-btn-clara" onClick={() => setShowClaraGuide(true)} title="Manual para descargar el estado de cuenta de Clara">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-            ¿Cómo Descargar tu estado de cuenta CLARA?
-          </button>
-          <button className="guide-btn" onClick={() => setTourStep(0)} title="Recorrido paso a paso">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            ¿Cómo utilizar la app?
-          </button>
+        <div className="header-right">
+          {lista.length > 0 && (() => {
+            // Prioridad: export hecho > borrador al día > guardando > sin respaldo.
+            const RIESGO = ' Borrar los datos del navegador o usar una ventana privada lo elimina; exportar el Excel o el ZIP sigue siendo el respaldo oficial.'
+            const p = !sinRespaldo
+              ? { cls: 'ok', ic: 'ok', largo: 'Respaldo exportado', corto: 'Respaldado', title: 'Ya exportaste este reporte tal como está.' }
+              : borradorAlDia
+              ? { cls: 'guardado', ic: 'ok', largo: `Guardado en este navegador · ${horaBorrador}`, corto: `Guardado ${horaBorrador}`, title: `Si recargas o cierras la página, al volver podrás recuperar este reporte (se conserva ${CADUCIDAD_DIAS} días).${RIESGO}` }
+              : borrador.estado === 'activo'
+              ? { cls: 'guardado', ic: 'sync', largo: 'Guardando…', corto: 'Guardando…', title: 'Guardando el borrador en este navegador.' }
+              : borrador.estado === 'lleno'
+              ? { cls: 'pendiente', ic: 'warn', largo: 'Sin espacio para el borrador · exporta antes de cerrar', corto: 'Sin espacio', title: 'El navegador no tiene espacio para guardar el borrador (muchos PDFs o imágenes). Exporta el Excel o el ZIP como respaldo.' }
+              : { cls: 'pendiente', ic: 'warn', largo: 'Sin respaldo · exporta antes de cerrar', corto: 'Sin respaldo',
+                  title: borrador.estado === 'pausado'
+                    ? 'Borraste el borrador: en esta sesión ya no se guarda. Exporta el Excel o el ZIP como respaldo.'
+                    : 'Este navegador no permite guardar el borrador (p. ej. ventana privada). Si cierras o recargas la página se pierde lo que no hayas exportado.' }
+            return (
+              <span className={`respaldo-pill ${p.cls}`} title={p.title}>
+                {p.ic === 'warn' ? <AlertTriangle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+                <span className="respaldo-txt">{p.largo}</span>
+                <span className="respaldo-txt-short">{p.corto}</span>
+              </span>
+            )
+          })()}
+          <ToolbarMenu
+            title="Ayuda"
+            variant="ghost"
+            align="right"
+            icon={<Info size={15} />}
+            items={[
+              { label: '¿Cómo utilizar la app?', hint: 'Recorrido paso a paso', icon: <Sparkles size={16} />, onClick: () => setTourStep(0) },
+              { label: '¿Cómo descargar tu estado de cuenta Clara?', hint: 'Manual con capturas', icon: <FileText size={16} />, onClick: () => setShowClaraGuide(true) },
+              { label: 'Borrar borrador de este navegador', hint: 'Recomendado en computadoras compartidas', icon: <XCircle size={16} />, onClick: borrarBorradorManual, hidden: !borrador.savedAt },
+            ]}
+          />
         </div>
       </div>
 
       <div className="divider" />
 
-      {/* ─── BARRA DE ACCIONES ─── */}
+      {/* ─── BARRA DE ACCIONES ───
+          Reorganización visual: cada item del menú llama exactamente al mismo
+          handler que tenía su botón. Las funciones especiales (Saldos, Nómina)
+          siguen como botones visibles para quien las tiene. */}
       <div className="action-bar">
         <div className="action-group">
-          <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
-          <PremiumButton
-            title={importSuccess ? 'Importado' : 'Importar reporte'}
-            variant={importSuccess ? 'success' : 'ghost'}
-            onClick={() => document.getElementById('import-xlsx-input').click()}
-            icon={importSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-            )}
+          <ToolbarMenu
+            id="tour-carpeta"
+            title={carpetaSuccess ? 'Cargado' : importSuccess ? 'Importado' : 'Agregar comprobantes'}
+            variant={carpetaSuccess || importSuccess ? 'success' : 'primary'}
+            icon={carpetaSuccess || importSuccess ? <Check size={15} strokeWidth={2.5} /> : <Plus size={15} strokeWidth={2.5} />}
+            items={[
+              { label: 'Cargar carpeta', hint: 'XML y PDF de tus facturas', icon: '📁', onClick: () => folderRef.current?.click() },
+              { label: 'Importar reporte', hint: 'Excel previo para continuar', icon: '📥', onClick: () => document.getElementById('import-xlsx-input').click() },
+              { label: 'Cargar foto / ticket', hint: 'Cámara, galería o PDF (OCR)', icon: '📸', onClick: () => setShowPhotoChoice(true) },
+              { label: 'Agregar manualmente', hint: 'Captura un gasto a mano', icon: '✍️', onClick: agregarManual },
+            ]}
           />
           <input
             id="import-xlsx-input"
@@ -6360,23 +7246,7 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleImportExcel}
           />
-          <PremiumButton
-            id="tour-carpeta"
-            title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
-            variant={carpetaSuccess ? 'success' : 'primary'}
-            onClick={() => folderRef.current?.click()}
-            icon={carpetaSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-              </svg>
-            )}
-          />
-          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
-          <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          <PremiumButton id="tour-banco" title="Conciliar banco" icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
               title="Cotejar con Saldos"
@@ -6408,76 +7278,129 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleNominaFile}
           />
-          {(() => {
-            const total = lista.length
-            const validados = lista.filter(g => g.validado).length
-            const allDone = total > 0 && validados === total
-            return total > 0 ? (
-              <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <span>
-                  {allDone
-                    ? `✓ ${total} facturas validadas`
-                    : `${validados} / ${total} validadas`}
-                </span>
-              </div>
-            ) : null
-          })()}
         </div>
         <div className="action-group">
-          <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
-          <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
+          <ToolbarMenu
+            id="tour-zip"
+            title="Exportar"
+            variant="export"
+            align="right"
+            isDisabled={!lista.length}
+            icon={<Download size={15} />}
+            items={[
+              { label: 'Excel', hint: 'Reporte oficial SMTO (.xlsx)', icon: '📊', onClick: exportarExcel },
+              { label: 'Excel + facturas (ZIP)', hint: 'Para enviar a contabilidad', icon: '📦', onClick: exportar },
+            ]}
+          />
         </div>
       </div>
 
-      {/* ─── BARRA DE MÉTRICAS ─── */}
+      {/* ─── BARRA DE MÉTRICAS ───
+          Conciliación bancaria (hizoMatch) y revisión manual (validado) son
+          progresos independientes y se muestran por separado. */}
       <div className="metrics-bar">
-        <div className="metric-card" style={{ '--accent': '#0A84FF' }}>
-          <div className="metric-label">Total Facturado</div>
+        <div className="metric-card" title="Suma de la columna TOTAL de todas las facturas del reporte, en pesos (incluye impuestos).">
+          <div className="metric-label">Total facturado</div>
           <div className="metric-value">{fmtMoney(metrics.totalFacturado)}</div>
+          <div className="metric-hint">MXN · con impuestos</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#BF5AF2' }}>
-          <div className="metric-label">IVA Total</div>
+        <div className="metric-card" title="Suma del IVA trasladado de todas las facturas.">
+          <div className="metric-label">IVA total</div>
           <div className="metric-value">{fmtMoney(metrics.ivaTotal)}</div>
+          <div className="metric-hint">Trasladado</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#FF9500' }}>
-          <div className="metric-label">Retenciones</div>
-          <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
-        </div>
+        {metrics.retencionesTotal !== 0 && (
+          <div className="metric-card" title="Suma de retenciones (ISR / IVA) de las facturas.">
+            <div className="metric-label">Retenciones</div>
+            <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
+            <div className="metric-hint">ISR / IVA retenido</div>
+          </div>
+        )}
         {/* Divisas — con UNA moneda extranjera muestra su total con su símbolo
             ("Total CNY ¥249.11"); con varias, cuántas hay (desglose en el
             tooltip) porque sumarlas entre sí no significa nada. Espejo del
-            comportamiento aprobado de la tarjeta del Excel. */}
+            comportamiento aprobado de la tarjeta del Excel. Solo aparece si
+            hay montos en moneda extranjera. */}
         {(() => {
           const divisas = Object.entries(metrics.porMoneda)
+          if (!divisas.length) return null
           const detalle = divisas.map(([c, v]) => `${c} ${fmtDivisa(c, v)}`).join('  ·  ')
           return (
-            <div className="metric-card" style={{ '--accent': '#59D39B' }} title={detalle || undefined}>
+            <div className="metric-card" title={detalle}>
               <div className="metric-label">
-                {divisas.length === 1 ? `Total ${divisas[0][0]}` : divisas.length > 1 ? 'Moneda extranjera' : 'Total USD'}
+                {divisas.length === 1 ? `Total ${divisas[0][0]}` : 'Moneda extranjera'}
               </div>
               <div className="metric-value">
-                {divisas.length === 0 ? fmtMoney(0)
-                  : divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1])
-                  : `${divisas.length} divisas`}
+                {divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1]) : `${divisas.length} divisas`}
               </div>
+              <div className="metric-hint">Monto en su moneda original</div>
             </div>
           )
         })()}
-        <div className="metric-card" style={{ '--accent': '#30D158' }}>
+        <div className="metric-card" title="Número de renglones del reporte.">
           <div className="metric-label">Registros</div>
           <div className="metric-value">{metrics.count}</div>
+          <div className="metric-hint">En el reporte</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#FF453A' }}>
-          <div className="metric-label">Por Corroborar</div>
-          <div className="metric-value">{metrics.sinCobrar}</div>
-        </div>
+        {(() => {
+          const n = metrics.count, c = metrics.conciliadas
+          const pct = n ? Math.round((c / n) * 100) : 0
+          const porRevisar = conteoFiltros.revisarMatch || 0
+          return (
+            <div className="metric-card" title="Facturas que la conciliación ligó a un cargo del estado de cuenta. Que una factura no esté conciliada no es un adeudo: puede ser de otro periodo, otra tarjeta o efectivo.">
+              <div className="metric-label">Conciliadas con banco</div>
+              <div className={`metric-value${c === 0 ? ' is-empty' : ''}`}>
+                {c === 0 ? '—' : <>{c}<span className="metric-of"> de {n}</span></>}
+              </div>
+              {c === 0
+                ? <div className="metric-hint">Aún sin conciliar</div>
+                : <>
+                    <div className="metric-progress" aria-label={`${pct}% conciliado`}><span style={{ width: `${pct}%` }} /></div>
+                    {porRevisar > 0 && (
+                      <button className="metric-link" onClick={() => setFiltroRapido('revisarMatch')}>
+                        {porRevisar} por revisar →
+                      </button>
+                    )}
+                  </>}
+            </div>
+          )
+        })()}
+        {(() => {
+          const n = metrics.count, v = metrics.validadas
+          const pct = n ? Math.round((v / n) * 100) : 0
+          return (
+            <div className={`metric-card${n > 0 && v === n ? ' is-done' : ''}`} title="Facturas que marcaste como revisadas con la casilla de cada renglón. Es independiente de la conciliación bancaria.">
+              <div className="metric-label">Revisadas manualmente</div>
+              <div className={`metric-value${n === 0 ? ' is-empty' : ''}`}>
+                {n === 0 ? '—' : <>{v}<span className="metric-of"> de {n}</span></>}
+              </div>
+              {n === 0
+                ? <div className="metric-hint">Sin registros</div>
+                : <div className="metric-progress revision" aria-label={`${pct}% revisado`}><span style={{ width: `${pct}%` }} /></div>}
+            </div>
+          )
+        })()}
       </div>
 
-      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {/* ─── PESTAÑAS: vistas del mismo reporte ─── */}
       {lista.length > 0 && (
+        <div className="ws-tabs" role="tablist" aria-label="Vista">
+          <button role="tab" aria-selected={vista === 'facturas'} className={`ws-tab${vista === 'facturas' ? ' active' : ''}`} onClick={() => setVista('facturas')}>
+            Facturas <span className="ws-tab-n">{lista.length}</span>
+          </button>
+          <button role="tab" aria-selected={vista === 'resumen'} className={`ws-tab${vista === 'resumen' ? ' active' : ''}`} onClick={() => setVista('resumen')}>
+            Resumen
+            {avisos.length > 0 && (
+              <span className={`ws-tab-n ${avisosFuertes ? 'warn' : 'info'}`} title={`${avisos.length} ${avisos.length === 1 ? 'aviso' : 'avisos'} en Requiere atención`}>
+                {avisos.length} {avisos.length === 1 ? 'aviso' : 'avisos'}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {lista.length > 0 && vista === 'facturas' && (
         <div className="search-bar">
           <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -6490,7 +7413,7 @@ export default function App() {
             onChange={e => setBusqueda(e.target.value)}
             placeholder="Buscar por proveedor, factura, fecha, RFC, concepto, póliza..."
           />
-          {busqueda && (
+          {hayFiltros && (
             <span className="search-count">
               {filteredLista.length} de {lista.length}
             </span>
@@ -6505,6 +7428,76 @@ export default function App() {
             </button>
           )}
           <span className="search-kbd">⌘K</span>
+          <div className="density-toggle" role="group" aria-label="Densidad de la tabla">
+            <button className={densidad === 'comoda' ? 'active' : ''} aria-pressed={densidad === 'comoda'} onClick={() => setDensidad('comoda')}>Cómoda</button>
+            <button className={densidad === 'compacta' ? 'active' : ''} aria-pressed={densidad === 'compacta'} onClick={() => setDensidad('compacta')}>Compacta</button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── FILTROS RÁPIDOS + COLUMNAS + ACCIONES ───
+          Los filtros solo cambian la vista; Excel y ZIP siempre exportan
+          el reporte completo. */}
+      {lista.length > 0 && vista === 'facturas' && (
+        <div className="view-bar">
+          <div className="chips" role="group" aria-label="Filtros rápidos">
+            {FILTROS_RAPIDOS.filter(f => filtroRapido === f.key || (f.soloSiHay ? conteoFiltros[f.key] > 0 : !f.oculto)).map(f => (
+              <button
+                key={f.key}
+                className={`chip${filtroRapido === f.key ? ' active' : ''}${f.soloSiHay ? ' chip-warn' : ''}`}
+                aria-pressed={filtroRapido === f.key}
+                onClick={() => setFiltroRapido(f.key)}
+              >
+                {f.label}<span className="chip-n">{conteoFiltros[f.key]}</span>
+              </button>
+            ))}
+            {hayFiltros && (
+              <button className="chip-clear" onClick={() => { setFiltroRapido('todos'); setBusqueda('') }}>
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+          <div className="view-bar-right">
+            <ToolbarMenu
+              title={`Acciones (${sortedLista.length})`}
+              variant="ghost"
+              align="right"
+              isDisabled={!sortedLista.length}
+              items={[
+                { label: 'Marcar visibles como revisadas', hint: 'Casilla de revisión manual', icon: <CheckCircle2 size={16} />, onClick: () => marcarVisiblesRevisadas(true) },
+                { label: 'Quitar marca de revisión', hint: 'A las facturas visibles', icon: <XCircle size={16} />, onClick: () => marcarVisiblesRevisadas(false) },
+                { label: 'Cambiar tipo de gasto…', hint: 'A las facturas visibles', icon: <Target size={16} />, onClick: () => setBulkTipo({ tipo: '' }) },
+              ]}
+            />
+            <ToolbarMenu
+              title={`Columnas: ${presetActivo ? COLUMN_PRESETS[presetActivo].label : 'Personalizadas'}`}
+              variant="ghost"
+              align="right"
+              menuClassName="col-menu"
+              renderContent={() => (
+                <>
+                  <div className="col-presets">
+                    {Object.entries(COLUMN_PRESETS).map(([k, p]) => (
+                      <button
+                        key={k}
+                        className={`col-preset${presetActivo === k ? ' active' : ''}`}
+                        onClick={() => setHiddenCols(hiddenForPreset(k))}
+                      >{p.label}</button>
+                    ))}
+                  </div>
+                  <div className="col-list">
+                    {columnasRender.filter(c => !COLUMNAS_FIJAS.includes(c.key)).map(c => (
+                      <label key={c.key} className="col-item">
+                        <input type="checkbox" checked={!hiddenCols.includes(c.key)} onChange={() => toggleColumna(c.key)} />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="col-foot">Ocultar una columna no borra datos: el Excel y el ZIP siempre llevan todo.</div>
+                </>
+              )}
+            />
+          </div>
         </div>
       )}
 
@@ -6542,7 +7535,7 @@ export default function App() {
 
       {/* ─── TABLA ─── */}
       <div
-        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}`}
+        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}${vista === 'resumen' && lista.length > 0 ? ' is-resumen' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -6590,8 +7583,13 @@ export default function App() {
               <div className="onboarding-hint">Compatible con CFDI 3.3 y 4.0 · XML + PDF</div>
             </div>
           </div>
+        ) : vista === 'resumen' ? (
+          <ResumenPanel lista={lista} avisos={avisos} onIrAFiltro={irAFiltro} />
         ) : (
-          <table style={{
+          <>
+          {cssColumnasOcultas && <style>{cssColumnasOcultas}</style>}
+          <table className={`tabla-gastos${densidad === 'compacta' ? ' density-compact' : ''}`} style={{
+            ...(hiddenCols.length ? { minWidth: 0 } : null),
             // Sticky-column left offsets — Proveedor pins right after the
             // Estado column. Resizing Estado shifts the pinned Proveedor cell
             // correctly because we read its width from colWidths.
@@ -6622,7 +7620,7 @@ export default function App() {
                   )
                 })}
                 {/* Eliminar — sticky-right action column, no label, fixed 40px width */}
-                <th className="th-delete" style={{ width: 40 }} />
+                <th className="th-delete" style={{ width: 64 }} />
               </tr>
             </thead>
             <tbody>
@@ -6635,12 +7633,67 @@ export default function App() {
                   openPDF={openPDF}
                   tiposList={tiposList}
                   isSpecial={esColaboradorEspecial}
+                  openDetail={setDrawerId}
+                  isActive={g.id === drawerId}
                 />
               ))}
             </tbody>
           </table>
+          {sortedLista.length === 0 && (
+            <div className="empty-filter">
+              Ninguna factura coincide con los filtros.
+              <button className="chip-clear" onClick={() => { setFiltroRapido('todos'); setBusqueda('') }}>Limpiar filtros</button>
+            </div>
+          )}
+          </>
         )}
       </div>
+
+      {/* ─── PANEL LATERAL DE DETALLE ─── */}
+      <AnimatePresence>
+        {drawerGasto && (
+          <ExpenseDrawer
+            key="drawer"
+            g={drawerGasto}
+            update={update}
+            openPDF={openPDF}
+            tiposList={tiposList}
+            isSpecial={esColaboradorEspecial}
+            onClose={closeDrawer}
+            onPrev={drawerIdx > 0 ? () => setDrawerId(sortedLista[drawerIdx - 1].id) : null}
+            onNext={drawerIdx >= 0 && drawerIdx < sortedLista.length - 1 ? () => setDrawerId(sortedLista[drawerIdx + 1].id) : null}
+            posicion={drawerIdx >= 0 ? `${drawerIdx + 1} de ${sortedLista.length}` : 'Fuera del filtro'}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL: CAMBIAR TIPO A LAS FACTURAS VISIBLES ─── */}
+      {bulkTipo && (
+        <div className="premium-overlay" onClick={() => setBulkTipo(null)}>
+          <div className="premium-modal" style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
+            <h2 className="premium-title">Cambiar tipo de gasto</h2>
+            <p className="premium-subtitle">
+              Se aplicará a {sortedLista.length === 1 ? 'la factura que ves' : `las ${sortedLista.length} facturas que ves`} ahora en la tabla. Revisa el filtro antes de aplicar.
+            </p>
+            <select
+              className="dw-in"
+              style={{ marginTop: 16 }}
+              autoFocus
+              value={bulkTipo.tipo}
+              onChange={e => setBulkTipo({ tipo: e.target.value })}
+            >
+              <option value="">— Elige un tipo —</option>
+              {tiposList.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <div className="premium-actions" style={{ marginTop: 20 }}>
+              <button className="premium-btn-secondary" onClick={() => setBulkTipo(null)}>Cancelar</button>
+              <button className="premium-btn-primary" disabled={!bulkTipo.tipo} onClick={aplicarTipoMasivo}>
+                Aplicar a {sortedLista.length}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── PREMIUM MODAL (info / warning / error / confirm) ─── */}
       {modal && (
