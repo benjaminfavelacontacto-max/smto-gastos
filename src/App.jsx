@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
 import { guardarBorrador, leerBorrador, borrarBorrador, CADUCIDAD_DIAS } from './borrador'
+import { isEligibleForTip } from './propinas'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -437,7 +438,7 @@ const COLUMNS = [
    `status` y `proveedor` siempre se ven. */
 const COLUMNAS_FIJAS = ['check', 'status', 'proveedor']
 const COLUMN_PRESETS = {
-  esencial:     { label: 'Esencial',     cols: ['fechaFac', 'fechaCobro', 'noFactura', 'tipo', 'totalCFDI', 'totalFinal'] },
+  esencial:     { label: 'Esencial',     cols: ['fechaFac', 'fechaCobro', 'noFactura', 'tipo', 'totalCFDI', 'montoPropina', 'totalFinal'] },
   contable:     { label: 'Contable',     cols: ['fechaFac', 'noFactura', 'concepto', 'tipo', 'importe', 'iva', 'isrTrasladado', 'retencionISR', 'retencionIVA', 'retenciones', 'totalCFDI', 'formaPago'] },
   conciliacion: { label: 'Conciliación', cols: ['fechaFac', 'fechaCobro', 'noFactura', 'totalCFDI', 'formaPago', 'banco', 'propinaPorcentaje', 'montoPropina', 'totalFinal', 'montoUSD', 'tipoCambio'] },
   todas:        { label: 'Todas',        cols: COLUMNS.map(c => c.key) },
@@ -447,14 +448,42 @@ const hiddenForPreset = key => {
   return COLUMNS.map(c => c.key).filter(k => !ver.has(k))
 }
 
+/* Medio de pago DECLARADO por el colaborador para facturas sin cargo en
+   Clara (efectivo propio, tarjeta personal…). Es una anotación informativa:
+   no toca hizoMatch, validado, montoCobrado, formaPago, banco ni importes, y
+   no viaja al Excel (export manda campos explícitos). */
+const ORIGENES_PAGO = [
+  { key: 'efectivo_propio',     label: 'Efectivo propio',           corto: 'Efectivo propio',  icon: '💵', desc: 'Lo pagué con mi dinero en efectivo.',          declarado: 'Efectivo propio · declarado' },
+  { key: 'tarjeta_personal',    label: 'Tarjeta personal',          corto: 'Tarjeta personal', icon: '💳', desc: 'Lo pagué con mi propia tarjeta.',              declarado: 'Tarjeta personal · declarado' },
+  { key: 'otra_cuenta_empresa', label: 'Otra cuenta de la empresa', corto: 'Otra cuenta',      icon: '🏦', desc: 'Se pagó por otro banco o cuenta empresarial.', declarado: 'Otra cuenta empresarial · declarado' },
+  { key: 'otro_periodo_clara',  label: 'Otro periodo de Clara',     corto: 'Otro periodo',     icon: '📅', desc: 'El movimiento podría estar en otro estado de cuenta.', declarado: 'Posible cargo en otro periodo · declarado' },
+  { key: 'sin_identificar',     label: 'No estoy seguro',           corto: 'Por identificar',  icon: '❔', desc: 'Lo dejaré por identificar sin marcarlo como error.', declarado: 'Por identificar' },
+  { key: 'efectivo_empresa',    label: 'Caja chica de la empresa',  corto: 'Caja chica',       icon: '🧾', desc: 'Efectivo de la empresa, no dinero personal.',  declarado: 'Caja chica · declarado', secundaria: true },
+]
+const ORIGEN_POR_KEY = Object.fromEntries(ORIGENES_PAGO.map(o => [o.key, o]))
+// Orígenes que contradicen un cargo de Clara: si la conciliación encuentra
+// cargo para una factura así declarada, se pide revisar (no se borra nada).
+const ORIGENES_FUERA_CLARA = new Set(['efectivo_propio', 'tarjeta_personal', 'otra_cuenta_empresa', 'efectivo_empresa'])
+const etiquetaOrigen = o => ORIGEN_POR_KEY[o]?.declarado || ''
+const conflictoOrigen = g => !!g.hizoMatch && ORIGENES_FUERA_CLARA.has(g.origenPagoDeclarado)
+// Declarada como pagada fuera de Clara, sin cargo, pero BANCO conserva Clara
+// (suele ser el valor por defecto del colaborador). Solo se AVISA al exportar:
+// el valor correcto lo decide contabilidad, aquí no se inventa ningún banco.
+const bancoContradiceOrigen = g => !g.hizoMatch && ORIGENES_FUERA_CLARA.has(g.origenPagoDeclarado) && /clara/i.test(g.banco || '')
+
 /* Filtros rápidos (chips) — solo filtran la VISTA; el export usa `lista`. */
 const tieneXML = g => !!(g.xmlContent || g.xmlFile)
-const necesitaRevisarMatch = g => !!g.hizoMatch && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80
+const necesitaRevisarMatch = g => conflictoOrigen(g) || (!!g.hizoMatch && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80)
 
 /* Etiqueta legible del estado bancario de un gasto (texto, no solo color).
    Sin método guardado (p. ej. cotejo con Saldos o datos viejos) → genérico. */
 const estadoBanco = g => {
-  if (!g.hizoMatch) return { label: 'Sin conciliar', cls: 'muted', title: 'Aún no se liga a un cargo del estado de cuenta. No es un adeudo.' }
+  if (!g.hizoMatch) {
+    const o = ORIGEN_POR_KEY[g.origenPagoDeclarado]
+    if (o && o.key !== 'sin_identificar') return { label: o.corto, cls: 'info', title: `${o.declarado}. Anotación del colaborador: no es una conciliación con Clara.` }
+    return { label: 'Sin conciliar', cls: 'muted', title: 'Aún no se liga a un cargo del estado de cuenta. No es un adeudo.' }
+  }
+  if (conflictoOrigen(g)) return { label: 'Revisar', cls: 'warn', title: `Declarada como «${ORIGEN_POR_KEY[g.origenPagoDeclarado].label}», pero la conciliación encontró un cargo en Clara que podría corresponder.` }
   if (necesitaRevisarMatch(g)) return { label: 'Revisar', cls: 'warn', title: `Coincidencia por revisar: ${g.matchMetodo} (${g.matchConfianza}%)` }
   const m = g.matchMetodo || ''
   const label = /propina/i.test(m) ? 'Propina ✓' : /auth|autoriz/i.test(m) ? 'Código ✓' : 'Conciliado'
@@ -475,6 +504,8 @@ const FILTROS_RAPIDOS = [
   { key: 'xmlFaltante',    label: 'Recuperadas sin XML',    test: g => !!g.xmlFaltante, oculto: true },
   { key: 'sinImporte',     label: 'Sin importe',            test: g => !(Number(g.totalCFDI) || 0) && !(Number(g.montoExtranjero) || Number(g.montoUSD) || 0), oculto: true },
   { key: 'meSinConciliar', label: 'M.E. sin conciliar',     test: g => normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !g.hizoMatch, oculto: true },
+  { key: 'bancoClaraDeclarada', label: 'BANCO dice Clara · pagada fuera', test: g => bancoContradiceOrigen(g), oculto: true },
+  { key: 'sinClasificarPago', label: 'Sin cargo · medio sin indicar', test: g => !g.hizoMatch && (!g.origenPagoDeclarado || g.origenPagoDeclarado === 'sin_identificar'), oculto: true },
   { key: 'cobroAntes',     label: 'Cobro antes de factura', test: g => !!g.hizoMatch && !!g.fechaFac && !!cobroToIso(g.fechaCobro) && cobroToIso(g.fechaCobro) < g.fechaFac, oculto: true },
 ]
 
@@ -2254,7 +2285,7 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             const eb = estadoBanco(g)
             return (
               <span className={`pill pill-banco ${eb.cls}`} title={eb.title}>
-                {g.hizoMatch ? eb.label : '·'}
+                {g.hizoMatch || eb.cls === 'info' ? eb.label : '·'}
               </span>
             )
           })()}
@@ -2410,6 +2441,13 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             ? `${simboloMoneda(monedaRow) || ''}${totalNativo.toFixed(2)} ${monedaRow}`
             : `$${totalFinalMXN.toFixed(2)}`}
         </span>
+        {(Number(g.montoPropina) > 0 || (propinaNativa && Number(g.propinaExtranjero) > 0)) && (
+          <div className="total-tip-hint">
+            incl. propina {Number(g.montoPropina) > 0
+              ? `$${Number(g.montoPropina).toFixed(2)}`
+              : `${simboloMoneda(monedaRow) || ''}${Number(g.propinaExtranjero).toFixed(2)}`}
+          </div>
+        )}
       </td>
 
       {/* Monto USD — editing it auto-derives Tipo de Cambio from totalCFDI.
@@ -2509,7 +2547,7 @@ function DrawerReadOnly({ label, value, mono, hint }) {
   )
 }
 
-function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPrev, onNext, posicion }) {
+function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPrev, onNext, posicion, onSetOrigen }) {
   const upd = useCallback((field, val) => update(g.id, field, val), [update, g.id])
 
   // Esc cierra; Alt+↑/↓ navega (Alt para no robar las flechas de los inputs).
@@ -2529,6 +2567,7 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
   const fmt = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const fmtNat = n => `${simboloMoneda(monedaRow) || ''}${(Number(n) || 0).toFixed(2)} ${monedaRow}`
   // Ticket extranjero sin conciliar: total nativo en vez de un "$0.00" engañoso.
+  const propinaNativaDw = monedaRow !== 'MXN' && !(Number(g.montoPropina) > 0)
   const muestraTotal = () =>
     monedaRow !== 'MXN' && totalFinalMXN === 0 && totalNativo > 0 ? fmtNat(totalNativo) : fmt(totalFinalMXN)
 
@@ -2578,6 +2617,7 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
           <span>{formatDateDisplay(g.fechaFac) || 'Sin fecha'}</span>
           <span>·</span>
           <span className="dw-total">{muestraTotal()}</span>
+          {Number(g.montoPropina) > 0 && <span className="dw-tip-chip">incl. propina {fmt(g.montoPropina)}</span>}
         </div>
         <div className="dw-badges">
           <span className={`st-badge ${docEstado.c}`}>{docEstado.t}</span>
@@ -2585,6 +2625,9 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
             {necesitaRevisarMatch(g) ? 'Revisar coincidencia' : g.hizoMatch ? 'Conciliado con banco' : 'Sin conciliar'}
           </span>
           <span className={`st-badge ${g.validado ? 'ok' : 'warn'}`}>{g.validado ? 'Revisado' : 'Por revisar'}</span>
+          {!g.hizoMatch && ORIGEN_POR_KEY[g.origenPagoDeclarado] && g.origenPagoDeclarado !== 'sin_identificar' && (
+            <span className="st-badge info">{etiquetaOrigen(g.origenPagoDeclarado)}</span>
+          )}
         </div>
       </header>
 
@@ -2646,6 +2689,27 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
           </div>
         </section>
 
+        {/* Propina — mismo update() que la tabla: editar % recalcula $ y
+            viceversa. Ticket extranjero sin conciliar: la propina vive en su
+            divisa (lógica propia de la tabla), aquí solo lectura. */}
+        <section className="dw-sec dw-sec-tip">
+          <h3 className="dw-sec-title">Propina</h3>
+          <div className="dw-grid dw-grid-num">
+            {propinaNativaDw ? (
+              <DrawerReadOnly label={`Propina (${monedaRow})`} value={Number(g.propinaExtranjero) > 0 ? fmtNat(g.propinaExtranjero) : null} hint="En ticket extranjero se edita en la tabla" />
+            ) : (
+              <>
+                <DrawerField label="Propina %"><NumCell g={g} upd={upd} field="propinaPorcentaje" suffix="%" compact /></DrawerField>
+                <DrawerField label="Propina $"><NumCell g={g} upd={upd} field="montoPropina" prefix="$" compact /></DrawerField>
+              </>
+            )}
+            <DrawerReadOnly label="Total final" value={muestraTotal()} hint="Factura + propina" />
+          </div>
+          {g.hizoMatch && /propina/i.test(g.matchMetodo || '') && (
+            <p className="dw-tip-note">La conciliación detectó esta propina: {g.matchMetodo}.</p>
+          )}
+        </section>
+
         <section className="dw-sec">
           <h3 className="dw-sec-title">Pago y conciliación</h3>
           <div className="dw-grid">
@@ -2669,6 +2733,22 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
                 </select>
               </DrawerField>
             )}
+            {!isSpecial && (
+              <DrawerReadOnly label="Banco asignado en el reporte" value={g.banco} hint="Columna BANCO del Excel. Un valor por defecto no prueba quién pagó." />
+            )}
+            {(!g.hizoMatch || conflictoOrigen(g)) && (
+              <DrawerField
+                label="Medio de pago declarado"
+                hint={conflictoOrigen(g)
+                  ? 'Hay un cargo de Clara ligado a esta factura: revisa si la declaración es correcta.'
+                  : 'Informativo: no concilia, no cambia importes y no va al Excel.'}
+              >
+                <select className="dw-in" value={g.origenPagoDeclarado || ''} onChange={e => onSetOrigen([g.id], e.target.value || null, g.origenPagoNota)}>
+                  <option value="">Sin indicar</option>
+                  {ORIGENES_PAGO.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>
+              </DrawerField>
+            )}
             {g.hizoMatch && g.matchMetodo && (
               <DrawerReadOnly
                 label="Cómo se concilió"
@@ -2677,8 +2757,6 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
               />
             )}
             <DrawerReadOnly label="Cobrado en banco" value={g.hizoMatch && Number(g.montoCobrado) > 0 ? fmt(g.montoCobrado) : null} hint={g.hizoMatch ? undefined : 'Se llena al conciliar'} />
-            <DrawerReadOnly label="Propina" value={Number(g.montoPropina) > 0 ? `${fmt(g.montoPropina)} (${+Number(g.propinaPorcentaje || 0).toFixed(2)}%)` : Number(g.propinaExtranjero) > 0 ? fmtNat(g.propinaExtranjero) : null} hint="Se edita en la tabla" />
-            <DrawerReadOnly label="Total final" value={muestraTotal()} />
             {(Number(g.montoUSD) > 0 || monedaRow !== 'MXN') && (
               <>
                 <DrawerReadOnly label={`Monto M.E. (${monedaRow === 'MXN' ? 'USD' : monedaRow})`} value={Number(g.montoUSD) > 0 ? String(g.montoUSD) : null} hint="Se edita en la tabla" />
@@ -2862,6 +2940,37 @@ function ResumenPanel({ lista, avisos, onIrAFiltro }) {
         </div>
       </section>
 
+      {/* Sin cargo en Clara, por medio de pago DECLARADO. Solo tiene sentido
+          después de conciliar; es avance de captura, no de conciliación. */}
+      {lista.some(g => g.hizoMatch) && (() => {
+        const sinCargo = lista.filter(g => !g.hizoMatch)
+        if (!sinCargo.length) return null
+        const cuenta = k => sinCargo.filter(g => (g.origenPagoDeclarado || 'sin_identificar') === k).length
+        const porIdentificar = cuenta('sin_identificar')
+        return (
+          <section className="rs-card">
+            <div className="rs-card-head">
+              <h3>Facturas sin cargo en Clara: {sinCargo.length}</h3>
+              <span className="rs-card-sub">{sinCargo.length - porIdentificar} de {sinCargo.length} con medio de pago indicado · declarado por el colaborador</span>
+            </div>
+            <div className="rs-origenes">
+              {ORIGENES_PAGO.filter(o => !o.secundaria || cuenta(o.key)).map(o => (
+                <div key={o.key} className="rs-origen">
+                  <span aria-hidden="true">{o.icon}</span>
+                  <strong>{cuenta(o.key)}</strong>
+                  <span>{o.key === 'sin_identificar' ? 'Por identificar' : o.label}</span>
+                </div>
+              ))}
+            </div>
+            {porIdentificar > 0 && (
+              <button className="chip-clear" style={{ marginTop: 10 }} onClick={() => onIrAFiltro('sinClasificarPago')}>
+                Ver las {porIdentificar} por identificar →
+              </button>
+            )}
+          </section>
+        )
+      })()}
+
       <div className="rs-grid-2">
         <section className="rs-card">
           <div className="rs-card-head">
@@ -2973,578 +3082,467 @@ function KpiCard({ variants, accent, Icon, value }) {
   )
 }
 
-function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual }) {
-  const total = Math.max(1, data.bancoRows || 0)
-  const pct = Math.min(100, Math.round((data.matches / total) * 100))
-  const sinCargoRows = data.facturasSinCargo || []
-  const docsSubidos = data.docsSubidos || 0
-  const cBanco    = useCountUp(data.bancoRows)
-  const cMatches  = useCountUp(data.matches)
-  const cSin      = useCountUp(data.sinFactura.length)
-  const cSinCargo = useCountUp(sinCargoRows.length)
-  const cPropinas = useCountUp(data.propinas)
-  const cPct      = useCountUp(pct)
-
+function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual, onSetOrigen, onVerFactura, esEspecial }) {
   const matchedRows = data.matchedRows || []
-  const revisionRows = matchedRows.filter(m => m.confidence < 80)
-  const matchCount = data.matches || 0
+  const sinFactura  = data.sinFactura || []
+  const sinCargo    = data.facturasSinCargo || []
+  const totalCargos = matchedRows.length + sinFactura.length
+  const totalDocs   = matchedRows.length + sinCargo.length
 
-  // Normalize close/cancel: an explicit Cancel is the same as closing the
-  // modal without confirming — matches don't get applied either way.
+  // El gasto VIVO (pendingLista) por id: la clasificación de origen de pago
+  // se actualiza mientras el modal está abierto.
+  const gastosPorId = useMemo(() => new Map((data.pendingLista || []).map(g => [g.id, g])), [data.pendingLista])
+  const origenDe = id => gastosPorId.get(id)?.origenPagoDeclarado || null
+  const tieneDoc = id => { const g = gastosPorId.get(id); return !!(g && (g.tienePDF || g.imageDataURL)) }
+  const conflicto = m => ORIGENES_FUERA_CLARA.has(origenDe(m.invoiceId))
+  // Clases EXCLUYENTES del universo banco: revisar ∪ sinObs = vinculados.
+  const requiereRevision = m => m.confidence < 80 || conflicto(m)
+  const revisar = matchedRows.filter(requiereRevision)
+  const sinObs  = matchedRows.filter(m => !requiereRevision(m))
+
   const handleCancel = onCancel || onClose
-
-  const [tab, setTab] = useState('matches')
+  const [tab, setTab] = useState(revisar.length ? 'revisar' : sinFactura.length ? 'sinFactura' : 'coincidencias')
   const [query, setQuery] = useState('')
-  const [filterKey, setFilterKey] = useState('all')
   const [expandedId, setExpandedId] = useState(null)
-  const [loading, setLoading] = useState(true)
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(t)
-  }, [])
+  const [ayuda, setAyuda] = useState(false)
+  const [filtroOrigen, setFiltroOrigen] = useState('todas')
+  const [editando, setEditando] = useState(null)      // { id, origen, nota }
+  const [masivo, setMasivo] = useState(null)          // { origen } panel de clasificación masiva
+  const [deshacer, setDeshacer] = useState(null)      // { previos: [{id, origen, nota}], texto }
 
-  // Esc → cancel, Enter → confirm. Skip Enter when the user is typing in a
-  // form control (the search input is right there).
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        handleCancel && handleCancel()
+        if (editando) setEditando(null)
+        else if (masivo) setMasivo(null)
+        else handleCancel && handleCancel()
       } else if (e.key === 'Enter') {
         const tag = e.target && e.target.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return
         e.preventDefault()
         onConfirm && onConfirm()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleCancel, onConfirm])
+  }, [handleCancel, onConfirm, editando, masivo])
 
   const fmtMoney = (n, currency = 'MXN') => {
     const num = Number(n) || 0
     const code = (currency || 'MXN').toUpperCase()
-    // US$ para dólares (no confundirlo con pesos) y el símbolo nativo para el
-    // resto: antes CUALQUIER divisa que no fuera USD se pintaba con "$", así
-    // que un cargo en yuanes salía como "$244.11 CNY".
     const pre = code === 'USD' ? 'US$' : code === 'MXN' ? '$' : (simboloMoneda(code) || '')
     return `${pre}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
+  // Clara llena "Monto original" también en cargos en pesos: solo es divisa
+  // si la fila lo dice.
+  const tieneDivisa = m => (m.csvMoneda || 'MXN') !== 'MXN' && m.csvAmountUSD > 0
+  // Si el banco no trae descripción, fallback honesto: nunca el proveedor del
+  // match como si viniera del banco.
+  const descCargo = (desc, fecha, monto, moneda) =>
+    desc || `Cargo del ${formatDateDisplay(fecha)} por ${fmtMoney(monto, moneda)}`
 
-  const matchesPassesFilter = (m) => {
-    if (filterKey === 'usd') return m.csvMoneda === 'USD' || m.invoiceMoneda === 'USD'
-    if (filterKey === 'mxn') return (m.csvMoneda || 'MXN') === 'MXN' && (m.invoiceMoneda || 'MXN') === 'MXN'
-    if (filterKey === 'tickets') return m.isTicket
-    if (filterKey === 'facturas') return !m.isTicket
-    return true
-  }
-  const sinFactPassesFilter = (s) => {
-    if (filterKey === 'usd') return (s.moneda || 'MXN') === 'USD'
-    if (filterKey === 'mxn') return (s.moneda || 'MXN') === 'MXN'
-    return true   // tickets/facturas filter is only meaningful for matched rows
-  }
-  const sinCargoPassesFilter = (f) => {
-    if (filterKey === 'usd') return (f.moneda || 'MXN') === 'USD'
-    if (filterKey === 'mxn') return (f.moneda || 'MXN') === 'MXN'
-    if (filterKey === 'tickets') return f.isTicket
-    if (filterKey === 'facturas') return !f.isTicket
-    return true
-  }
-  // Clara llena "Monto original" incluso en cargos en pesos, así que un match
-  // MXN traía csvAmountUSD == csvAmountMXN y la tarjeta mostraba el mismo
-  // dinero dos veces (en pesos y en "USD"). Solo es divisa si la fila lo dice.
-  const tieneDivisa = (m) => (m.csvMoneda || 'MXN') !== 'MXN' && m.csvAmountUSD > 0
+  const q = query.trim().toLowerCase()
+  const coincide = (...campos) => !q || campos.some(c => String(c ?? '').toLowerCase().includes(q))
+  const matchVisible = m => coincide(m.invoiceName, m.invoiceNumber, m.csvDescripcion, m.csvAuth, m.csvAmountMXN, m.invoiceTotal, formatDateDisplay(m.csvDate))
 
-  const matchesQuery = (txt) => {
-    if (!query.trim()) return true
-    const q = query.trim().toLowerCase()
-    return (txt || '').toLowerCase().includes(q)
+  // Motivo legible de cada vínculo (los códigos 99/95/85/80/70/40 quedan
+  // como diagnóstico, no como mensaje).
+  const motivo = m => {
+    const o = origenDe(m.invoiceId)
+    if (conflicto(m)) return `La marcaste como «${ORIGEN_POR_KEY[o]?.label}», pero encontramos un cargo en Clara que podría corresponder. Revisa cuál es correcto.`
+    if (m.descuadre) return 'La factura más la propina no suman exactamente lo que cobró Clara. Revisa el monto.'
+    if (m.pass === 3) return `${m.method}: el cargo y la factura casi coinciden. Verifica que sea la misma compra.`
+    if (m.pass === 0) return 'Mismo código de autorización que el ticket.'
+    if (/^Propina sugerida/.test(m.method)) return 'La propina viene impresa en el ticket.'
+    if (m.propina > 0) return `Posible propina de ${fmtMoney(m.propina, m.invoiceMoneda)}${m.propinaPct > 0 ? ` (${m.propinaPct.toFixed(1)}%)` : ''}: el cargo es mayor que la factura.`
+    return 'El monto del cargo y el de la factura coinciden al centavo.'
+  }
+  const diferencia = m => {
+    if ((m.invoiceMoneda || 'MXN') !== 'MXN' || tieneDivisa(m)) return null
+    return +((m.csvAmountMXN || 0) - (m.invoiceTotal || 0) - (m.propina || 0)).toFixed(2)
   }
 
-  const visibleMatches = matchedRows
-    .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
-    .sort((a, b) => b.confidence - a.confidence)
-  const visibleSin      = data.sinFactura.filter(s => sinFactPassesFilter(s) && matchesQuery(s.descripcion))
-  const visibleSinCargo = sinCargoRows
-    .filter(f => sinCargoPassesFilter(f) && (matchesQuery(f.proveedor) || matchesQuery(f.noFactura)))
-  const visibleRevision = revisionRows
-    .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
-    .sort((a, b) => b.confidence - a.confidence)
-
-  // Confidence tier → chip class + human label. Anything < 50 shouldn't
-  // surface here (Pass 2 rejects below 50, Pass 3 floors at 60), but we
-  // still bucket it as 'Revisar' defensively.
-  const confidenceTier = c => {
-    if (c >= 95) return { cls: 'cm-conf-green',  label: 'Alta confianza' }
-    if (c >= 75) return { cls: 'cm-conf-blue',   label: 'Confianza media' }
-    return            { cls: 'cm-conf-yellow', label: 'Revisar' }
+  const guardarOrigen = (ids, origen, nota) => {
+    const previos = ids.map(id => ({ id, origen: origenDe(id), nota: gastosPorId.get(id)?.origenPagoNota || '' }))
+    onSetOrigen(ids, origen, nota)
+    return previos
   }
+
+  // ── Tarjeta banco ↔ comprobante ──
+  const renderMatch = (m, i) => {
+    const id = `${m.invoiceId}-${i}`
+    const open = expandedId === id
+    const rev = requiereRevision(m)
+    const dif = diferencia(m)
+    const cobradoInv = tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN
+    return (
+      <div key={id} className={`cz-card${rev ? ' is-rev' : ''}${open ? ' is-open' : ''}`}>
+        <button className="cz-card-head" aria-expanded={open} onClick={() => setExpandedId(open ? null : id)}>
+          <div className="cz-side">
+            <span className="cz-side-label">Clara cobró</span>
+            <strong className="cz-amount">{fmtMoney(m.csvAmountMXN)} MXN</strong>
+            {tieneDivisa(m) && <span className="cz-amount-alt">{fmtMoney(m.csvAmountUSD, m.csvMoneda)} {m.csvMoneda}</span>}
+            <span className="cz-meta">{formatDateDisplay(m.csvDate)} · {descCargo(m.csvDescripcion, m.csvDate, m.csvAmountMXN)}</span>
+          </div>
+          <ArrowRight size={16} className="cz-arrow" aria-hidden="true" />
+          <div className="cz-side">
+            <span className="cz-side-label">{m.isTicket ? 'Ticket' : 'Factura'}</span>
+            <strong className="cz-amount">{fmtMoney(m.invoiceTotal, m.invoiceMoneda)}{m.invoiceMoneda && m.invoiceMoneda !== 'MXN' ? ` ${m.invoiceMoneda}` : ''}</strong>
+            <span className="cz-meta">{m.invoiceName}{m.invoiceNumber ? ` · ${m.invoiceNumber}` : ''}</span>
+          </div>
+          <div className="cz-status">
+            <span className={`st-badge ${rev ? 'warn' : 'ok'}`}>{rev ? 'Requiere revisión' : 'Sin observaciones'}</span>
+            {dif !== null && dif !== 0 && <span className="cz-dif">Diferencia {fmtMoney(dif)}</span>}
+            {m.propina > 0 && <span className="cz-tip">+ propina {fmtMoney(m.propina, m.invoiceMoneda)}</span>}
+          </div>
+          <ChevronDown size={15} className={`cz-chev${open ? ' is-open' : ''}`} aria-hidden="true" />
+        </button>
+        <p className="cz-reason">{motivo(m)}</p>
+        {open && (
+          <div className="cz-detail">
+            <div className="cz-math">
+              Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)}
+              {m.propina > 0 && <> + {/^Propina sugerida/.test(m.method) ? 'propina del ticket' : 'posible propina'} {fmtMoney(m.propina, m.invoiceMoneda)}</>}
+              {' '}{dif === null || dif === 0 ? '=' : '≠'} <b>{fmtMoney(cobradoInv, m.invoiceMoneda)} cobrados por Clara</b>
+              {dif !== null && dif !== 0 && <> · diferencia de <b>{fmtMoney(dif)}</b></>}
+            </div>
+            <div className="cz-grid">
+              <div><span>Fecha del cargo</span><strong>{formatDateDisplay(m.csvDate)}</strong></div>
+              <div><span>Descripción en Clara</span><strong>{m.csvDescripcion || 'Clara no trae descripción'}</strong></div>
+              {m.csvAuth && <div><span>Código de autorización</span><strong>{m.csvAuth}</strong></div>}
+              <div><span>Folio</span><strong className="is-mono">{m.invoiceNumber || '—'}</strong></div>
+              <div><span>Fecha factura</span><strong>{formatDateDisplay(m.invoiceFecha) || '—'}</strong></div>
+              <div><span>Tipo</span><strong>{m.invoiceTipo || '—'}</strong></div>
+            </div>
+            <div className="cz-actions">
+              <button className="cz-btn" disabled={!tieneDoc(m.invoiceId)} onClick={() => onVerFactura(m.invoiceId)}>
+                <FileText size={14} /> {tieneDoc(m.invoiceId) ? 'Ver factura' : 'Sin PDF'}
+              </button>
+              {conflicto(m) && (
+                <button className="cz-btn" onClick={() => guardarOrigen([m.invoiceId], null, '')}>
+                  Quitar «{ORIGEN_POR_KEY[origenDe(m.invoiceId)]?.label}» y dejar el cargo
+                </button>
+              )}
+              <span className="cz-diag">Diagnóstico: pase {m.pass} · {m.method} · {m.confidence}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Datos de cada pestaña ──
+  const verRevisar = revisar.filter(matchVisible)
+  const verCoinc   = sinObs.filter(matchVisible)
+  const verSinFact = sinFactura.filter(s => coincide(s.descripcion, s.monto, formatDateDisplay(s.fecha)))
+  const esPorIdentificar = o => !o || o === 'sin_identificar'
+  const conteoOrigen = sinCargo.reduce((acc, f) => {
+    const o = origenDe(f.id) || 'sin_identificar'
+    acc[o] = (acc[o] || 0) + 1
+    return acc
+  }, {})
+  const indicados = sinCargo.filter(f => !esPorIdentificar(origenDe(f.id))).length
+  const verSinCargo = sinCargo
+    .filter(f => filtroOrigen === 'todas' || (filtroOrigen === 'sin_identificar' ? esPorIdentificar(origenDe(f.id)) : origenDe(f.id) === filtroOrigen))
+    .filter(f => coincide(f.proveedor, f.noFactura, f.total, formatDateDisplay(f.fecha)))
+  const faltanIds = sinCargo.filter(f => esPorIdentificar(origenDe(f.id))).map(f => f.id)
+
+  const TABS = [
+    { key: 'revisar',       grupo: 'banco', label: 'Necesitan revisión',             n: revisar.length,    cls: 'warn' },
+    { key: 'sinFactura',    grupo: 'banco', label: 'Cargos sin factura o ticket',    n: sinFactura.length, cls: 'muted' },
+    { key: 'coincidencias', grupo: 'banco', label: 'Coincidencias sin observaciones', n: sinObs.length,    cls: 'ok' },
+    { key: 'sinCargo',      grupo: 'docs',  label: 'Facturas sin cargo en Clara',    n: sinCargo.length,   cls: 'info' },
+  ]
+  const visibles = { revisar: verRevisar.length, sinFactura: verSinFact.length, coincidencias: verCoinc.length, sinCargo: verSinCargo.length }[tab]
+  const totalesTab = { revisar: revisar.length, sinFactura: sinFactura.length, coincidencias: sinObs.length, sinCargo: sinCargo.length }[tab]
+
+  const cta = revisar.length
+    ? { label: `Revisar ${revisar.length} ${revisar.length === 1 ? 'coincidencia' : 'coincidencias'}`, tab: 'revisar' }
+    : sinFactura.length
+    ? { label: `Ver ${sinFactura.length} ${sinFactura.length === 1 ? 'cargo' : 'cargos'} sin comprobante`, tab: 'sinFactura' }
+    : { label: 'Ver todas las coincidencias', tab: 'coincidencias' }
+
+  const pct = totalCargos ? Math.round((matchedRows.length / totalCargos) * 100) : 0
 
   return (
-    <motion.div
-      className="cm-fs-overlay"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      onClick={onClose}
-    >
+    <motion.div className="cm-fs-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
       <motion.div
-        className="cm-fs-shell"
+        className="cm-fs-shell cz-shell"
+        role="dialog"
+        aria-labelledby="cz-title"
         initial={{ opacity: 0, y: 24, scale: 0.985 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 12, scale: 0.99 }}
         transition={{ type: 'spring', stiffness: 240, damping: 26 }}
-        onClick={e => e.stopPropagation()}
       >
-        <button className="cm-fs-close" onClick={onClose} aria-label="Cerrar">
+        <button className="cm-fs-close" onClick={handleCancel} aria-label="Cerrar sin aplicar" title="Cerrar sin aplicar">
           <X size={18} />
         </button>
 
-        {/* ───── TOP SUMMARY BAR ───── */}
-        <header className="cm-fs-summary">
-          <div className="cm-fs-summary-top">
-            <div className="cm-fs-summary-titles">
-              <h2 className="cm-fs-title">Listo — así quedó tu conciliación</h2>
-              <p className="cm-fs-subtitle">
-                Comparamos los <b>{data.bancoRows}</b> {data.bancoRows === 1 ? 'cargo' : 'cargos'} de tu estado de
-                cuenta de Clara contra los <b>{docsSubidos}</b>{' '}
-                {docsSubidos === 1 ? 'comprobante que subiste' : 'comprobantes que subiste'}.
-              </p>
-            </div>
-            <div className="cm-fs-summary-toolbar">
-              <label className="cm-fs-search">
-                <Search size={14} strokeWidth={2.2} />
-                <input
-                  type="text"
-                  placeholder="Buscar por proveedor o descripción…"
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                />
-              </label>
-              <select
-                className="cm-fs-filter"
-                value={filterKey}
-                onChange={e => setFilterKey(e.target.value)}
-              >
-                <option value="all">Todos</option>
-                <option value="usd">USD</option>
-                <option value="mxn">MXN</option>
-                <option value="tickets">Tickets</option>
-                <option value="facturas">Facturas</option>
-              </select>
-              <button
-                className="cm-fs-export"
-                disabled
-                title="Próximamente"
-                onClick={e => e.preventDefault()}
-              >
-                <Download size={14} /> Exportar
-              </button>
-            </div>
-          </div>
+        <div className="cz-scroll">
+          {/* ── Encabezado ── */}
+          <header className="cz-head">
+            <h2 className="cz-title" id="cz-title">Revisa los resultados de tu conciliación</h2>
+            <p className="cz-sub">
+              Comparamos <b>{totalCargos}</b> {totalCargos === 1 ? 'cargo' : 'cargos'} de Clara con <b>{totalDocs}</b> {totalDocs === 1 ? 'factura o ticket' : 'facturas y tickets'}.
+            </p>
+            <p className="cz-msg">
+              <Info size={14} aria-hidden="true" /> Los cargos del estado ya se realizaron. Aquí verificamos cuáles tienen comprobante; esto no significa que debas dinero.
+            </p>
+          </header>
 
-          <div className="cm-fs-progress">
-            <motion.div
-              className="cm-fs-progress-fill"
-              initial={{ width: 0 }}
-              animate={{ width: `${pct}%` }}
-              transition={{ duration: 1.0, ease: 'easeOut', delay: 0.15 }}
-            />
-          </div>
-
-          <p className="cm-fs-progress-caption">
-            {Math.round(cPct)}% de los cargos ya tienen su comprobante
-          </p>
-
-          {/* Aviso anti-pánico: la gente leía "sin factura / pendiente" como
-              un adeudo. Este banner aclara, antes que cualquier número, que
-              esto es un checklist de documentos, no un estado de cuenta. */}
-          <div className="cm-fs-explainer">
-            <Info size={15} className="cm-fs-explainer-icon" />
-            <div>
-              <b>Esto no es un adeudo.</b> Estos cargos ya se pagaron con la tarjeta Clara. Aquí solo
-              ves <b>cuáles ya tienen su factura o ticket</b> y cuáles todavía no.
-            </div>
-          </div>
-
-          <div className="cm-fs-chips">
-            <div className="cm-fs-chip cm-chip-blue">
-              <CreditCard size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cBanco)}</div>
-                <div className="cm-fs-chip-label">Cargos en Clara</div>
-                <div className="cm-fs-chip-hint">líneas del estado de cuenta</div>
+          {/* ── Dos universos, cada uno con su denominador ── */}
+          <section className="cz-universos">
+            <div className="cz-uni">
+              <div className="cz-uni-head"><CreditCard size={15} aria-hidden="true" /> Movimientos en Clara <strong>{totalCargos} {totalCargos === 1 ? 'cargo' : 'cargos'}</strong></div>
+              <div className="cz-uni-chips">
+                <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{sinObs.length}</b> sin observaciones</button>
+                <button className="cz-chip warn" onClick={() => setTab('revisar')}><b>{revisar.length}</b> requieren revisión</button>
+                <button className="cz-chip muted" onClick={() => setTab('sinFactura')}><b>{sinFactura.length}</b> sin factura o ticket</button>
               </div>
+              <div className="cz-progress-label">Coincidencias propuestas: <b>{matchedRows.length} de {totalCargos}</b></div>
+              <div className="cz-progress" aria-label={`${pct}% de los cargos con coincidencia propuesta`}><span style={{ width: `${pct}%` }} /></div>
             </div>
-            <div className="cm-fs-chip cm-chip-green">
-              <Target size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cMatches)}</div>
-                <div className="cm-fs-chip-label">Ya tienen comprobante</div>
-                <div className="cm-fs-chip-hint">cargo vinculado a tu factura</div>
+            <div className="cz-uni">
+              <div className="cz-uni-head"><FileText size={15} aria-hidden="true" /> Comprobantes cargados <strong>{totalDocs} {totalDocs === 1 ? 'documento' : 'documentos'}</strong></div>
+              <div className="cz-uni-chips">
+                <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{matchedRows.length}</b> vinculados con Clara</button>
+                <button className="cz-chip info" onClick={() => setTab('sinCargo')}><b>{sinCargo.length}</b> sin cargo en este estado</button>
               </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-amber">
-              <FileWarning size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cSin)}</div>
-                <div className="cm-fs-chip-label">Les falta comprobante</div>
-                <div className="cm-fs-chip-hint">sube su factura o ticket</div>
-              </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-slate">
-              <FileText size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cSinCargo)}</div>
-                <div className="cm-fs-chip-label">No están en el estado</div>
-                <div className="cm-fs-chip-hint">comprobantes de otro periodo o pago</div>
-              </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-purple">
-              <Sparkles size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cPropinas)}</div>
-                <div className="cm-fs-chip-label">Propinas estimadas</div>
-                <div className="cm-fs-chip-hint">el banco cobró más que la factura</div>
-              </div>
-            </div>
-          </div>
-
-          {(data.totalsMatched || data.totalsPending) && (
-            <div className="cm-fs-totals">
-              <div className="cm-fs-totals-block">
-                <span className="cm-fs-totals-label">Cargos ya comprobados</span>
-                <span className="cm-fs-totals-value cm-fs-totals-green">
-                  {fmtMoney(data.totalsMatched?.mxn)} MXN
-                  {data.totalsMatched?.usd > 0 && <> · {fmtMoney(data.totalsMatched.usd, 'USD')} USD</>}
-                </span>
-              </div>
-              <div className="cm-fs-totals-block">
-                <span className="cm-fs-totals-label">Cargos por comprobar</span>
-                <span className="cm-fs-totals-value cm-fs-totals-amber">
-                  {fmtMoney(data.totalsPending?.mxn)} MXN
-                  {data.totalsPending?.usd > 0 && <> · {fmtMoney(data.totalsPending.usd, 'USD')} USD</>}
-                </span>
-                <span className="cm-fs-totals-note">no es dinero que debas, es papeleo que falta</span>
-              </div>
-            </div>
-          )}
-        </header>
-
-        {/* ───── TABS ───── */}
-        <div className="cm-fs-tabs" role="tablist">
-          {[
-            { key: 'matches',  label: 'Conciliados',            icon: <Check size={14} />,       count: visibleMatches.length,  badgeClass: 'cm-fs-badge-green' },
-            { key: 'sin',      label: 'Cargos sin comprobante', icon: <FileWarning size={14} />, count: visibleSin.length,      badgeClass: 'cm-fs-badge-amber' },
-            { key: 'sincargo', label: 'No están en el estado',  icon: <FileText size={14} />,    count: visibleSinCargo.length, badgeClass: 'cm-fs-badge-slate' },
-            { key: 'revision', label: 'Revisar',                icon: <AlertCircle size={14} />, count: visibleRevision.length, badgeClass: 'cm-fs-badge-yellow' },
-          ].map(t => (
-            <button
-              key={t.key}
-              role="tab"
-              aria-selected={tab === t.key}
-              className={`cm-fs-tab ${tab === t.key ? 'is-active' : ''}`}
-              onClick={() => setTab(t.key)}
-            >
-              {t.icon}
-              <span>{t.label}</span>
-              <span className={`cm-fs-tab-badge ${t.badgeClass}`}>{t.count}</span>
-              {tab === t.key && (
-                <motion.span className="cm-fs-tab-underline" layoutId="cm-fs-tab-underline" />
+              {sinCargo.length > 0 && (
+                <div className="cz-progress-label">Medio de pago indicado: <b>{indicados} de {sinCargo.length}</b></div>
               )}
-            </button>
-          ))}
-        </div>
-
-        {/* ───── BODY ───── */}
-        <div className="cm-fs-body">
-          {loading ? (
-            <div className="cm-fs-skel-list">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="cm-fs-skel-card" />
-              ))}
             </div>
-          ) : (
-            <AnimatePresence mode="wait">
-              {tab === 'matches' && (
-                <motion.div
-                  key="matches"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-green">
-                    Cada tarjeta es un <b>cargo de tu estado de cuenta</b> (izquierda) que quedó vinculado
-                    con <b>el comprobante que subiste</b> (derecha). Haz clic en una para ver cómo cuadró.
+          </section>
+
+          <div className="cz-cta-row">
+            <button className="cz-cta" onClick={() => setTab(cta.tab)}>{cta.label} <ArrowRight size={14} /></button>
+            <button className="cz-link" aria-expanded={ayuda} onClick={() => setAyuda(v => !v)}>¿Qué significa cada resultado?</button>
+          </div>
+          {ayuda && (
+            <dl className="cz-ayuda">
+              <div><dt>Necesitan revisión</dt><dd>Cargo y factura parecen la misma compra, pero algo no cuadra al centavo o hay un dato que verificar.</dd></div>
+              <div><dt>Cargos sin factura o ticket</dt><dd>Clara ya los cobró y falta subir su comprobante. No es un adeudo: es papeleo pendiente.</dd></div>
+              <div><dt>Coincidencias sin observaciones</dt><dd>Cargo y factura coinciden según las reglas. No significa que tú ya los marcaste como revisados.</dd></div>
+              <div><dt>Facturas sin cargo en Clara</dt><dd>Comprobantes que no aparecen en este archivo. Es normal si pagaste en efectivo, con tu tarjeta, otra cuenta o en otro mes.</dd></div>
+            </dl>
+          )}
+
+          {/* ── Pestañas por acción, agrupadas por universo ── */}
+          <div className="cz-tabs" role="tablist">
+            <span className="cz-tabs-group">Movimientos de Clara</span>
+            {TABS.filter(t => t.grupo === 'banco').map(t => (
+              <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
+                {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
+              </button>
+            ))}
+            <span className="cz-tabs-sep" aria-hidden="true" />
+            <span className="cz-tabs-group">Comprobantes cargados</span>
+            {TABS.filter(t => t.grupo === 'docs').map(t => (
+              <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
+                {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="cz-search-row">
+            <label className="cm-fs-search cz-search">
+              <Search size={14} strokeWidth={2.2} />
+              <input type="text" placeholder="Buscar por proveedor, folio, fecha, importe o descripción…" value={query} onChange={e => setQuery(e.target.value)} aria-label="Buscar en esta pestaña" />
+            </label>
+            <span className="cz-search-hint">{q ? `${visibles} visibles de ${totalesTab} · ` : ''}busca solo en esta pestaña</span>
+          </div>
+
+          {/* ── Contenido ── */}
+          <div className="cz-pane">
+            {tab === 'revisar' && (
+              <>
+                <p className="cz-note">Estos cargos quedaron vinculados, pero conviene verificarlos. Si proveedor, fecha y monto son correctos, puedes aplicarlos así.</p>
+                {verRevisar.length === 0
+                  ? <div className="cm-fs-empty">{revisar.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias por revisar.'}</div>
+                  : verRevisar.map(renderMatch)}
+              </>
+            )}
+
+            {tab === 'coincidencias' && (
+              <>
+                <p className="cz-note">Vínculos sin observaciones según las reglas de conciliación. Que estén aquí no los marca como revisados por ti.</p>
+                {verCoinc.length === 0
+                  ? <div className="cm-fs-empty">{sinObs.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias sin observaciones.'}</div>
+                  : verCoinc.map(renderMatch)}
+              </>
+            )}
+
+            {tab === 'sinFactura' && (
+              <>
+                <p className="cz-note">Clara ya cobró estos cargos y falta su factura o ticket en el reporte. No es dinero que debas.</p>
+                {verSinFact.length === 0
+                  ? <div className="cm-fs-empty">{sinFactura.length ? 'Ninguno coincide con la búsqueda.' : 'Todos los cargos tienen su comprobante.'}</div>
+                  : verSinFact.map((s, i) => (
+                    <div key={i} className="cz-card cz-card-simple">
+                      <div className="cz-simple-main">
+                        <span className="cz-side-label">Clara cobró</span>
+                        <strong className="cz-amount">{fmtMoney(s.monto, s.moneda || 'MXN')} {s.moneda || 'MXN'}</strong>
+                        <span className="cz-meta">{formatDateDisplay(s.fecha)} · {descCargo(s.descripcion, s.fecha, s.monto, s.moneda)}</span>
+                        {s.sugerencias && s.sugerencias.length > 0 && (
+                          <span className="cz-suggest">¿Será alguno que ya subiste? {s.sugerencias.map(sg => <em key={sg.id}>{sg.proveedor}</em>)}</span>
+                        )}
+                      </div>
+                      <div className="cz-simple-side">
+                        <span className="st-badge muted">Sin factura o ticket</span>
+                        <button className="cz-btn" onClick={() => onAgregarManual && onAgregarManual(s)} title="Aplica las coincidencias, cierra esta ventana y agrega un renglón manual">
+                          <Plus size={13} /> Aplicar y capturar a mano
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </>
+            )}
+
+            {tab === 'sinCargo' && (
+              <>
+                <p className="cz-note">
+                  Estas facturas no encontraron un movimiento en el estado de Clara que subiste. Puede ser normal si pagaste por otro medio o si el cargo aparece en otro periodo.
+                  Indicar el medio de pago es <b>informativo</b>: no equivale a comprobarlo contra Clara, no cambia importes y no aparece en el Excel contable.
+                </p>
+
+                <div className="cz-origen-resumen">
+                  <span><b>{sinCargo.length}</b> sin movimiento en este estado</span>
+                  <span>·</span>
+                  <span><b>{indicados} de {sinCargo.length}</b> con medio de pago indicado</span>
+                  {faltanIds.length > 0 && !masivo && (
+                    <button className="cz-btn" onClick={() => setMasivo({ origen: null })}>Clasificar las que faltan ({faltanIds.length})</button>
+                  )}
+                </div>
+
+                <div className="chips cz-origen-chips" role="group" aria-label="Filtrar por medio de pago">
+                  {[{ key: 'todas', label: 'Todas', n: sinCargo.length }, { key: 'sin_identificar', label: 'Por identificar', n: sinCargo.length - indicados },
+                    ...ORIGENES_PAGO.filter(o => o.key !== 'sin_identificar' && (!o.secundaria || conteoOrigen[o.key])).map(o => ({ key: o.key, label: o.corto, n: conteoOrigen[o.key] || 0 }))]
+                    .map(f => (
+                      <button key={f.key} className={`chip${filtroOrigen === f.key ? ' active' : ''}`} aria-pressed={filtroOrigen === f.key} onClick={() => setFiltroOrigen(f.key)}>
+                        {f.label}<span className="chip-n">{f.n}</span>
+                      </button>
+                    ))}
+                </div>
+
+                {deshacer && (
+                  <div className="cz-undo">
+                    {deshacer.texto}
+                    <button className="cz-link" onClick={() => {
+                      for (const p of deshacer.previos) onSetOrigen([p.id], p.origen, p.nota)
+                      setDeshacer(null)
+                    }}>Deshacer</button>
                   </div>
-                  {visibleMatches.length === 0 ? (
-                    <div className="cm-fs-empty">Ningún cargo conciliado cumple los filtros.</div>
-                  ) : visibleMatches.map((m, i) => {
-                    const id = `${m.invoiceId}-${i}`
-                    const isOpen = expandedId === id
+                )}
+
+                {masivo && (
+                  <div className="cz-editor cz-masivo">
+                    <div className="cz-editor-title">¿Cómo pagaste las {faltanIds.length} facturas sin clasificar?</div>
+                    <SelectorOrigen valor={masivo.origen} onChange={o => setMasivo({ origen: o })} esEspecial={esEspecial} />
+                    <div className="cz-editor-actions">
+                      <button className="cz-btn" onClick={() => setMasivo(null)}>Cancelar</button>
+                      <button className="cz-btn primary" disabled={!masivo.origen} onClick={() => {
+                        const previos = guardarOrigen(faltanIds, masivo.origen, '')
+                        setDeshacer({ previos, texto: `Marcaste ${faltanIds.length} ${faltanIds.length === 1 ? 'factura' : 'facturas'} como «${ORIGEN_POR_KEY[masivo.origen].label}».` })
+                        setMasivo(null)
+                      }}>Aplicar a {faltanIds.length} {faltanIds.length === 1 ? 'factura' : 'facturas'}</button>
+                    </div>
+                  </div>
+                )}
+
+                {verSinCargo.length === 0
+                  ? <div className="cm-fs-empty">{sinCargo.length ? 'Ninguna factura en este filtro.' : 'Todas tus facturas encontraron su cargo en Clara.'}</div>
+                  : verSinCargo.map(f => {
+                    const o = origenDe(f.id)
+                    const abierto = editando?.id === f.id
                     return (
-                      <div
-                        key={id}
-                        className={`cm-fs-card cm-fs-match-card ${isOpen ? 'is-open' : ''}`}
-                        onClick={() => setExpandedId(isOpen ? null : id)}
-                      >
-                        <div className="cm-fs-match-head">
-                          <div className="cm-fs-match-left">
-                            <CheckCircle2 size={18} className="cm-fs-match-check" />
-                            <div>
-                              <div className="cm-fs-match-name">{m.csvDescripcion || '(sin descripción)'}</div>
-                              <div className="cm-fs-match-sub">{formatDateDisplay(m.csvDate)}</div>
-                            </div>
-                          </div>
-                          <div className="cm-fs-match-center">
-                            <ArrowRight size={14} className="cm-fs-match-arrow" />
-                            <div>
-                              <div className="cm-fs-match-name">{m.invoiceName}</div>
-                              <div className="cm-fs-match-sub">
-                                {m.propina > 0
-                                  ? <span className="cm-fs-tip-pill"><Sparkles size={10} /> Propina estimada {fmtMoney(m.propina, m.invoiceMoneda)}</span>
-                                  : m.method}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="cm-fs-match-right">
-                            {(() => {
-                              const tier = confidenceTier(m.confidence)
-                              return (
-                                <span
-                                  className={`cm-fs-conf ${tier.cls}`}
-                                  title={`${m.confidence}%`}
-                                >
-                                  {tier.label}
-                                </span>
-                              )
-                            })()}
-                            <div className="cm-fs-match-amount">
-                              {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
-                              {tieneDivisa(m) && <span>{fmtMoney(m.csvAmountUSD, 'USD')} {m.csvMoneda}</span>}
-                            </div>
-                            <ChevronDown size={14} className={`cm-fs-chev ${isOpen ? 'is-open' : ''}`} />
-                          </div>
+                      <div key={f.id} className={`cz-card cz-card-simple${abierto ? ' is-open' : ''}`}>
+                        <div className="cz-simple-main">
+                          <span className="cz-side-label">{f.isTicket ? 'Ticket' : 'Factura'}</span>
+                          <strong className="cz-amount">{fmtMoney(f.total, f.moneda)}{f.moneda && f.moneda !== 'MXN' ? ` ${f.moneda}` : ' MXN'}</strong>
+                          <span className="cz-meta">{f.proveedor}{f.noFactura ? ` · ${f.noFactura}` : ''} · Factura: {formatDateDisplay(f.fecha) || '—'}</span>
+                          <span className="cz-origen-line">
+                            <span className="st-badge muted">Sin coincidencia en este archivo</span>
+                            {esPorIdentificar(o)
+                              ? <span className="cz-origen-empty">{o === 'sin_identificar' ? 'Por identificar' : 'Aún no identificas cómo se pagó'}</span>
+                              : <span className="st-badge info">{etiquetaOrigen(o)}</span>}
+                          </span>
                         </div>
-                        <div className="cm-fs-match-detail" style={{ maxHeight: isOpen ? 260 : 0 }}>
-                          {/* La aritmética explícita evita el "¿por qué el banco
-                              me cobró más que la factura?" que dispara la duda. */}
-                          <div className="cm-fs-math">
-                            {m.propina > 0 ? (
-                              <>Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)} + propina{' '}
-                                {fmtMoney(m.propina, m.invoiceMoneda)}
-                                {m.propinaPct > 0 && <> ({m.propinaPct.toFixed(1)}%)</>} ={' '}
-                                <b>{fmtMoney(tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN, m.invoiceMoneda)} cobrados por Clara</b>
-                              </>
-                            ) : (
-                              <>Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)} ={' '}
-                                <b>{fmtMoney(tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN, m.invoiceMoneda)} cobrados por Clara</b>
-                              </>
-                            )}
-                          </div>
-                          <div className="cm-fs-detail-grid">
-                            <div><span>Cómo se vinculó</span><strong>{m.method}</strong></div>
-                            <div><span>Factura</span><strong>{m.invoiceNumber || '—'}</strong></div>
-                            <div><span>Total factura</span><strong>{fmtMoney(m.invoiceTotal, m.invoiceMoneda)}</strong></div>
-                            {m.propina > 0 && <div><span>Propina estimada</span><strong>{fmtMoney(m.propina, m.invoiceMoneda)}</strong></div>}
-                            {m.csvAuth && <div><span>Código autorización</span><strong>{m.csvAuth}</strong></div>}
-                            <div><span>Confianza</span><strong>{m.confidence}%</strong></div>
-                          </div>
+                        <div className="cz-simple-side">
+                          <button className="cz-btn primary" onClick={() => setEditando({ id: f.id, origen: o, nota: gastosPorId.get(f.id)?.origenPagoNota || '' })}>
+                            {esPorIdentificar(o) ? 'Indicar cómo se pagó' : 'Cambiar'}
+                          </button>
+                          <button className="cz-btn" disabled={!tieneDoc(f.id)} onClick={() => onVerFactura(f.id)}>
+                            <FileText size={13} /> {tieneDoc(f.id) ? 'Ver factura' : 'Sin PDF'}
+                          </button>
                         </div>
+                        {abierto && (
+                          <div className="cz-editor">
+                            <div className="cz-editor-title">¿Cómo pagaste esta factura?</div>
+                            <SelectorOrigen valor={editando.origen} onChange={v => setEditando(e => ({ ...e, origen: v }))} esEspecial={esEspecial} />
+                            <label className="cz-nota">
+                              <span>Nota (opcional)</span>
+                              <input type="text" value={editando.nota} maxLength={140} placeholder="Ej. Pagué con mi dinero personal" onChange={e => setEditando(ed => ({ ...ed, nota: e.target.value }))} />
+                            </label>
+                            <div className="cz-editor-actions">
+                              {o && <button className="cz-btn" onClick={() => { const previos = guardarOrigen([f.id], null, ''); setDeshacer({ previos, texto: 'Quitaste la clasificación.' }); setEditando(null) }}>Quitar clasificación</button>}
+                              <button className="cz-btn" onClick={() => setEditando(null)}>Dejar pendiente</button>
+                              <button className="cz-btn primary" disabled={!editando.origen} onClick={() => {
+                                const previos = guardarOrigen([f.id], editando.origen, editando.nota)
+                                setDeshacer({ previos, texto: `Guardaste «${ORIGEN_POR_KEY[editando.origen].label}» en ${f.proveedor}.` })
+                                setEditando(null)
+                              }}>Guardar clasificación</button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })}
-                </motion.div>
-              )}
-
-              {tab === 'sin' && (
-                <motion.div
-                  key="sin"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-amber">
-                    Estos cargos <b>sí aparecen en tu estado de cuenta de Clara</b>, pero todavía no subiste
-                    su factura o ticket. <b>No debes ese dinero</b> — ya se pagó con la tarjeta; lo único
-                    pendiente es el comprobante para el reporte.
-                  </div>
-                  {visibleSin.length === 0 ? (
-                    <div className="cm-fs-empty">Todos los cargos tienen su comprobante. 🎉</div>
-                  ) : visibleSin.map((s, i) => (
-                    <div key={i} className="cm-fs-card cm-fs-sin-card">
-                      <div className="cm-fs-sin-head">
-                        <div className="cm-fs-sin-left">
-                          <span className="cm-fs-badge cm-fs-badge-amber">Falta comprobante</span>
-                          <div>
-                            <div className="cm-fs-match-name">{s.descripcion || 'Sin descripción'}</div>
-                            <div className="cm-fs-match-sub">{formatDateDisplay(s.fecha)}</div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-sin-right">
-                          <div className="cm-fs-match-amount">
-                            <span>{fmtMoney(s.monto, s.moneda || 'MXN')} {s.moneda || 'MXN'}</span>
-                          </div>
-                          <button
-                            className="cm-fs-add-manual"
-                            onClick={() => onAgregarManual && onAgregarManual(s)}
-                          >
-                            <Plus size={12} /> Agregar manualmente
-                          </button>
-                        </div>
-                      </div>
-                      {s.sugerencias && s.sugerencias.length > 0 && (
-                        <div className="cm-fs-suggest">
-                          <span className="cm-fs-suggest-label">¿Será alguno de estos que ya subiste?</span>
-                          {s.sugerencias.map(sg => (
-                            <span key={sg.id} className="cm-fs-suggest-chip">
-                              {sg.proveedor} <em>{sg.score}%</em>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </motion.div>
-              )}
-
-              {tab === 'sincargo' && (
-                <motion.div
-                  key="sincargo"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-slate">
-                    Estos comprobantes <b>sí los subiste</b>, pero no encontramos su cargo en este estado de
-                    cuenta. Es normal: suele ser de <b>otro periodo</b>, pagado con <b>otra tarjeta</b>,
-                    en <b>efectivo</b> o por <b>transferencia</b>. Se quedan en tu reporte tal cual.
-                  </div>
-                  {visibleSinCargo.length === 0 ? (
-                    <div className="cm-fs-empty">Todos tus comprobantes encontraron su cargo en Clara. 🎉</div>
-                  ) : visibleSinCargo.map((f, i) => (
-                    <div key={f.id || i} className="cm-fs-card cm-fs-nocharge-card">
-                      <div className="cm-fs-sin-head">
-                        <div className="cm-fs-sin-left">
-                          <span className="cm-fs-badge cm-fs-badge-slate">
-                            {f.isTicket ? 'Ticket' : 'Factura'}
-                          </span>
-                          <div>
-                            <div className="cm-fs-match-name">{f.proveedor}</div>
-                            <div className="cm-fs-match-sub">
-                              {formatDateDisplay(f.fecha)}{f.noFactura ? ` · ${f.noFactura}` : ''}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-sin-right">
-                          <div className="cm-fs-match-amount">
-                            <span>{fmtMoney(f.total, f.moneda)} {f.moneda}</span>
-                          </div>
-                          <span className="cm-fs-nocharge-hint">no aparece en este estado de cuenta</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </motion.div>
-              )}
-
-              {tab === 'revision' && (
-                <motion.div
-                  key="revision"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-yellow">
-                    Estos cargos <b>sí quedaron vinculados</b>, pero el monto o la propina no cuadran al
-                    centavo. Échales un ojo antes de continuar: si el proveedor y la fecha son correctos,
-                    puedes dejarlos así.
-                  </div>
-                  {visibleRevision.length === 0 ? (
-                    <div className="cm-fs-empty">Nada que revisar: todo cuadró con alta confianza. 🎉</div>
-                  ) : visibleRevision.map((m, i) => (
-                    <div key={`${m.invoiceId}-${i}`} className="cm-fs-card cm-fs-rev-card">
-                      <div className="cm-fs-match-head">
-                        <div className="cm-fs-match-left">
-                          <AlertCircle size={18} className="cm-fs-rev-icon" />
-                          <div>
-                            <div className="cm-fs-match-name">{m.csvDescripcion || '(sin descripción)'}</div>
-                            <div className="cm-fs-match-sub">{formatDateDisplay(m.csvDate)}</div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-match-center">
-                          <ArrowRight size={14} className="cm-fs-match-arrow" />
-                          <div>
-                            <div className="cm-fs-match-name">{m.invoiceName}</div>
-                            <div className="cm-fs-match-sub">Pase {m.pass} — {m.method}</div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-match-right">
-                          {(() => {
-                            const tier = confidenceTier(m.confidence)
-                            return (
-                              <span className={`cm-fs-conf ${tier.cls}`} title={`${m.confidence}%`}>
-                                {tier.label}
-                              </span>
-                            )
-                          })()}
-                          <div className="cm-fs-match-amount">
-                            {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
-                            {tieneDivisa(m) && <span>{fmtMoney(m.csvAmountUSD, 'USD')} {m.csvMoneda}</span>}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="cm-fs-rev-note">
-                        {m.descuadre
-                          ? 'La factura más la propina no suman exactamente lo que cobró Clara. Revisa el monto antes de continuar.'
-                          : 'Coincidencia aproximada. Verifica proveedor, fecha y monto antes de continuar.'}
-                      </div>
-                    </div>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          )}
+              </>
+            )}
+          </div>
         </div>
 
-        {/* ───── LEYENDA + STICKY FOOTER ───── */}
-        <div className="cm-fs-legend">
-          <span className="cm-fs-legend-title">Cómo leer esto:</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-green" />Conciliado — el cargo y tu comprobante coinciden</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-amber" />Falta comprobante — el cargo ya se pagó, sube su factura</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-slate" />No está en el estado — comprobante de otro periodo o pago</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-yellow" />Revisar — cuadró, pero conviene verificarlo</span>
-        </div>
+        {/* ── Pie: dice exactamente qué hace cada botón ── */}
         <footer className="cm-fs-footer">
           <span className="cm-fs-footer-hint">
-            {matchCount} {matchCount === 1 ? 'cargo quedará vinculado' : 'cargos quedarán vinculados'} en tu reporte
+            «Aplicar» vincula {matchedRows.length} {matchedRows.length === 1 ? 'cargo' : 'cargos'} con su factura (fecha de cobro y monto cobrado del banco).
+            «Descartar» deja el reporte como estaba. Los medios de pago que indiques se guardan en ambos casos.
           </span>
-          <button
-            type="button"
-            className="cm-fs-btn cm-fs-btn-secondary"
-            onClick={handleCancel}
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            className="cm-fs-btn cm-fs-btn-primary"
-            onClick={onConfirm}
-          >
-            Continuar
-          </button>
+          <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={handleCancel}>Descartar resultados</button>
+          <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={onConfirm}>Aplicar coincidencias</button>
         </footer>
       </motion.div>
     </motion.div>
+  )
+}
+
+/* Selector de medio de pago — tarjetas con radio, lenguaje cotidiano. Las
+   opciones poco frecuentes van bajo "Otras formas de pago". */
+function SelectorOrigen({ valor, onChange, esEspecial }) {
+  const [otras, setOtras] = useState(() => !!ORIGEN_POR_KEY[valor]?.secundaria)
+  const opciones = ORIGENES_PAGO.filter(o => !o.secundaria || otras)
+  const ayuda = valor && ORIGEN_POR_KEY[valor]
+  return (
+    <div className="cz-selector" role="radiogroup" aria-label="Medio de pago">
+      {opciones.map(o => (
+        <label key={o.key} className={`cz-opcion${valor === o.key ? ' active' : ''}`}>
+          <input type="radio" name="origen-pago" checked={valor === o.key} onChange={() => onChange(o.key)} />
+          <span className="cz-opcion-ic" aria-hidden="true">{o.icon}</span>
+          <span className="cz-opcion-txt"><b>{o.label}</b><span>{o.desc}</span></span>
+        </label>
+      ))}
+      {!otras && <button type="button" className="cz-link" onClick={() => setOtras(true)}>Otras formas de pago</button>}
+      {ayuda && (
+        <p className="cz-opcion-ayuda">
+          {valor === 'otro_periodo_clara' ? 'Podrás cotejarlo cuando subas el estado de cuenta correspondiente; no se marca como conciliada.'
+            : valor === 'otra_cuenta_empresa' && esEspecial ? 'Es una anotación. Para comprobarlo usa «Cotejar con Saldos» en la barra principal.'
+            : valor === 'sin_identificar' ? 'Queda por identificar, sin marcarse como error. Puedes cambiarlo cuando quieras.'
+            : 'Esta factura seguirá sin movimiento de Clara. Puedes cambiar la opción cuando lo necesites.'}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -4176,13 +4174,13 @@ export default function App() {
   // Columnas ocultas (preferencia de UI por navegador). Default: Esencial.
   const [hiddenCols, setHiddenCols] = useState(() => {
     try {
-      const v = JSON.parse(localStorage.getItem('smto-columnas-ocultas'))
+      const v = JSON.parse(localStorage.getItem('smto-columnas-ocultas-v2'))
       if (Array.isArray(v)) return v
     } catch { /* sin storage o JSON inválido */ }
     return hiddenForPreset('esencial')
   })
   useEffect(() => {
-    try { localStorage.setItem('smto-columnas-ocultas', JSON.stringify(hiddenCols)) } catch { /* sin storage */ }
+    try { localStorage.setItem('smto-columnas-ocultas-v2', JSON.stringify(hiddenCols)) } catch { /* sin storage */ }
   }, [hiddenCols])
 
   const [filtroRapido, setFiltroRapido] = useState('todos')
@@ -5520,6 +5518,8 @@ export default function App() {
         invoiceNumber: g.noFactura || '',
         invoiceTotal: g.totalCFDI || 0,
         invoiceMoneda: g.moneda || 'MXN',
+        invoiceFecha: g.fechaFac || '',
+        invoiceTipo: g.tipo || '',
         isTicket: !!g.esTicket,
         csvDate: formatCobro(row.dCSV),
         csvDescripcion: row.descripcion || '',
@@ -5759,36 +5759,8 @@ export default function App() {
     // Clara CSV), falls back to keyword sniffing on proveedor + concepto.
     // The point is: a gas/uber/hotel CSV line can never bind to an invoice
     // via a phantom 18% tip — only direct totalCFDI matches survive.
-    const RESTAURANT_KEYWORDS = [
-      'restaurant', 'restaurante', 'bar', 'cafe', 'café', 'cafeteria', 'cafetería',
-      'comida', 'aerocomidas', 'taqueria', 'taquería', 'pizzeria', 'pizzería',
-      'grill', 'steakhouse', 'bistro', 'parrilla', 'cantina', 'fonda',
-      'sushi', 'cocina', 'kitchen', 'diner', 'eatery', 'jumper',
-      'wings', 'mariscos', 'marisqueria', 'marisquería', 'asador', 'birria',
-      'antojitos', 'burger', 'burguer', 'pub', 'brewery', 'cerveceria', 'cervecería',
-    ]
-    const TIP_ELIGIBLE_CATEGORIES = [
-      'alimentos', 'bares y bebidas alcoholicas', 'bares y bebidas alcohólicas',
-      'food', 'restaurants', 'restaurantes', 'comida', 'consumo', 'viaticos', 'viáticos',
-    ]
-    const isEligibleForTip = (inv, csvRow) => {
-      const csvCat = (csvRow?.categoria || '').toLowerCase().trim()
-      if (csvCat) {
-        // CSV has a category column. Trust it definitively in both directions:
-        // a food category → eligible; any other category → never tip.
-        return TIP_ELIGIBLE_CATEGORIES.some(c => csvCat.includes(c))
-      }
-      // No CSV category (non-Clara source, o estado de cuenta Clara en Excel
-      // que no trae la columna Categoría). Husmea palabras clave de restaurante
-      // tanto en la factura (proveedor + concepto) como en la descripción del
-      // propio movimiento bancario ("CASA MATRIA RESTAURANT", "REST WENDYS",
-      // "BUFALO WILD WINGS"), que suele delatar el giro aunque el proveedor del
-      // CFDI sea un nombre corporativo sin la palabra "restaurante".
-      const haystack = (
-        (inv?.proveedor || '') + ' ' + (inv?.concepto || '') + ' ' + (csvRow?.descripcion || '')
-      ).toLowerCase()
-      return RESTAURANT_KEYWORDS.some(kw => haystack.includes(kw))
-    }
+    // Elegibilidad (categoría Clara / palabras clave + veto por tipo de la
+    // factura) vive en src/propinas.js, con su prueba en scripts/.
     const asReceipt = inv => ({
       _raw: inv,  // kept so smartAmountMatch can re-check eligibility off proveedor/concepto
       isOCR: (inv.subtotal || 0) > 0 || (inv.propinaSugerida18 || inv.propinaSugerida20 || inv.propinaSugerida22) > 0,
@@ -7011,6 +6983,50 @@ export default function App() {
     }
   }, [])
 
+  // ── Medio de pago declarado (facturas sin cargo en Clara) ──
+  // Solo escribe los campos de anotación. Se aplica a `lista` Y al
+  // pendingLista del modal abierto, para que «Aplicar coincidencias» (que
+  // reemplaza lista por pendingLista) no borre lo que el usuario clasificó.
+  const setOrigenPago = useCallback((ids, origen, nota = '') => {
+    const set = new Set(ids)
+    const anota = g => set.has(g.id)
+      ? { ...g, origenPagoDeclarado: origen || null, origenPagoNota: origen ? (nota || '') : '', origenPagoActualizadoEn: origen ? Date.now() : null }
+      : g
+    setLista(prev => prev.map(anota))
+    setConciliacion(prev => prev?.pendingLista ? { ...prev, pendingLista: prev.pendingLista.map(anota) } : prev)
+  }, [])
+  const verFacturaDe = id => {
+    const g = (conciliacion?.pendingLista || lista).find(x => x.id === id) || lista.find(x => x.id === id)
+    if (!g) return
+    if (g.pdfFile) openPDF(g.pdfFile)
+    else if (g.imageDataURL) {
+      const w = window.open('', '_blank')
+      if (!w) return
+      const img = w.document.createElement('img')
+      img.src = g.imageDataURL
+      img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
+      w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
+      w.document.body.appendChild(img)
+    }
+  }
+
+  // Aviso NO destructivo antes de exportar (Excel o ZIP): nada se modifica.
+  const exportarConAviso = async fn => {
+    const choques = lista.filter(bancoContradiceOrigen)
+    if (choques.length) {
+      const n = choques.length
+      const seguir = await askConfirm({
+        type: 'warning',
+        title: `Revisa el campo BANCO de ${n} ${n === 1 ? 'factura' : 'facturas'}`,
+        subtitle: `${n === 1 ? 'Una factura declarada' : `${n} facturas declaradas`} como pagada fuera de Clara (efectivo, tarjeta personal u otra cuenta) todavía ${n === 1 ? 'tiene' : 'tienen'} BANCO = Clara en tu reporte. Verifica qué valor corresponde según contabilidad antes de exportar.\n\nEl medio de pago que indicaste es informativo y no aparece en el Excel contable.`,
+        primaryLabel: 'Exportar así',
+        secondaryLabel: 'Revisar antes',
+      })
+      if (!seguir) { setFiltroRapido('bancoClaraDeclarada'); setBusqueda(''); setVista('facturas'); return }
+    }
+    fn()
+  }
+
   // ── Borrador: recuperar / descartar / borrar ──
   const recuperarBorrador = () => {
     const r = ofertaBorrador
@@ -7074,12 +7090,14 @@ export default function App() {
   // "Requiere atención" — avisos informativos derivados del estado actual.
   // Cada uno lleva a su filtro en Facturas; ninguno bloquea ni corrige nada.
   const avisos = [
-    { key: 'revisarMatch', filtro: 'revisarMatch', nivel: 'warn', titulo: 'coincidencias bancarias por revisar', detalle: 'La conciliación las ligó con confianza baja: confirma que sea el cargo correcto.' },
+    { key: 'revisarMatch', filtro: 'revisarMatch', nivel: 'warn', titulo: 'coincidencias bancarias por revisar', detalle: 'Ligadas con confianza baja o declaradas como pagadas fuera de Clara: confirma que sea el cargo correcto.' },
     { key: 'xmlFaltante', filtro: 'xmlFaltante', nivel: 'warn', titulo: 'recuperadas sin XML', detalle: 'Se leyeron por OCR porque su XML venía vacío o dañado. Pide el XML al proveedor.' },
     { key: 'sinImporte', filtro: 'sinImporte', nivel: 'warn', titulo: 'sin importe capturado', detalle: 'Tienen total $0 y ningún monto en moneda extranjera.' },
     { key: 'meSinConciliar', filtro: 'meSinConciliar', nivel: 'info', titulo: 'en moneda extranjera sin conciliar', detalle: 'Su equivalente en pesos llega al conciliar con el banco. No son gastos de $0.' },
     { key: 'sinXml', filtro: 'sinXml', nivel: 'info', titulo: 'sin XML', detalle: 'Tickets, fotos o capturas manuales. Revisa si alguno sí tiene factura.' },
     { key: 'porRevisar', filtro: 'porRevisar', nivel: 'info', titulo: 'sin revisión manual', detalle: 'Aún no tienen marcada la casilla de revisión.' },
+    { key: 'bancoClaraDeclarada', filtro: 'bancoClaraDeclarada', nivel: 'warn', titulo: 'pagadas fuera de Clara con BANCO = Clara', detalle: 'Declaraste otro medio de pago, pero el campo BANCO del reporte sigue diciendo Clara. Verifica con contabilidad.' },
+    ...(lista.some(g => g.hizoMatch) ? [{ key: 'sinClasificarPago', filtro: 'sinClasificarPago', nivel: 'info', titulo: 'sin cargo en Clara y sin medio de pago indicado', detalle: 'Indica si las pagaste en efectivo, con tu tarjeta u otra cuenta (informativo).' }] : []),
     { key: 'cobroAntes', filtro: 'cobroAntes', nivel: 'info', titulo: 'cobradas antes de la fecha de factura', detalle: 'Suele ser normal (la factura se emitió días después del pago). Solo informativo.' },
   ].map(a => ({ ...a, count: conteoFiltros[a.filtro] || 0 })).filter(a => a.count > 0)
   const avisosFuertes = avisos.filter(a => a.nivel === 'warn').reduce((s, a) => s + a.count, 0)
@@ -7288,8 +7306,8 @@ export default function App() {
             isDisabled={!lista.length}
             icon={<Download size={15} />}
             items={[
-              { label: 'Excel', hint: 'Reporte oficial SMTO (.xlsx)', icon: '📊', onClick: exportarExcel },
-              { label: 'Excel + facturas (ZIP)', hint: 'Para enviar a contabilidad', icon: '📦', onClick: exportar },
+              { label: 'Excel', hint: 'Reporte oficial SMTO (.xlsx)', icon: '📊', onClick: () => exportarConAviso(exportarExcel) },
+              { label: 'Excel + facturas (ZIP)', hint: 'Para enviar a contabilidad', icon: '📦', onClick: () => exportarConAviso(exportar) },
             ]}
           />
         </div>
@@ -7663,6 +7681,7 @@ export default function App() {
             onPrev={drawerIdx > 0 ? () => setDrawerId(sortedLista[drawerIdx - 1].id) : null}
             onNext={drawerIdx >= 0 && drawerIdx < sortedLista.length - 1 ? () => setDrawerId(sortedLista[drawerIdx + 1].id) : null}
             posicion={drawerIdx >= 0 ? `${drawerIdx + 1} de ${sortedLista.length}` : 'Fuera del filtro'}
+            onSetOrigen={setOrigenPago}
           />
         )}
       </AnimatePresence>
@@ -8051,6 +8070,9 @@ export default function App() {
               setToast(`✓ Conciliación aplicada · ${count} ${count === 1 ? 'cargo vinculado' : 'cargos vinculados'}`)
             }}
             onCancel={() => setConciliacion(null)}
+            onSetOrigen={setOrigenPago}
+            onVerFactura={verFacturaDe}
+            esEspecial={esColaboradorEspecial}
             onAgregarManual={() => {
               // Apply pending matches first so they aren't wiped when
               // agregarManual mutates lista. Then close + add a manual row.
