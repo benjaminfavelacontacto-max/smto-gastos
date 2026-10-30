@@ -448,12 +448,26 @@ const hiddenForPreset = key => {
 
 /* Filtros rápidos (chips) — solo filtran la VISTA; el export usa `lista`. */
 const tieneXML = g => !!(g.xmlContent || g.xmlFile)
+const necesitaRevisarMatch = g => !!g.hizoMatch && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80
+
+/* Etiqueta legible del estado bancario de un gasto (texto, no solo color).
+   Sin método guardado (p. ej. cotejo con Saldos o datos viejos) → genérico. */
+const estadoBanco = g => {
+  if (!g.hizoMatch) return { label: 'Sin conciliar', cls: 'muted', title: 'Aún no se liga a un cargo del estado de cuenta. No es un adeudo.' }
+  if (necesitaRevisarMatch(g)) return { label: 'Revisar', cls: 'warn', title: `Coincidencia por revisar: ${g.matchMetodo} (${g.matchConfianza}%)` }
+  const m = g.matchMetodo || ''
+  const label = /propina/i.test(m) ? 'Propina ✓' : /auth|autoriz/i.test(m) ? 'Código ✓' : 'Conciliado'
+  return { label, cls: 'ok', title: m ? `Conciliado con banco: ${m} (${g.matchConfianza}%)` : 'Conciliado con el banco' }
+}
 const FILTROS_RAPIDOS = [
   { key: 'todos',       label: 'Todos',        test: () => true },
   { key: 'porRevisar',  label: 'Por revisar',  test: g => !g.validado },
   { key: 'sinXml',      label: 'Sin XML',      test: g => !tieneXML(g) },
   { key: 'sinConciliar',label: 'Sin conciliar',test: g => !g.hizoMatch },
   { key: 'conciliados', label: 'Conciliados',  test: g => !!g.hizoMatch },
+  // Solo se muestra si hay alguno: matches de confianza < 80 (mismo umbral que
+  // la pestaña "Revisar" del modal de conciliación).
+  { key: 'revisarMatch', label: 'Revisar coincidencia', test: g => necesitaRevisarMatch(g), soloSiHay: true },
   { key: 'revisados',   label: 'Revisados',    test: g => !!g.validado },
 ]
 
@@ -2229,12 +2243,14 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
               IMG
             </button>
           )}
-          <span
-            className={`pill ${g.hizoMatch ? 'pill-blue' : 'pill-dim'}`}
-            title={g.hizoMatch ? 'Conciliado con el Banco' : 'Pendiente en Banco'}
-          >
-            {g.hizoMatch ? '✓ OK' : '·'}
-          </span>
+          {(() => {
+            const eb = estadoBanco(g)
+            return (
+              <span className={`pill pill-banco ${eb.cls}`} title={eb.title}>
+                {g.hizoMatch ? eb.label : '·'}
+              </span>
+            )
+          })()}
         </div>
       </td>
 
@@ -2558,7 +2574,9 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
         </div>
         <div className="dw-badges">
           <span className={`st-badge ${docEstado.c}`}>{docEstado.t}</span>
-          <span className={`st-badge ${g.hizoMatch ? 'ok' : 'muted'}`}>{g.hizoMatch ? 'Conciliado con banco' : 'Sin conciliar'}</span>
+          <span className={`st-badge ${estadoBanco(g).cls}`} title={estadoBanco(g).title}>
+            {necesitaRevisarMatch(g) ? 'Revisar coincidencia' : g.hizoMatch ? 'Conciliado con banco' : 'Sin conciliar'}
+          </span>
           <span className={`st-badge ${g.validado ? 'ok' : 'warn'}`}>{g.validado ? 'Revisado' : 'Por revisar'}</span>
         </div>
       </header>
@@ -2643,6 +2661,13 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
                   {BANCOS_DISPONIBLES.map(b => <option key={b} value={b}>{b}</option>)}
                 </select>
               </DrawerField>
+            )}
+            {g.hizoMatch && g.matchMetodo && (
+              <DrawerReadOnly
+                label="Cómo se concilió"
+                value={`${g.matchMetodo} · ${g.matchConfianza}%`}
+                hint={necesitaRevisarMatch(g) ? 'Confianza baja: confirma que sea el cargo correcto' : 'Calculado por el motor de conciliación'}
+              />
             )}
             <DrawerReadOnly label="Cobrado en banco" value={g.hizoMatch && Number(g.montoCobrado) > 0 ? fmt(g.montoCobrado) : null} hint={g.hizoMatch ? undefined : 'Se llena al conciliar'} />
             <DrawerReadOnly label="Propina" value={Number(g.montoPropina) > 0 ? `${fmt(g.montoPropina)} (${+Number(g.propinaPorcentaje || 0).toFixed(2)}%)` : Number(g.propinaExtranjero) > 0 ? fmtNat(g.propinaExtranjero) : null} hint="Se edita en la tabla" />
@@ -3860,7 +3885,7 @@ export default function App() {
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
   // 22 columnas: ...formaPago(15), banco(16, solo especiales), prop%(17),
   // prop$(18), totalFinal(19), montoUSD(20), tipoCambio(21)
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
+  const [colWidths, setColWidths] = useState([40, 150, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
   const [busqueda,      setBusqueda]      = useState('')
   const searchInputRef = useRef(null)
@@ -5182,7 +5207,7 @@ export default function App() {
     // (the new default). Matched rows will overwrite this with the CSV's
     // dCSV; unmatched rows keep the invoice date so the FECHA DE COBRO
     // column never shows a blank.
-    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '' }))
+    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '', matchMetodo: '', matchConfianza: 0 }))
 
     // Normalize for fuzzy-suggestion comparison: strip accents, lowercase,
     // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
@@ -5302,6 +5327,39 @@ export default function App() {
       csvRows.push({ dCSV, amounts, descripcion, matched: false, autorizacion, moneda, montoUSD, montoMXN, categoria })
     }
     const bancoRows = csvRows.length
+
+    // ── Vista previa antes de conciliar ── Solo informa qué se leyó del
+    // archivo (formato, movimientos, periodo); el usuario confirma y la
+    // conciliación corre exactamente igual que antes. Cancelar no toca nada.
+    {
+      const fechas = csvRows.map(r => r.dCSV).sort((a, b) => a - b)
+      const monedas = [...new Set(csvRows.map(r => r.moneda || 'MXN'))]
+      const conAuth = csvRows.some(r => r.autorizacion)
+      const formato = isClara
+        ? `Clara · ${isExcel ? 'Excel' : 'CSV'}${monedas.some(m => m !== 'MXN') ? ' · con moneda extranjera' : ''}`
+        : `Estado de cuenta genérico · ${isExcel ? 'Excel' : 'CSV'}`
+      const periodo = fechas.length
+        ? `${formatDateDisplay(formatCobro(fechas[0]))} al ${formatDateDisplay(formatCobro(fechas[fechas.length - 1]))}`
+        : 'Sin fechas legibles'
+      const avisos = []
+      if (!bancoRows) avisos.push('⚠ No encontramos movimientos con fecha y monto. Revisa que sea el estado de cuenta correcto.')
+      if (!isClara) avisos.push('No es un archivo de Clara: se buscarán fechas y montos en cada renglón (sin códigos de autorización).')
+      if (isClara && conAuth) avisos.push('Trae códigos de autorización: los tickets con OCR se pueden ligar por código.')
+      if (lista.some(g => g.hizoMatch)) avisos.push('Ya hay una conciliación aplicada: esta la reemplaza (podrás revisar antes de aplicar).')
+      const continuar = await askConfirm({
+        type: bancoRows ? 'confirm' : 'warning',
+        title: 'Revisa el estado de cuenta',
+        subtitle: `${file.name}\n${formato}\nPeriodo: ${periodo}${avisos.length ? '\n\n' + avisos.join('\n') : ''}`,
+        stats: [
+          { value: bancoRows, label: bancoRows === 1 ? 'Movimiento' : 'Movimientos', color: '#38BDF8' },
+          { value: lista.length, label: lista.length === 1 ? 'Gasto en reporte' : 'Gastos en reporte', color: '#59D39B' },
+          { value: monedas.join(' · ') || '—', label: 'Moneda', color: 'rgba(255,255,255,0.7)' },
+        ],
+        primaryLabel: 'Conciliar',
+        secondaryLabel: 'Cancelar',
+      })
+      if (!continuar) { e.target.value = ''; return }
+    }
 
     // Date is a TIEBREAKER, not a filter. Pick the invoice whose fechaFac is
     // closest in time to the bank row's date. Invoices with no parseable date
@@ -5743,6 +5801,14 @@ export default function App() {
       if ((s.moneda || 'MXN') !== 'MXN') acc.usd += s.montoUSD || s.monto || 0
       return acc
     }, { mxn: 0, usd: 0 })
+
+    // Método y confianza FINALES del motor (ya con el guardián aplicado) en
+    // cada gasto, para que la tabla y el panel expliquen el match sin
+    // recalcular nada. No viajan al Excel (export usa campos explícitos).
+    for (const m of matchedRows) {
+      const g = nl.find(x => x.id === m.invoiceId)
+      if (g) { g.matchMetodo = m.method; g.matchConfianza = m.confidence }
+    }
 
     // Defer setLista — the modal now confirms/cancels the apply step.
     // pendingLista travels with the result object; onConfirm flushes it,
@@ -6910,6 +6976,7 @@ export default function App() {
         {(() => {
           const n = metrics.count, c = metrics.conciliadas
           const pct = n ? Math.round((c / n) * 100) : 0
+          const porRevisar = conteoFiltros.revisarMatch || 0
           return (
             <div className="metric-card" title="Facturas que la conciliación ligó a un cargo del estado de cuenta. Que una factura no esté conciliada no es un adeudo: puede ser de otro periodo, otra tarjeta o efectivo.">
               <div className="metric-label">Conciliadas con banco</div>
@@ -6918,7 +6985,14 @@ export default function App() {
               </div>
               {c === 0
                 ? <div className="metric-hint">Aún sin conciliar</div>
-                : <div className="metric-progress" aria-label={`${pct}% conciliado`}><span style={{ width: `${pct}%` }} /></div>}
+                : <>
+                    <div className="metric-progress" aria-label={`${pct}% conciliado`}><span style={{ width: `${pct}%` }} /></div>
+                    {porRevisar > 0 && (
+                      <button className="metric-link" onClick={() => setFiltroRapido('revisarMatch')}>
+                        {porRevisar} por revisar →
+                      </button>
+                    )}
+                  </>}
             </div>
           )
         })()}
@@ -6981,10 +7055,10 @@ export default function App() {
       {lista.length > 0 && (
         <div className="view-bar">
           <div className="chips" role="group" aria-label="Filtros rápidos">
-            {FILTROS_RAPIDOS.map(f => (
+            {FILTROS_RAPIDOS.filter(f => !f.soloSiHay || conteoFiltros[f.key] > 0 || filtroRapido === f.key).map(f => (
               <button
                 key={f.key}
-                className={`chip${filtroRapido === f.key ? ' active' : ''}`}
+                className={`chip${filtroRapido === f.key ? ' active' : ''}${f.soloSiHay ? ' chip-warn' : ''}`}
                 aria-pressed={filtroRapido === f.key}
                 onClick={() => setFiltroRapido(f.key)}
               >

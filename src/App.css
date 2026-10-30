@@ -3322,3 +3322,24 @@ input[type="date"].dw-in { color-scheme: dark; }
   .dw-panel { width: 100vw; border-left: none; }
   .dw-grid, .dw-grid-num { grid-template-columns: 1fr 1fr; }
 }
+
+/* ═══════════════════════════════════════════
+   REDISEÑO UX FASE 3 (v9.05) — estados de conciliación legibles
+═══════════════════════════════════════════ */
+.pill-banco.muted { background: transparent; border-color: transparent; color: rgba(255, 255, 255, 0.25); padding: 0 6px; cursor: help; }
+.pill-banco.ok    { background: rgba(56, 189, 248, 0.10); border-color: rgba(56, 189, 248, 0.28); color: var(--info-cyan); cursor: help; }
+.pill-banco.warn  { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.35); color: var(--warning-amber); cursor: help; }
+
+.chip.chip-warn { border-color: rgba(245, 158, 11, 0.4); color: var(--warning-amber); }
+.chip.chip-warn.active { background: rgba(245, 158, 11, 0.16); border-color: rgba(245, 158, 11, 0.6); color: var(--warning-amber); }
+.chip.chip-warn .chip-n { background: rgba(245, 158, 11, 0.25); }
+
+.metric-link {
+  margin-top: 6px;
+  border: none; background: transparent; padding: 0;
+  color: var(--warning-amber);
+  font-family: 'Inter', sans-serif;
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+}
+.metric-link:hover { text-decoration: underline; }
