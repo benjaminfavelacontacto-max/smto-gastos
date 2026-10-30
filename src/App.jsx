@@ -431,6 +431,43 @@ const COLUMNS = [
   { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
 
+/* Vistas de columnas de la tabla (solo presentación: ocultar una columna
+   jamás borra el dato, y el Excel/ZIP exportan todo igual). `check`,
+   `status` y `proveedor` siempre se ven. */
+const COLUMNAS_FIJAS = ['check', 'status', 'proveedor']
+const COLUMN_PRESETS = {
+  esencial:     { label: 'Esencial',     cols: ['fechaFac', 'fechaCobro', 'noFactura', 'tipo', 'totalCFDI', 'totalFinal'] },
+  contable:     { label: 'Contable',     cols: ['fechaFac', 'noFactura', 'concepto', 'tipo', 'importe', 'iva', 'isrTrasladado', 'retencionISR', 'retencionIVA', 'retenciones', 'totalCFDI', 'formaPago'] },
+  conciliacion: { label: 'Conciliación', cols: ['fechaFac', 'fechaCobro', 'noFactura', 'totalCFDI', 'formaPago', 'banco', 'propinaPorcentaje', 'montoPropina', 'totalFinal', 'montoUSD', 'tipoCambio'] },
+  todas:        { label: 'Todas',        cols: COLUMNS.map(c => c.key) },
+}
+const hiddenForPreset = key => {
+  const ver = new Set([...COLUMNAS_FIJAS, ...COLUMN_PRESETS[key].cols])
+  return COLUMNS.map(c => c.key).filter(k => !ver.has(k))
+}
+
+/* Filtros rápidos (chips) — solo filtran la VISTA; el export usa `lista`. */
+const tieneXML = g => !!(g.xmlContent || g.xmlFile)
+const FILTROS_RAPIDOS = [
+  { key: 'todos',       label: 'Todos',        test: () => true },
+  { key: 'porRevisar',  label: 'Por revisar',  test: g => !g.validado },
+  { key: 'sinXml',      label: 'Sin XML',      test: g => !tieneXML(g) },
+  { key: 'sinConciliar',label: 'Sin conciliar',test: g => !g.hizoMatch },
+  { key: 'conciliados', label: 'Conciliados',  test: g => !!g.hizoMatch },
+  { key: 'revisados',   label: 'Revisados',    test: g => !!g.validado },
+]
+
+/* fechaCobro → YYYY-MM-DD para <input type="date">. Datos viejos en memoria
+   pueden traer DD/MM/YYYY del banco. */
+const cobroToIso = f => {
+  if (!f) return ''
+  if (f.includes('/')) {
+    const [d, m, y] = f.split('/')
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+  return f
+}
+
 /* Símbolo por divisa — espejo de CURRENCY_SYMBOLS en api/export-excel.py, para
    que la tabla muestre exactamente el mismo símbolo que el Excel. */
 const MONEDA_SIMBOLOS = {
@@ -1637,7 +1674,7 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
    así tampoco lo recorta el scroll horizontal de la barra en móvil.
 ═══════════════════════════════════════════════════ */
 
-function ToolbarMenu({ id, title, icon, variant = 'primary', isDisabled = false, items, align = 'left' }) {
+function ToolbarMenu({ id, title, icon, variant = 'primary', isDisabled = false, items = [], align = 'left', renderContent, menuClassName = '' }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState(null)
   const btnRef = useRef(null)
@@ -1702,8 +1739,8 @@ function ToolbarMenu({ id, title, icon, variant = 'primary', isDisabled = false,
         <ChevronDown size={14} className="tb-chevron" aria-hidden="true" />
       </button>
       {open && pos && createPortal(
-        <div className="tb-menu" role="menu" ref={menuRef} style={pos}>
-          {visibles.map(it => (
+        <div className={`tb-menu ${menuClassName}`} role="menu" ref={menuRef} style={pos}>
+          {renderContent ? renderContent(() => setOpen(false)) : visibles.map(it => (
             <button
               key={it.label}
               role="menuitem"
@@ -2109,7 +2146,7 @@ function NumCell({ g, upd, field, prefix, suffix, format = true, compact = false
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial }) {
+const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial, openDetail, isActive }) {
   // Callbacks bound to this row's id. useCallback keeps their identity stable
   // across the parent's re-renders (update/remove are themselves stable), so
   // React.memo above can skip re-rendering every OTHER row on each keystroke —
@@ -2138,17 +2175,10 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
   const [editingCobro, setEditingCobro] = useState(false)
   // type="date" needs YYYY-MM-DD on its value attr. Bank-matched DD/MM/YYYY
   // from legacy in-memory data still parses correctly via this guard.
-  const cobroIso = (() => {
-    if (!g.fechaCobro) return ''
-    if (g.fechaCobro.includes('/')) {
-      const [d, m, y] = g.fechaCobro.split('/')
-      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
-    }
-    return g.fechaCobro
-  })()
+  const cobroIso = cobroToIso(g.fechaCobro)
 
   return (
-    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new'].filter(Boolean).join(' ')}>
+    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new', isActive && 'row-active'].filter(Boolean).join(' ')}>
       {/* Checkbox */}
       <td className="td-chk">
         <input
@@ -2397,8 +2427,19 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
         />
       </td>
 
-      {/* Eliminar — sticky-right action column; button only visible on row hover */}
+      {/* Acciones — sticky-right: ver detalle (siempre) + eliminar (en hover) */}
       <td className="td-delete">
+        <div className="row-actions">
+        <button
+          className="btn-detail-row"
+          onClick={() => openDetail(g.id)}
+          title="Ver detalle de la factura"
+          aria-label="Ver detalle de la factura"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/>
+          </svg>
+        </button>
         <button
           className="btn-delete-row"
           onClick={onDelete}
@@ -2411,10 +2452,223 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             <path d="M9 6V4h6v2"/>
           </svg>
         </button>
+        </div>
       </td>
     </tr>
   )
 })
+
+/* ═══════════════════════════════════════════════════
+   COMPONENTE: PANEL LATERAL DE DETALLE
+   Lee y escribe el MISMO gasto de `lista` por id, a través del mismo
+   `update(id, field, value)` que usa la tabla — así el recálculo de TOTAL,
+   propina y retenciones es idéntico. Los campos con lógica propia de la
+   tabla (Monto M.E. → T/C, propina nativa) se muestran solo lectura aquí.
+═══════════════════════════════════════════════════ */
+
+function DrawerField({ label, children, hint }) {
+  return (
+    <label className="dw-field">
+      <span className="dw-label">{label}</span>
+      {children}
+      {hint && <span className="dw-hint">{hint}</span>}
+    </label>
+  )
+}
+
+function DrawerReadOnly({ label, value, mono, hint }) {
+  return (
+    <div className="dw-field">
+      <span className="dw-label">{label}</span>
+      <span className={`dw-ro${mono ? ' is-mono' : ''}`}>{value || <span className="dw-empty">—</span>}</span>
+      {hint && <span className="dw-hint">{hint}</span>}
+    </div>
+  )
+}
+
+function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPrev, onNext, posicion }) {
+  const upd = useCallback((field, val) => update(g.id, field, val), [update, g.id])
+
+  // Esc cierra; Alt+↑/↓ navega (Alt para no robar las flechas de los inputs).
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') onClose()
+      else if (e.altKey && e.key === 'ArrowUp' && onPrev) { e.preventDefault(); onPrev() }
+      else if (e.altKey && e.key === 'ArrowDown' && onNext) { e.preventDefault(); onNext() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, onPrev, onNext])
+
+  const monedaRow = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+  const totalFinalMXN = (Number(g.totalCFDI) || 0) + (Number(g.montoPropina) || 0)
+  const totalNativo = (Number(g.montoExtranjero) || 0) + (Number(g.propinaExtranjero) || 0)
+  const fmt = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtNat = n => `${simboloMoneda(monedaRow) || ''}${(Number(n) || 0).toFixed(2)} ${monedaRow}`
+  // Ticket extranjero sin conciliar: total nativo en vez de un "$0.00" engañoso.
+  const muestraTotal = () =>
+    monedaRow !== 'MXN' && totalFinalMXN === 0 && totalNativo > 0 ? fmtNat(totalNativo) : fmt(totalFinalMXN)
+
+  const docEstado = g.xmlFaltante ? { t: 'Falta XML', c: 'warn' }
+    : tieneXML(g) && g.tienePDF ? { t: 'XML + PDF', c: 'ok' }
+    : tieneXML(g) ? { t: 'Solo XML', c: 'info' }
+    : g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL ? { t: 'Captura manual', c: 'muted' }
+    : { t: 'Ticket / OCR', c: 'info' }
+
+  const verImagen = () => {
+    const w = window.open('', '_blank')
+    if (!w) return
+    const img = w.document.createElement('img')
+    img.src = g.imageDataURL
+    img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
+    w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
+    w.document.body.appendChild(img)
+  }
+
+  return (
+    <motion.aside
+      className="dw-panel"
+      role="dialog"
+      aria-label={`Detalle de ${g.proveedor || 'factura'}`}
+      initial={{ x: 40, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 40, opacity: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+    >
+      <header className="dw-head">
+        <div className="dw-nav">
+          <button className="dw-icon-btn" onClick={onPrev} disabled={!onPrev} title="Anterior (Alt+↑)" aria-label="Factura anterior">
+            <ChevronDown size={16} style={{ transform: 'rotate(180deg)' }} />
+          </button>
+          <button className="dw-icon-btn" onClick={onNext} disabled={!onNext} title="Siguiente (Alt+↓)" aria-label="Factura siguiente">
+            <ChevronDown size={16} />
+          </button>
+          {posicion && <span className="dw-pos">{posicion}</span>}
+          <button className="dw-icon-btn dw-close" onClick={onClose} title="Cerrar (Esc)" aria-label="Cerrar detalle">
+            <X size={16} />
+          </button>
+        </div>
+        <h2 className="dw-title">{g.proveedor || 'Sin proveedor'}</h2>
+        <div className="dw-sub">
+          <span className="is-mono">{g.noFactura || 'Sin folio'}</span>
+          <span>·</span>
+          <span>{formatDateDisplay(g.fechaFac) || 'Sin fecha'}</span>
+          <span>·</span>
+          <span className="dw-total">{muestraTotal()}</span>
+        </div>
+        <div className="dw-badges">
+          <span className={`st-badge ${docEstado.c}`}>{docEstado.t}</span>
+          <span className={`st-badge ${g.hizoMatch ? 'ok' : 'muted'}`}>{g.hizoMatch ? 'Conciliado con banco' : 'Sin conciliar'}</span>
+          <span className={`st-badge ${g.validado ? 'ok' : 'warn'}`}>{g.validado ? 'Revisado' : 'Por revisar'}</span>
+        </div>
+      </header>
+
+      <div className="dw-body">
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Documentos</h3>
+          <div className="dw-docs">
+            <button className="dw-doc-btn" disabled={!g.tienePDF} onClick={() => openPDF(g.pdfFile)}>
+              <FileText size={15} /> {g.tienePDF ? 'Abrir PDF' : 'Sin PDF'}
+            </button>
+            {g.imageDataURL && (
+              <button className="dw-doc-btn" onClick={verImagen}>
+                <FileText size={15} /> Ver imagen original
+              </button>
+            )}
+            <span className={`dw-doc-flag${tieneXML(g) ? ' ok' : ''}`}>
+              {tieneXML(g) ? <Check size={13} /> : <X size={13} />} XML {tieneXML(g) ? 'cargado' : 'no cargado'}
+            </span>
+          </div>
+          {g.uuid && g.uuid !== 'MANUAL' && <DrawerReadOnly label="UUID (folio fiscal)" value={g.uuid} mono />}
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Datos de la factura</h3>
+          <div className="dw-grid">
+            <DrawerField label="Proveedor">
+              <input className="dw-in" value={g.proveedor || ''} onChange={e => upd('proveedor', e.target.value)} />
+            </DrawerField>
+            <DrawerReadOnly label="RFC" value={g.rfc} mono />
+            <DrawerField label="Factura (folio)">
+              <input className="dw-in is-mono" value={g.noFactura || ''} onChange={e => upd('noFactura', e.target.value)} />
+            </DrawerField>
+            <DrawerField label="Fecha factura" hint="DD-MM-AAAA">
+              <input className="dw-in" value={formatDateDisplay(g.fechaFac)} onChange={e => upd('fechaFac', parseDateDisplay(e.target.value))} />
+            </DrawerField>
+            <DrawerField label="Concepto">
+              <input className="dw-in" value={g.concepto || ''} onChange={e => upd('concepto', e.target.value)} />
+            </DrawerField>
+            <DrawerField label="Tipo de gasto">
+              <select className="dw-in" value={g.tipo || ''} onChange={e => upd('tipo', e.target.value)}>
+                <option value="">— Tipo —</option>
+                {tiposList.map(t => <option key={t} value={t}>{t}</option>)}
+                {g.tipo && !tiposList.includes(g.tipo) && <option value={g.tipo}>{g.tipo}</option>}
+              </select>
+            </DrawerField>
+          </div>
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Importes</h3>
+          <div className="dw-grid dw-grid-num">
+            <DrawerField label="Subtotal"><NumCell g={g} upd={upd} field="importe" prefix="$" /></DrawerField>
+            <DrawerField label="IVA"><NumCell g={g} upd={upd} field="iva" prefix="$" /></DrawerField>
+            <DrawerField label="ISH / IEPS"><NumCell g={g} upd={upd} field="isrTrasladado" prefix="$" /></DrawerField>
+            <DrawerField label="Ret. ISR"><NumCell g={g} upd={upd} field="retencionISR" prefix="$" /></DrawerField>
+            <DrawerField label="Ret. IVA"><NumCell g={g} upd={upd} field="retencionIVA" prefix="$" /></DrawerField>
+            <DrawerField label="Retenciones"><NumCell g={g} upd={upd} field="retenciones" prefix="$" /></DrawerField>
+            <DrawerField label="Total factura"><NumCell g={g} upd={upd} field="totalCFDI" prefix="$" /></DrawerField>
+          </div>
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Pago y conciliación</h3>
+          <div className="dw-grid">
+            <DrawerField label="Forma de pago">
+              <select className="dw-in" value={g.formaPago} onChange={e => upd('formaPago', e.target.value)}>
+                <option value="04">04 - Tarjeta de Crédito</option>
+                <option value="02">02 - Efectivo</option>
+                <option value="03">03 - Transferencia</option>
+                <option value="01">01 - Efectivo (otro)</option>
+                <option value="99">99 - Por Definir</option>
+              </select>
+            </DrawerField>
+            <DrawerField label="Fecha de cobro" hint={g.hizoMatch ? 'Tomada del estado de cuenta' : 'Igual a la fecha de factura hasta conciliar'}>
+              <input type="date" className="dw-in" value={cobroToIso(g.fechaCobro)} onChange={e => upd('fechaCobro', e.target.value)} />
+            </DrawerField>
+            {isSpecial && (
+              <DrawerField label="Banco">
+                <select className="dw-in" value={g.banco || ''} onChange={e => upd('banco', e.target.value)}>
+                  <option value="">—</option>
+                  {BANCOS_DISPONIBLES.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </DrawerField>
+            )}
+            <DrawerReadOnly label="Cobrado en banco" value={g.hizoMatch && Number(g.montoCobrado) > 0 ? fmt(g.montoCobrado) : null} hint={g.hizoMatch ? undefined : 'Se llena al conciliar'} />
+            <DrawerReadOnly label="Propina" value={Number(g.montoPropina) > 0 ? `${fmt(g.montoPropina)} (${+Number(g.propinaPorcentaje || 0).toFixed(2)}%)` : Number(g.propinaExtranjero) > 0 ? fmtNat(g.propinaExtranjero) : null} hint="Se edita en la tabla" />
+            <DrawerReadOnly label="Total final" value={muestraTotal()} />
+            {(Number(g.montoUSD) > 0 || monedaRow !== 'MXN') && (
+              <>
+                <DrawerReadOnly label={`Monto M.E. (${monedaRow === 'MXN' ? 'USD' : monedaRow})`} value={Number(g.montoUSD) > 0 ? String(g.montoUSD) : null} hint="Se edita en la tabla" />
+                <DrawerReadOnly label="Tipo de cambio" value={Number(g.tipoCambio) > 0 ? String(g.tipoCambio) : null} />
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <footer className="dw-foot">
+        <label className={`dw-review${g.validado ? ' is-on' : ''}`}>
+          <input type="checkbox" checked={!!g.validado} onChange={e => upd('validado', e.target.checked)} />
+          <span>Marcar como revisada</span>
+        </label>
+        <button className="btn-premium primary" onClick={onNext || onClose}>
+          {onNext ? 'Siguiente' : 'Cerrar'}
+        </button>
+      </footer>
+    </motion.aside>
+  )
+}
 
 /* ═══════════════════════════════════════════════════
    COMPONENTE: MODAL DE CONCILIACIÓN (glass + framer-motion)
@@ -3625,6 +3879,22 @@ export default function App() {
   // hay trabajo sin respaldar → indicador en el header + aviso al salir.
   const [ultimoExport, setUltimoExport] = useState(null)
 
+  // Columnas ocultas (preferencia de UI por navegador). Default: Esencial.
+  const [hiddenCols, setHiddenCols] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('smto-columnas-ocultas'))
+      if (Array.isArray(v)) return v
+    } catch { /* sin storage o JSON inválido */ }
+    return hiddenForPreset('esencial')
+  })
+  useEffect(() => {
+    try { localStorage.setItem('smto-columnas-ocultas', JSON.stringify(hiddenCols)) } catch { /* sin storage */ }
+  }, [hiddenCols])
+
+  const [filtroRapido, setFiltroRapido] = useState('todos')
+  const [drawerId,     setDrawerId]     = useState(null)   // gasto abierto en el panel lateral
+  const [bulkTipo,     setBulkTipo]     = useState(null)   // { tipo } mientras el modal de tipo masivo está abierto
+
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
   const photoRef  = useRef(null)       // subir foto existente (galería / archivos)
@@ -3720,10 +3990,12 @@ export default function App() {
   //    todos los campos significativos del gasto. Se aplica ANTES del sort
   //    para que el orden actuál actúe sobre el subset filtrado.
   const filteredLista = useMemo(() => {
+    const chip = FILTROS_RAPIDOS.find(f => f.key === filtroRapido)
+    const base = chip && filtroRapido !== 'todos' ? lista.filter(chip.test) : lista
     const q = busqueda.trim()
-    if (!q) return lista
+    if (!q) return base
     const nq = q.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
-    return lista.filter(g => {
+    return base.filter(g => {
       const haystack = [
         g.rfc, g.proveedor, g.noFactura, g.concepto, g.tipo,
         g.fechaFac, g.fechaCobro, g.formaPago, g.polizaNumero,
@@ -3738,7 +4010,11 @@ export default function App() {
         .toLowerCase()
       return haystack.includes(nq)
     })
-  }, [lista, busqueda])
+  }, [lista, busqueda, filtroRapido])
+
+  const conteoFiltros = useMemo(() => Object.fromEntries(
+    FILTROS_RAPIDOS.map(f => [f.key, lista.filter(f.test).length])
+  ), [lista])
 
   // ── Sort — three-state cycle (asc → desc → unsorted), null-safe, with
   //          date detection that accepts both YYYY-MM-DD and DD/MM/YYYY.
@@ -6397,6 +6673,55 @@ export default function App() {
     }
   }, [])
 
+  // ── Vista: columnas visibles, panel de detalle y acciones masivas ──
+  // Las columnas se ocultan con CSS (nth-child) para no tocar el render de
+  // GastoRow; el índice cuenta la columna BANCO solo si se dibuja.
+  const columnasRender = COLUMNS.filter(c => !c.specialOnly || esColaboradorEspecial)
+  const presetActivo = Object.keys(COLUMN_PRESETS).find(k => {
+    const h = hiddenForPreset(k)
+    return h.length === hiddenCols.length && h.every(x => hiddenCols.includes(x))
+  })
+  const cssColumnasOcultas = columnasRender
+    .map((c, i) => hiddenCols.includes(c.key) && !COLUMNAS_FIJAS.includes(c.key) ? i + 1 : 0)
+    .filter(Boolean)
+    .map(n => `.tabla-gastos > thead > tr > th:nth-child(${n}), .tabla-gastos > tbody > tr > td:nth-child(${n}) { display: none; }`)
+    .join('\n')
+  const toggleColumna = key =>
+    setHiddenCols(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  const hayFiltros = filtroRapido !== 'todos' || !!busqueda.trim()
+
+  const drawerGasto = drawerId ? lista.find(g => g.id === drawerId) : null
+  const drawerIdx = drawerGasto ? sortedLista.findIndex(g => g.id === drawerId) : -1
+  // Si el gasto abierto se elimina, se cierra el panel.
+  useEffect(() => { if (drawerId && !drawerGasto) setDrawerId(null) }, [drawerId, drawerGasto])
+  const closeDrawer = useCallback(() => setDrawerId(null), [])
+
+  // Acciones masivas sobre las filas VISIBLES (filtro + búsqueda actuales).
+  // Solo tocan `validado` y `tipo`, que no tienen efectos colaterales en update().
+  const marcarVisiblesRevisadas = async valor => {
+    const ids = new Set(sortedLista.map(g => g.id))
+    const n = ids.size
+    if (!n) return
+    const plural = n === 1 ? 'factura' : `${n} facturas`
+    const ok = await askConfirm({
+      type: 'warning',
+      title: valor ? `¿Marcar ${plural} como revisada${n === 1 ? '' : 's'}?` : `¿Quitar la marca de revisión a ${plural}?`,
+      subtitle: `Se aplica a ${n === 1 ? 'la factura que ves' : `las ${n} facturas que ves`} ahora en la tabla (con los filtros actuales). Solo cambia la casilla de revisión manual: no concilia ni modifica importes.`,
+      primaryLabel: valor ? 'Marcar revisadas' : 'Quitar marca',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!ok) return
+    setLista(prev => prev.map(g => ids.has(g.id) ? { ...g, validado: valor } : g))
+    setToast(valor ? `✓ ${n} ${n === 1 ? 'factura marcada' : 'facturas marcadas'} como revisada${n === 1 ? '' : 's'}` : `Marca de revisión quitada a ${n} ${n === 1 ? 'factura' : 'facturas'}`)
+  }
+  const aplicarTipoMasivo = () => {
+    if (!bulkTipo?.tipo) return
+    const ids = new Set(sortedLista.map(g => g.id))
+    setLista(prev => prev.map(g => ids.has(g.id) ? { ...g, tipo: bulkTipo.tipo } : g))
+    setToast(`✓ Tipo «${bulkTipo.tipo}» aplicado a ${ids.size} ${ids.size === 1 ? 'factura' : 'facturas'}`)
+    setBulkTipo(null)
+  }
+
   /* ── RENDER ── */
   return (
     <div className="app">
@@ -6628,7 +6953,7 @@ export default function App() {
             onChange={e => setBusqueda(e.target.value)}
             placeholder="Buscar por proveedor, factura, fecha, RFC, concepto, póliza..."
           />
-          {busqueda && (
+          {hayFiltros && (
             <span className="search-count">
               {filteredLista.length} de {lista.length}
             </span>
@@ -6646,6 +6971,72 @@ export default function App() {
           <div className="density-toggle" role="group" aria-label="Densidad de la tabla">
             <button className={densidad === 'comoda' ? 'active' : ''} aria-pressed={densidad === 'comoda'} onClick={() => setDensidad('comoda')}>Cómoda</button>
             <button className={densidad === 'compacta' ? 'active' : ''} aria-pressed={densidad === 'compacta'} onClick={() => setDensidad('compacta')}>Compacta</button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── FILTROS RÁPIDOS + COLUMNAS + ACCIONES ───
+          Los filtros solo cambian la vista; Excel y ZIP siempre exportan
+          el reporte completo. */}
+      {lista.length > 0 && (
+        <div className="view-bar">
+          <div className="chips" role="group" aria-label="Filtros rápidos">
+            {FILTROS_RAPIDOS.map(f => (
+              <button
+                key={f.key}
+                className={`chip${filtroRapido === f.key ? ' active' : ''}`}
+                aria-pressed={filtroRapido === f.key}
+                onClick={() => setFiltroRapido(f.key)}
+              >
+                {f.label}<span className="chip-n">{conteoFiltros[f.key]}</span>
+              </button>
+            ))}
+            {hayFiltros && (
+              <button className="chip-clear" onClick={() => { setFiltroRapido('todos'); setBusqueda('') }}>
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+          <div className="view-bar-right">
+            <ToolbarMenu
+              title={`Acciones (${sortedLista.length})`}
+              variant="ghost"
+              align="right"
+              isDisabled={!sortedLista.length}
+              items={[
+                { label: 'Marcar visibles como revisadas', hint: 'Casilla de revisión manual', icon: <CheckCircle2 size={16} />, onClick: () => marcarVisiblesRevisadas(true) },
+                { label: 'Quitar marca de revisión', hint: 'A las facturas visibles', icon: <XCircle size={16} />, onClick: () => marcarVisiblesRevisadas(false) },
+                { label: 'Cambiar tipo de gasto…', hint: 'A las facturas visibles', icon: <Target size={16} />, onClick: () => setBulkTipo({ tipo: '' }) },
+              ]}
+            />
+            <ToolbarMenu
+              title={`Columnas: ${presetActivo ? COLUMN_PRESETS[presetActivo].label : 'Personalizadas'}`}
+              variant="ghost"
+              align="right"
+              menuClassName="col-menu"
+              renderContent={() => (
+                <>
+                  <div className="col-presets">
+                    {Object.entries(COLUMN_PRESETS).map(([k, p]) => (
+                      <button
+                        key={k}
+                        className={`col-preset${presetActivo === k ? ' active' : ''}`}
+                        onClick={() => setHiddenCols(hiddenForPreset(k))}
+                      >{p.label}</button>
+                    ))}
+                  </div>
+                  <div className="col-list">
+                    {columnasRender.filter(c => !COLUMNAS_FIJAS.includes(c.key)).map(c => (
+                      <label key={c.key} className="col-item">
+                        <input type="checkbox" checked={!hiddenCols.includes(c.key)} onChange={() => toggleColumna(c.key)} />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="col-foot">Ocultar una columna no borra datos: el Excel y el ZIP siempre llevan todo.</div>
+                </>
+              )}
+            />
           </div>
         </div>
       )}
@@ -6733,7 +7124,10 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <table className={densidad === 'compacta' ? 'density-compact' : undefined} style={{
+          <>
+          {cssColumnasOcultas && <style>{cssColumnasOcultas}</style>}
+          <table className={`tabla-gastos${densidad === 'compacta' ? ' density-compact' : ''}`} style={{
+            ...(hiddenCols.length ? { minWidth: 0 } : null),
             // Sticky-column left offsets — Proveedor pins right after the
             // Estado column. Resizing Estado shifts the pinned Proveedor cell
             // correctly because we read its width from colWidths.
@@ -6764,7 +7158,7 @@ export default function App() {
                   )
                 })}
                 {/* Eliminar — sticky-right action column, no label, fixed 40px width */}
-                <th className="th-delete" style={{ width: 40 }} />
+                <th className="th-delete" style={{ width: 64 }} />
               </tr>
             </thead>
             <tbody>
@@ -6777,12 +7171,67 @@ export default function App() {
                   openPDF={openPDF}
                   tiposList={tiposList}
                   isSpecial={esColaboradorEspecial}
+                  openDetail={setDrawerId}
+                  isActive={g.id === drawerId}
                 />
               ))}
             </tbody>
           </table>
+          {sortedLista.length === 0 && (
+            <div className="empty-filter">
+              Ninguna factura coincide con los filtros.
+              <button className="chip-clear" onClick={() => { setFiltroRapido('todos'); setBusqueda('') }}>Limpiar filtros</button>
+            </div>
+          )}
+          </>
         )}
       </div>
+
+      {/* ─── PANEL LATERAL DE DETALLE ─── */}
+      <AnimatePresence>
+        {drawerGasto && (
+          <ExpenseDrawer
+            key="drawer"
+            g={drawerGasto}
+            update={update}
+            openPDF={openPDF}
+            tiposList={tiposList}
+            isSpecial={esColaboradorEspecial}
+            onClose={closeDrawer}
+            onPrev={drawerIdx > 0 ? () => setDrawerId(sortedLista[drawerIdx - 1].id) : null}
+            onNext={drawerIdx >= 0 && drawerIdx < sortedLista.length - 1 ? () => setDrawerId(sortedLista[drawerIdx + 1].id) : null}
+            posicion={drawerIdx >= 0 ? `${drawerIdx + 1} de ${sortedLista.length}` : 'Fuera del filtro'}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL: CAMBIAR TIPO A LAS FACTURAS VISIBLES ─── */}
+      {bulkTipo && (
+        <div className="premium-overlay" onClick={() => setBulkTipo(null)}>
+          <div className="premium-modal" style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
+            <h2 className="premium-title">Cambiar tipo de gasto</h2>
+            <p className="premium-subtitle">
+              Se aplicará a {sortedLista.length === 1 ? 'la factura que ves' : `las ${sortedLista.length} facturas que ves`} ahora en la tabla. Revisa el filtro antes de aplicar.
+            </p>
+            <select
+              className="dw-in"
+              style={{ marginTop: 16 }}
+              autoFocus
+              value={bulkTipo.tipo}
+              onChange={e => setBulkTipo({ tipo: e.target.value })}
+            >
+              <option value="">— Elige un tipo —</option>
+              {tiposList.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <div className="premium-actions" style={{ marginTop: 20 }}>
+              <button className="premium-btn-secondary" onClick={() => setBulkTipo(null)}>Cancelar</button>
+              <button className="premium-btn-primary" disabled={!bulkTipo.tipo} onClick={aplicarTipoMasivo}>
+                Aplicar a {sortedLista.length}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── PREMIUM MODAL (info / warning / error / confirm) ─── */}
       {modal && (
