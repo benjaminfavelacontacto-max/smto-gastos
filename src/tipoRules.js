@@ -447,6 +447,14 @@ const SAT_PC_PREFIXES = ['4321', '4322', '4323']
  * @param {string} rfc            RFC del emisor (opcional) — activa TIPO_RULES_RFC
  */
 export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ = '', rfc = '') {
+  const tipo = detectarTipoBase(proveedor, descripcion, categoria, claveProdServ, rfc)
+  // Soporte (categoría 'Servicio', incluye SOCIOS_COMO_SOPORTE): todo consumo
+  // de alimentos de un ingeniero de soporte es viático → 'Consumo Viáticos'.
+  if (categoria === 'Servicio' && tipo === 'Consumo') return 'Consumo Viáticos'
+  return tipo
+}
+
+function detectarTipoBase(proveedor, descripcion, categoria, claveProdServ = '', rfc = '') {
   const texto = `${proveedor || ''} ${descripcion || ''}`.toUpperCase()
   const isVentas = categoria === 'Ventas' || categoria === 'Socio'
 

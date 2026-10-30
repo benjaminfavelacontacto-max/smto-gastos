@@ -42,6 +42,8 @@ const casosTipo = [
   ['Hotel factura hospedaje', ['HOTEL FIESTA INN', 'Hospedaje', 'Servicio'], 'Hotel'],
   ['Hotel factura habitación + alimentos', ['HOTEL FIESTA INN', 'Habitación con desayuno', 'Servicio'], 'Hotel'],
   ['Hotel por nombre sin concepto de comida', ['CITY EXPRESS', 'Noche', 'Servicio'], 'Hotel'],
+  ['Soporte: restaurante "Consumo" → Consumo Viáticos', ['MARIA DEL MAR CAYON GONZALEZ', 'Consumo De Alimentos Y Bebidas', 'Servicio'], 'Consumo Viáticos'],
+  ['Admin: restaurante sigue como Consumo', ['MARIA DEL MAR CAYON GONZALEZ', 'Consumo De Alimentos Y Bebidas', 'Admin'], 'Consumo'],
   ['Gasolinera desconocida por clave SAT', ['MULTISERVICIO LOS PITS', 'Premium', 'Servicio', '15101514'], 'Gasolina Viáticos'],
 ]
 

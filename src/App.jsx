@@ -473,7 +473,9 @@ const bancoContradiceOrigen = g => !g.hizoMatch && ORIGENES_FUERA_CLARA.has(g.or
 
 /* Filtros rápidos (chips) — solo filtran la VISTA; el export usa `lista`. */
 const tieneXML = g => !!(g.xmlContent || g.xmlFile)
-const necesitaRevisarMatch = g => conflictoOrigen(g) || (!!g.hizoMatch && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80)
+// matchConfirmado: el usuario confirmó el vínculo en el asistente de
+// conciliación («Confirmar vínculo»); ya no se pide revisarlo de nuevo.
+const necesitaRevisarMatch = g => conflictoOrigen(g) || (!!g.hizoMatch && !g.matchConfirmado && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80)
 
 /* Etiqueta legible del estado bancario de un gasto (texto, no solo color).
    Sin método guardado (p. ej. cotejo con Saldos o datos viejos) → genérico. */
@@ -487,7 +489,7 @@ const estadoBanco = g => {
   if (necesitaRevisarMatch(g)) return { label: 'Revisar', cls: 'warn', title: `Coincidencia por revisar: ${g.matchMetodo} (${g.matchConfianza}%)` }
   const m = g.matchMetodo || ''
   const label = /propina/i.test(m) ? 'Propina ✓' : /auth|autoriz/i.test(m) ? 'Código ✓' : 'Conciliado'
-  return { label, cls: 'ok', title: m ? `Conciliado con banco: ${m} (${g.matchConfianza}%)` : 'Conciliado con el banco' }
+  return { label, cls: 'ok', title: m ? `Conciliado con banco: ${m} (${g.matchConfianza}%)${g.matchConfirmado ? ' · vínculo confirmado por el colaborador' : ''}` : 'Conciliado con el banco' }
 }
 const FILTROS_RAPIDOS = [
   { key: 'todos',       label: 'Todos',        test: () => true },
@@ -3139,6 +3141,34 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
   const sinObs  = matchedRows.filter(m => !requiereRevision(m))
 
   const handleCancel = onCancel || onClose
+
+  // ── Decisiones del asistente ── No tocan ningún dato hasta «Aplicar».
+  // decision[invoiceId] = 'confirmada' | 'descartada'. Una coincidencia «por
+  // revisar» SIN decisión explícita no se aplica (queda sin vincular, con
+  // aviso en el resumen); una «sin observaciones» se aplica salvo que el
+  // usuario la marque «No corresponde». No reutiliza `validado` (revisión
+  // manual del renglón): es solo la decisión sobre el vínculo banco↔factura.
+  const [decision, setDecision] = useState({})
+  const decidir = (invoiceId, d) => setDecision(prev => {
+    const n = { ...prev }
+    if (n[invoiceId] === d) delete n[invoiceId]; else n[invoiceId] = d
+    return n
+  })
+  const seAplica = m => decision[m.invoiceId] === 'descartada' ? false
+    : requiereRevision(m) ? decision[m.invoiceId] === 'confirmada' : true
+  const aplicables = matchedRows.filter(seAplica)
+  const excluidos = matchedRows.filter(m => !seAplica(m)).map(m => m.invoiceId)
+  const revPendientes = revisar.filter(m => !decision[m.invoiceId])
+  const revConfirmadas = revisar.filter(m => decision[m.invoiceId] === 'confirmada')
+  const descartadas = matchedRows.filter(m => decision[m.invoiceId] === 'descartada')
+  const [paso, setPaso] = useState(1)
+  const [avanzado, setAvanzado] = useState(false)
+  const [verSinObs, setVerSinObs] = useState(false)
+  const [salir, setSalir] = useState(false)
+  const confirmados = revConfirmadas.map(m => m.invoiceId)
+  const aplicar = () => (aplicables.length ? onConfirm(excluidos, confirmados) : handleCancel())
+  // Salir sin aplicar: si ya decidió algo, confirmar antes de perderlo.
+  const pedirSalir = () => (Object.keys(decision).length ? setSalir(true) : handleCancel())
   const [tab, setTab] = useState(revisar.length ? 'revisar' : sinFactura.length ? 'sinFactura' : 'coincidencias')
   const [query, setQuery] = useState('')
   const [expandedId, setExpandedId] = useState(null)
@@ -3152,19 +3182,23 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        if (editando) setEditando(null)
+        if (salir) setSalir(false)
+        else if (editando) setEditando(null)
         else if (masivo) setMasivo(null)
-        else handleCancel && handleCancel()
+        else pedirSalir()
       } else if (e.key === 'Enter') {
         const tag = e.target && e.target.tagName
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return
+        if (salir) return
         e.preventDefault()
-        onConfirm && onConfirm()
+        // Enter avanza el asistente; solo aplica en el último paso.
+        if (!avanzado && paso < 3) setPaso(paso + 1)
+        else aplicar()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleCancel, onConfirm, editando, masivo])
+  })
 
   const fmtMoney = (n, currency = 'MXN') => {
     const num = Number(n) || 0
@@ -3214,8 +3248,10 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
     const rev = requiereRevision(m)
     const dif = diferencia(m)
     const cobradoInv = tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN
+    const dec = decision[m.invoiceId]
+    const conflictoOrigenLabel = conflicto(m) ? ORIGEN_POR_KEY[origenDe(m.invoiceId)]?.label : null
     return (
-      <div key={id} className={`cz-card${rev ? ' is-rev' : ''}${open ? ' is-open' : ''}`}>
+      <div key={id} className={`cz-card${rev ? ' is-rev' : ''}${open ? ' is-open' : ''}${dec === 'descartada' ? ' is-descartada' : ''}`}>
         <button className="cz-card-head" aria-expanded={open} onClick={() => setExpandedId(open ? null : id)}>
           <div className="cz-side">
             <span className="cz-side-label">Clara cobró</span>
@@ -3230,13 +3266,35 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
             <span className="cz-meta">{m.invoiceName}{m.invoiceNumber ? ` · ${m.invoiceNumber}` : ''}</span>
           </div>
           <div className="cz-status">
-            <span className={`st-badge ${rev ? 'warn' : 'ok'}`}>{rev ? 'Requiere revisión' : 'Sin observaciones'}</span>
+            {dec === 'descartada' ? <span className="st-badge muted">No corresponde</span>
+              : dec === 'confirmada' ? <span className="st-badge ok">Confirmada por ti</span>
+              : <span className={`st-badge ${rev ? 'warn' : 'ok'}`}>{rev ? 'Requiere revisión' : 'Sin observaciones'}</span>}
             {dif !== null && dif !== 0 && <span className="cz-dif">Diferencia {fmtMoney(dif)}</span>}
             {m.propina > 0 && <span className="cz-tip">+ propina {fmtMoney(m.propina, m.invoiceMoneda)}</span>}
           </div>
           <ChevronDown size={15} className={`cz-chev${open ? ' is-open' : ''}`} aria-hidden="true" />
         </button>
         <p className="cz-reason">{motivo(m)}</p>
+        {(rev || dec) && (
+          <div className="cz-decide">
+            <span className="cz-decide-q">
+              {dec === 'confirmada' ? 'Confirmaste que es la misma compra: se aplicará.'
+                : dec === 'descartada' ? 'Marcaste que no corresponde: no se vinculará y el cargo quedará sin comprobante.'
+                : '¿Es la misma compra?'}
+            </span>
+            {rev && (
+              <button className={`cz-btn${dec === 'confirmada' ? ' primary' : ''}`} aria-pressed={dec === 'confirmada'} onClick={() => {
+                if (conflictoOrigenLabel && dec !== 'confirmada') guardarOrigen([m.invoiceId], null, '')
+                decidir(m.invoiceId, 'confirmada')
+              }}>
+                <Check size={14} /> {conflictoOrigenLabel && dec !== 'confirmada' ? `Confirmar y quitar «${conflictoOrigenLabel}»` : 'Confirmar vínculo'}
+              </button>
+            )}
+            <button className={`cz-btn${dec === 'descartada' ? ' is-on' : ''}`} aria-pressed={dec === 'descartada'} onClick={() => decidir(m.invoiceId, 'descartada')}>
+              <X size={14} /> No corresponde
+            </button>
+          </div>
+        )}
         {open && (
           <div className="cz-detail">
             <div className="cz-math">
@@ -3262,6 +3320,9 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                   Quitar «{ORIGEN_POR_KEY[origenDe(m.invoiceId)]?.label}» y dejar el cargo
                 </button>
               )}
+              {!rev && !dec && (
+                <button className="cz-btn" onClick={() => decidir(m.invoiceId, 'descartada')}><X size={14} /> No corresponde</button>
+              )}
               <span className="cz-diag">Diagnóstico: pase {m.pass} · {m.method} · {m.confidence}</span>
             </div>
           </div>
@@ -3286,138 +3347,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
     .filter(f => coincide(f.proveedor, f.noFactura, f.total, formatDateDisplay(f.fecha)))
   const faltanIds = sinCargo.filter(f => esPorIdentificar(origenDe(f.id))).map(f => f.id)
 
-  const TABS = [
-    { key: 'revisar',       grupo: 'banco', label: 'Necesitan revisión',             n: revisar.length,    cls: 'warn' },
-    { key: 'sinFactura',    grupo: 'banco', label: 'Cargos sin factura o ticket',    n: sinFactura.length, cls: 'muted' },
-    { key: 'coincidencias', grupo: 'banco', label: 'Coincidencias sin observaciones', n: sinObs.length,    cls: 'ok' },
-    { key: 'sinCargo',      grupo: 'docs',  label: 'Facturas sin cargo en Clara',    n: sinCargo.length,   cls: 'info' },
-  ]
-  const visibles = { revisar: verRevisar.length, sinFactura: verSinFact.length, coincidencias: verCoinc.length, sinCargo: verSinCargo.length }[tab]
-  const totalesTab = { revisar: revisar.length, sinFactura: sinFactura.length, coincidencias: sinObs.length, sinCargo: sinCargo.length }[tab]
-
-  const cta = revisar.length
-    ? { label: `Revisar ${revisar.length} ${revisar.length === 1 ? 'coincidencia' : 'coincidencias'}`, tab: 'revisar' }
-    : sinFactura.length
-    ? { label: `Ver ${sinFactura.length} ${sinFactura.length === 1 ? 'cargo' : 'cargos'} sin comprobante`, tab: 'sinFactura' }
-    : { label: 'Ver todas las coincidencias', tab: 'coincidencias' }
-
-  const pct = totalCargos ? Math.round((matchedRows.length / totalCargos) * 100) : 0
-
-  return (
-    <motion.div className="cm-fs-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-      <motion.div
-        className="cm-fs-shell cz-shell"
-        role="dialog"
-        aria-labelledby="cz-title"
-        initial={{ opacity: 0, y: 24, scale: 0.985 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 12, scale: 0.99 }}
-        transition={{ type: 'spring', stiffness: 240, damping: 26 }}
-      >
-        <button className="cm-fs-close" onClick={handleCancel} aria-label="Cerrar sin aplicar" title="Cerrar sin aplicar">
-          <X size={18} />
-        </button>
-
-        <div className="cz-scroll">
-          {/* ── Encabezado ── */}
-          <header className="cz-head">
-            <h2 className="cz-title" id="cz-title">Revisa los resultados de tu conciliación</h2>
-            <p className="cz-sub">
-              Comparamos <b>{totalCargos}</b> {totalCargos === 1 ? 'cargo' : 'cargos'} de Clara con <b>{totalDocs}</b> {totalDocs === 1 ? 'factura o ticket' : 'facturas y tickets'}.
-            </p>
-            <p className="cz-msg">
-              <Info size={14} aria-hidden="true" /> Los cargos del estado ya se realizaron. Aquí verificamos cuáles tienen comprobante; esto no significa que debas dinero.
-            </p>
-          </header>
-
-          {/* ── Dos universos, cada uno con su denominador ── */}
-          <section className="cz-universos">
-            <div className="cz-uni">
-              <div className="cz-uni-head"><CreditCard size={15} aria-hidden="true" /> Movimientos en Clara <strong>{totalCargos} {totalCargos === 1 ? 'cargo' : 'cargos'}</strong></div>
-              <div className="cz-uni-chips">
-                <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{sinObs.length}</b> sin observaciones</button>
-                <button className="cz-chip warn" onClick={() => setTab('revisar')}><b>{revisar.length}</b> requieren revisión</button>
-                <button className="cz-chip muted" onClick={() => setTab('sinFactura')}><b>{sinFactura.length}</b> sin factura o ticket</button>
-              </div>
-              <div className="cz-progress-label">Coincidencias propuestas: <b>{matchedRows.length} de {totalCargos}</b></div>
-              <div className="cz-progress" aria-label={`${pct}% de los cargos con coincidencia propuesta`}><span style={{ width: `${pct}%` }} /></div>
-            </div>
-            <div className="cz-uni">
-              <div className="cz-uni-head"><FileText size={15} aria-hidden="true" /> Comprobantes cargados <strong>{totalDocs} {totalDocs === 1 ? 'documento' : 'documentos'}</strong></div>
-              <div className="cz-uni-chips">
-                <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{matchedRows.length}</b> vinculados con Clara</button>
-                <button className="cz-chip info" onClick={() => setTab('sinCargo')}><b>{sinCargo.length}</b> sin cargo en este estado</button>
-              </div>
-              {sinCargo.length > 0 && (
-                <div className="cz-progress-label">Medio de pago indicado: <b>{indicados} de {sinCargo.length}</b></div>
-              )}
-            </div>
-          </section>
-
-          <div className="cz-cta-row">
-            <button className="cz-cta" onClick={() => setTab(cta.tab)}>{cta.label} <ArrowRight size={14} /></button>
-            <button className="cz-link" aria-expanded={ayuda} onClick={() => setAyuda(v => !v)}>¿Qué significa cada resultado?</button>
-          </div>
-          {ayuda && (
-            <dl className="cz-ayuda">
-              <div><dt>Necesitan revisión</dt><dd>Cargo y factura parecen la misma compra, pero algo no cuadra al centavo o hay un dato que verificar.</dd></div>
-              <div><dt>Cargos sin factura o ticket</dt><dd>Clara ya los cobró y falta subir su comprobante. No es un adeudo: es papeleo pendiente.</dd></div>
-              <div><dt>Coincidencias sin observaciones</dt><dd>Cargo y factura coinciden según las reglas. No significa que tú ya los marcaste como revisados.</dd></div>
-              <div><dt>Facturas sin cargo en Clara</dt><dd>Comprobantes que no aparecen en este archivo. Es normal si pagaste en efectivo, con tu tarjeta, otra cuenta o en otro mes.</dd></div>
-            </dl>
-          )}
-
-          {/* ── Pestañas por acción, agrupadas por universo ── */}
-          <div className="cz-tabs" role="tablist">
-            <span className="cz-tabs-group">Movimientos de Clara</span>
-            {TABS.filter(t => t.grupo === 'banco').map(t => (
-              <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
-                {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
-              </button>
-            ))}
-            <span className="cz-tabs-sep" aria-hidden="true" />
-            <span className="cz-tabs-group">Comprobantes cargados</span>
-            {TABS.filter(t => t.grupo === 'docs').map(t => (
-              <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
-                {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="cz-search-row">
-            <label className="cm-fs-search cz-search">
-              <Search size={14} strokeWidth={2.2} />
-              <input type="text" placeholder="Buscar por proveedor, folio, fecha, importe o descripción…" value={query} onChange={e => setQuery(e.target.value)} aria-label="Buscar en esta pestaña" />
-            </label>
-            <span className="cz-search-hint">{q ? `${visibles} visibles de ${totalesTab} · ` : ''}busca solo en esta pestaña</span>
-          </div>
-
-          {/* ── Contenido ── */}
-          <div className="cz-pane">
-            {tab === 'revisar' && (
-              <>
-                <p className="cz-note">Estos cargos quedaron vinculados, pero conviene verificarlos. Si proveedor, fecha y monto son correctos, puedes aplicarlos así.</p>
-                {verRevisar.length === 0
-                  ? <div className="cm-fs-empty">{revisar.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias por revisar.'}</div>
-                  : verRevisar.map(renderMatch)}
-              </>
-            )}
-
-            {tab === 'coincidencias' && (
-              <>
-                <p className="cz-note">Vínculos sin observaciones según las reglas de conciliación. Que estén aquí no los marca como revisados por ti.</p>
-                {verCoinc.length === 0
-                  ? <div className="cm-fs-empty">{sinObs.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias sin observaciones.'}</div>
-                  : verCoinc.map(renderMatch)}
-              </>
-            )}
-
-            {tab === 'sinFactura' && (
-              <>
-                <p className="cz-note">Clara ya cobró estos cargos y falta su factura o ticket en el reporte. No es dinero que debas.</p>
-                {verSinFact.length === 0
-                  ? <div className="cm-fs-empty">{sinFactura.length ? 'Ninguno coincide con la búsqueda.' : 'Todos los cargos tienen su comprobante.'}</div>
-                  : verSinFact.map((s, i) => (
+  const renderSinFactura = (s, i) => (
                     <div key={i} className="cz-card cz-card-simple">
                       <div className="cz-simple-main">
                         <span className="cz-side-label">Clara cobró</span>
@@ -3429,69 +3359,14 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                       </div>
                       <div className="cz-simple-side">
                         <span className="st-badge muted">Sin factura o ticket</span>
-                        <button className="cz-btn" onClick={() => onAgregarManual && onAgregarManual(s)} title="Aplica las coincidencias, cierra esta ventana y agrega un renglón manual">
+                        <button className="cz-btn" onClick={() => onAgregarManual && onAgregarManual(s, excluidos, confirmados)} title="Aplica las coincidencias, cierra esta ventana y agrega un renglón manual">
                           <Plus size={13} /> Aplicar y capturar a mano
                         </button>
                       </div>
                     </div>
-                  ))}
-              </>
-            )}
+  )
 
-            {tab === 'sinCargo' && (
-              <>
-                <p className="cz-note">
-                  Estas facturas no encontraron un movimiento en el estado de Clara que subiste. Puede ser normal si pagaste por otro medio o si el cargo aparece en otro periodo.
-                  Indicar el medio de pago es <b>informativo</b>: no equivale a comprobarlo contra Clara, no cambia importes y no aparece en el Excel contable.
-                </p>
-
-                <div className="cz-origen-resumen">
-                  <span><b>{sinCargo.length}</b> sin movimiento en este estado</span>
-                  <span>·</span>
-                  <span><b>{indicados} de {sinCargo.length}</b> con medio de pago indicado</span>
-                  {faltanIds.length > 0 && !masivo && (
-                    <button className="cz-btn" onClick={() => setMasivo({ origen: null })}>Clasificar las que faltan ({faltanIds.length})</button>
-                  )}
-                </div>
-
-                <div className="chips cz-origen-chips" role="group" aria-label="Filtrar por medio de pago">
-                  {[{ key: 'todas', label: 'Todas', n: sinCargo.length }, { key: 'sin_identificar', label: 'Por identificar', n: sinCargo.length - indicados },
-                    ...ORIGENES_PAGO.filter(o => o.key !== 'sin_identificar' && (!o.secundaria || conteoOrigen[o.key])).map(o => ({ key: o.key, label: o.corto, n: conteoOrigen[o.key] || 0 }))]
-                    .map(f => (
-                      <button key={f.key} className={`chip${filtroOrigen === f.key ? ' active' : ''}`} aria-pressed={filtroOrigen === f.key} onClick={() => setFiltroOrigen(f.key)}>
-                        {f.label}<span className="chip-n">{f.n}</span>
-                      </button>
-                    ))}
-                </div>
-
-                {deshacer && (
-                  <div className="cz-undo">
-                    {deshacer.texto}
-                    <button className="cz-link" onClick={() => {
-                      for (const p of deshacer.previos) onSetOrigen([p.id], p.origen, p.nota)
-                      setDeshacer(null)
-                    }}>Deshacer</button>
-                  </div>
-                )}
-
-                {masivo && (
-                  <div className="cz-editor cz-masivo">
-                    <div className="cz-editor-title">¿Cómo pagaste las {faltanIds.length} facturas sin clasificar?</div>
-                    <SelectorOrigen valor={masivo.origen} onChange={o => setMasivo({ origen: o })} esEspecial={esEspecial} />
-                    <div className="cz-editor-actions">
-                      <button className="cz-btn" onClick={() => setMasivo(null)}>Cancelar</button>
-                      <button className="cz-btn primary" disabled={!masivo.origen} onClick={() => {
-                        const previos = guardarOrigen(faltanIds, masivo.origen, '')
-                        setDeshacer({ previos, texto: `Marcaste ${faltanIds.length} ${faltanIds.length === 1 ? 'factura' : 'facturas'} como «${ORIGEN_POR_KEY[masivo.origen].label}».` })
-                        setMasivo(null)
-                      }}>Aplicar a {faltanIds.length} {faltanIds.length === 1 ? 'factura' : 'facturas'}</button>
-                    </div>
-                  </div>
-                )}
-
-                {verSinCargo.length === 0
-                  ? <div className="cm-fs-empty">{sinCargo.length ? 'Ninguna factura en este filtro.' : 'Todas tus facturas encontraron su cargo en Clara.'}</div>
-                  : verSinCargo.map(f => {
+  const renderSinCargo = f => {
                     const o = origenDe(f.id)
                     const abierto = editando?.id === f.id
                     return (
@@ -3501,9 +3376,9 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                           <strong className="cz-amount">{fmtMoney(f.total, f.moneda)}{f.moneda && f.moneda !== 'MXN' ? ` ${f.moneda}` : ' MXN'}</strong>
                           <span className="cz-meta">{f.proveedor}{f.noFactura ? ` · ${f.noFactura}` : ''} · Factura: {formatDateDisplay(f.fecha) || '—'}</span>
                           <span className="cz-origen-line">
-                            <span className="st-badge muted">Sin coincidencia en este archivo</span>
+                            <span className="st-badge muted">No aparece en este estado de Clara</span>
                             {esPorIdentificar(o)
-                              ? <span className="cz-origen-empty">{o === 'sin_identificar' ? 'Por identificar' : 'Aún no identificas cómo se pagó'}</span>
+                              ? <span className="cz-origen-empty">{o === 'sin_identificar' ? 'Por identificar' : 'Medio de pago sin indicar'}</span>
                               : <span className="st-badge info">{etiquetaOrigen(o)}</span>}
                           </span>
                         </div>
@@ -3536,21 +3411,428 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                         )}
                       </div>
                     )
-                  })}
-              </>
-            )}
-          </div>
-        </div>
+  }
 
-        {/* ── Pie: dice exactamente qué hace cada botón ── */}
-        <footer className="cm-fs-footer">
-          <span className="cm-fs-footer-hint">
-            «Aplicar» vincula {matchedRows.length} {matchedRows.length === 1 ? 'cargo' : 'cargos'} con su factura (fecha de cobro y monto cobrado del banco).
-            «Descartar» deja el reporte como estaba. Los medios de pago que indiques se guardan en ambos casos.
-          </span>
-          <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={handleCancel}>Descartar resultados</button>
-          <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={onConfirm}>Aplicar coincidencias</button>
-        </footer>
+  const renderDeshacerYMasivo = () => (
+    <>
+                {deshacer && (
+                  <div className="cz-undo">
+                    {deshacer.texto}
+                    <button className="cz-link" onClick={() => {
+                      for (const p of deshacer.previos) onSetOrigen([p.id], p.origen, p.nota)
+                      setDeshacer(null)
+                    }}>Deshacer</button>
+                  </div>
+                )}
+
+                {masivo && (
+                  <div className="cz-editor cz-masivo">
+                    <div className="cz-editor-title">¿Cómo pagaste las {faltanIds.length} facturas sin clasificar?</div>
+                    <SelectorOrigen valor={masivo.origen} onChange={o => setMasivo({ origen: o })} esEspecial={esEspecial} />
+                    <div className="cz-editor-actions">
+                      <button className="cz-btn" onClick={() => setMasivo(null)}>Cancelar</button>
+                      <button className="cz-btn primary" disabled={!masivo.origen} onClick={() => {
+                        const previos = guardarOrigen(faltanIds, masivo.origen, '')
+                        setDeshacer({ previos, texto: `Marcaste ${faltanIds.length} ${faltanIds.length === 1 ? 'factura' : 'facturas'} como «${ORIGEN_POR_KEY[masivo.origen].label}».` })
+                        setMasivo(null)
+                      }}>Aplicar a {faltanIds.length} {faltanIds.length === 1 ? 'factura' : 'facturas'}</button>
+                    </div>
+                  </div>
+                )}
+
+    </>
+  )
+
+  const renderChipsOrigen = () => (
+                <div className="chips cz-origen-chips" role="group" aria-label="Filtrar por medio de pago">
+                  {[{ key: 'todas', label: 'Todas', n: sinCargo.length }, { key: 'sin_identificar', label: 'Por identificar', n: sinCargo.length - indicados },
+                    ...ORIGENES_PAGO.filter(o => o.key !== 'sin_identificar' && (!o.secundaria || conteoOrigen[o.key])).map(o => ({ key: o.key, label: o.corto, n: conteoOrigen[o.key] || 0 }))]
+                    .map(f => (
+                      <button key={f.key} className={`chip${filtroOrigen === f.key ? ' active' : ''}`} aria-pressed={filtroOrigen === f.key} onClick={() => setFiltroOrigen(f.key)}>
+                        {f.label}<span className="chip-n">{f.n}</span>
+                      </button>
+                    ))}
+                </div>
+  )
+
+  const TABS = [
+    { key: 'revisar',       grupo: 'banco', label: 'Necesitan revisión',             n: revisar.length,    cls: 'warn' },
+    { key: 'sinFactura',    grupo: 'banco', label: 'Cargos sin factura o ticket',    n: sinFactura.length, cls: 'muted' },
+    { key: 'coincidencias', grupo: 'banco', label: 'Coincidencias sin observaciones', n: sinObs.length,    cls: 'ok' },
+    { key: 'sinCargo',      grupo: 'docs',  label: 'Facturas sin cargo en Clara',    n: sinCargo.length,   cls: 'info' },
+  ]
+  const visibles = { revisar: verRevisar.length, sinFactura: verSinFact.length, coincidencias: verCoinc.length, sinCargo: verSinCargo.length }[tab]
+  const totalesTab = { revisar: revisar.length, sinFactura: sinFactura.length, coincidencias: sinObs.length, sinCargo: sinCargo.length }[tab]
+
+  const cta = revisar.length
+    ? { label: `Revisar ${revisar.length} ${revisar.length === 1 ? 'coincidencia' : 'coincidencias'}`, tab: 'revisar' }
+    : sinFactura.length
+    ? { label: `Ver ${sinFactura.length} ${sinFactura.length === 1 ? 'cargo' : 'cargos'} sin comprobante`, tab: 'sinFactura' }
+    : { label: 'Ver todas las coincidencias', tab: 'coincidencias' }
+
+  // Búsqueda y filtros por medio de pago solo con muchos documentos: con 3
+  // facturas son ruido.
+  const UMBRAL_FILTROS = 12
+  const PASOS = [
+    { n: 1, label: 'Revisar coincidencias', extra: revPendientes.length ? `${revPendientes.length} pendiente${revPendientes.length === 1 ? '' : 's'}` : '' },
+    { n: 2, label: 'Otros pagos', extra: sinCargo.length + sinFactura.length ? `${sinCargo.length + sinFactura.length}` : '' },
+    { n: 3, label: 'Finalizar', extra: '' },
+  ]
+  const etiquetaAplicar = !aplicables.length ? 'Cerrar sin aplicar'
+    : aplicables.length === matchedRows.length
+      ? `Aplicar ${aplicables.length} ${aplicables.length === 1 ? 'coincidencia' : 'coincidencias'}`
+      : `Aplicar ${aplicables.length} de ${matchedRows.length} coincidencias`
+
+  const pct = totalCargos ? Math.round((matchedRows.length / totalCargos) * 100) : 0
+
+  return (
+    <motion.div className="cm-fs-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+      <motion.div
+        className="cm-fs-shell cz-shell"
+        role="dialog"
+        aria-labelledby="cz-title"
+        initial={{ opacity: 0, y: 24, scale: 0.985 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 12, scale: 0.99 }}
+        transition={{ type: 'spring', stiffness: 240, damping: 26 }}
+      >
+        <button className="cm-fs-close" onClick={pedirSalir} aria-label="Cerrar sin aplicar" title="Cerrar sin aplicar">
+          <X size={18} />
+        </button>
+
+        {avanzado ? (
+          <>
+          <div className="cz-scroll">
+            {/* ── Encabezado ── */}
+            <header className="cz-head">
+              <h2 className="cz-title" id="cz-title">Conciliación completa</h2>
+              <p className="cz-sub">
+                Comparamos <b>{totalCargos}</b> {totalCargos === 1 ? 'cargo' : 'cargos'} de Clara con <b>{totalDocs}</b> {totalDocs === 1 ? 'factura o ticket' : 'facturas y tickets'}.
+              </p>
+              <p className="cz-msg">
+                <Info size={14} aria-hidden="true" /> Los cargos del estado ya se realizaron. Aquí verificamos cuáles tienen comprobante; esto no significa que debas dinero.
+              </p>
+            </header>
+
+            {/* ── Dos universos, cada uno con su denominador ── */}
+            <section className="cz-universos">
+              <div className="cz-uni">
+                <div className="cz-uni-head"><CreditCard size={15} aria-hidden="true" /> Movimientos en Clara <strong>{totalCargos} {totalCargos === 1 ? 'cargo' : 'cargos'}</strong></div>
+                <div className="cz-uni-chips">
+                  <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{sinObs.length}</b> sin observaciones</button>
+                  <button className="cz-chip warn" onClick={() => setTab('revisar')}><b>{revisar.length}</b> requieren revisión</button>
+                  <button className="cz-chip muted" onClick={() => setTab('sinFactura')}><b>{sinFactura.length}</b> sin factura o ticket</button>
+                </div>
+                <div className="cz-progress-label">Coincidencias propuestas: <b>{matchedRows.length} de {totalCargos}</b></div>
+                <div className="cz-progress" aria-label={`${pct}% de los cargos con coincidencia propuesta`}><span style={{ width: `${pct}%` }} /></div>
+              </div>
+              <div className="cz-uni">
+                <div className="cz-uni-head"><FileText size={15} aria-hidden="true" /> Comprobantes cargados <strong>{totalDocs} {totalDocs === 1 ? 'documento' : 'documentos'}</strong></div>
+                <div className="cz-uni-chips">
+                  <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{matchedRows.length}</b> vinculados con Clara</button>
+                  <button className="cz-chip info" onClick={() => setTab('sinCargo')}><b>{sinCargo.length}</b> sin cargo en este estado</button>
+                </div>
+                {sinCargo.length > 0 && (
+                  <div className="cz-progress-label">Medio de pago indicado: <b>{indicados} de {sinCargo.length}</b></div>
+                )}
+              </div>
+            </section>
+
+            <div className="cz-cta-row">
+              <button className="cz-cta" onClick={() => setTab(cta.tab)}>{cta.label} <ArrowRight size={14} /></button>
+              <button className="cz-link" aria-expanded={ayuda} onClick={() => setAyuda(v => !v)}>¿Qué significa cada resultado?</button>
+            </div>
+            {ayuda && (
+              <dl className="cz-ayuda">
+                <div><dt>Necesitan revisión</dt><dd>Cargo y factura parecen la misma compra, pero algo no cuadra al centavo o hay un dato que verificar.</dd></div>
+                <div><dt>Cargos sin factura o ticket</dt><dd>Clara ya los cobró y falta subir su comprobante. No es un adeudo: es papeleo pendiente.</dd></div>
+                <div><dt>Coincidencias sin observaciones</dt><dd>Cargo y factura coinciden según las reglas. No significa que tú ya los marcaste como revisados.</dd></div>
+                <div><dt>Facturas sin cargo en Clara</dt><dd>Comprobantes que no aparecen en este archivo. Es normal si pagaste en efectivo, con tu tarjeta, otra cuenta o en otro mes.</dd></div>
+              </dl>
+            )}
+
+            {/* ── Pestañas por acción, agrupadas por universo ── */}
+            <div className="cz-tabs" role="tablist">
+              <span className="cz-tabs-group">Movimientos de Clara</span>
+              {TABS.filter(t => t.grupo === 'banco').map(t => (
+                <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
+                  {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
+                </button>
+              ))}
+              <span className="cz-tabs-sep" aria-hidden="true" />
+              <span className="cz-tabs-group">Comprobantes cargados</span>
+              {TABS.filter(t => t.grupo === 'docs').map(t => (
+                <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
+                  {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="cz-search-row">
+              <label className="cm-fs-search cz-search">
+                <Search size={14} strokeWidth={2.2} />
+                <input type="text" placeholder="Buscar por proveedor, folio, fecha, importe o descripción…" value={query} onChange={e => setQuery(e.target.value)} aria-label="Buscar en esta pestaña" />
+              </label>
+              <span className="cz-search-hint">{q ? `${visibles} visibles de ${totalesTab} · ` : ''}busca solo en esta pestaña</span>
+            </div>
+
+            {/* ── Contenido ── */}
+            <div className="cz-pane">
+              {tab === 'revisar' && (
+                <>
+                  <p className="cz-note">Estos cargos quedaron vinculados, pero conviene verificarlos. Si proveedor, fecha y monto son correctos, puedes aplicarlos así.</p>
+                  {verRevisar.length === 0
+                    ? <div className="cm-fs-empty">{revisar.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias por revisar.'}</div>
+                    : verRevisar.map(renderMatch)}
+                </>
+              )}
+
+              {tab === 'coincidencias' && (
+                <>
+                  <p className="cz-note">Vínculos sin observaciones según las reglas de conciliación. Que estén aquí no los marca como revisados por ti.</p>
+                  {verCoinc.length === 0
+                    ? <div className="cm-fs-empty">{sinObs.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias sin observaciones.'}</div>
+                    : verCoinc.map(renderMatch)}
+                </>
+              )}
+
+              {tab === 'sinFactura' && (
+                <>
+                  <p className="cz-note">Clara ya cobró estos cargos y falta su factura o ticket en el reporte. No es dinero que debas.</p>
+                  {verSinFact.length === 0
+                    ? <div className="cm-fs-empty">{sinFactura.length ? 'Ninguno coincide con la búsqueda.' : 'Todos los cargos tienen su comprobante.'}</div>
+                    : verSinFact.map(renderSinFactura)}
+                </>
+              )}
+
+              {tab === 'sinCargo' && (
+                <>
+                  <p className="cz-note">
+                    Estas facturas no encontraron un movimiento en el estado de Clara que subiste. Puede ser normal si pagaste por otro medio o si el cargo aparece en otro periodo.
+                    Indicar el medio de pago es <b>informativo</b>: no equivale a comprobarlo contra Clara, no cambia importes y no aparece en el Excel contable.
+                  </p>
+
+                  <div className="cz-origen-resumen">
+                    <span><b>{sinCargo.length}</b> sin movimiento en este estado</span>
+                    <span>·</span>
+                    <span><b>{indicados} de {sinCargo.length}</b> con medio de pago indicado</span>
+                    {faltanIds.length > 0 && !masivo && (
+                      <button className="cz-btn" onClick={() => setMasivo({ origen: null })}>Clasificar las que faltan ({faltanIds.length})</button>
+                    )}
+                  </div>
+
+                  {renderChipsOrigen()}
+
+                  {renderDeshacerYMasivo()}
+
+                  {verSinCargo.length === 0
+                    ? <div className="cm-fs-empty">{sinCargo.length ? 'Ninguna factura en este filtro.' : 'Todas tus facturas encontraron su cargo en Clara.'}</div>
+                    : verSinCargo.map(renderSinCargo)}
+                </>
+              )}
+            </div>
+          </div>
+
+            <footer className="cm-fs-footer">
+              <span className="cm-fs-footer-hint">
+                Vista completa para auditoría. Las decisiones de «Confirmar vínculo» y «No corresponde» se respetan al aplicar.
+              </span>
+              <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={() => setAvanzado(false)}>← Volver al asistente</button>
+              <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={aplicar}>{etiquetaAplicar}</button>
+            </footer>
+          </>
+        ) : (
+          <>
+            {/* ── Encabezado compacto: contexto + 3 indicadores + pasos ── */}
+            <header className="czw-head">
+              <h2 className="cz-title" id="cz-title">Revisión de gastos</h2>
+              <p className="cz-sub">
+                Comparamos <b>{totalCargos}</b> {totalCargos === 1 ? 'movimiento' : 'movimientos'} de Clara con <b>{totalDocs}</b> {totalDocs === 1 ? 'comprobante' : 'comprobantes'}.
+                {' '}<button className="cz-link" aria-expanded={ayuda} onClick={() => setAyuda(v => !v)}>¿Qué significa?</button>
+              </p>
+              {ayuda && (
+                <p className="czw-ayuda">
+                  Los cargos de Clara ya se realizaron: aquí solo verificamos cuáles tienen su factura o ticket. <b>Esto no es un adeudo.</b>
+                  {' '}«Sin observaciones» significa que cuadran según las reglas, no que ya los revisaste tú.
+                </p>
+              )}
+              <div className="czw-kpis">
+                <button className="czw-kpi ok" onClick={() => { setPaso(1); setVerSinObs(true) }}>
+                  <b>{sinObs.length}</b><span>sin observaciones</span>
+                </button>
+                <button className={`czw-kpi ${revisar.length ? 'warn' : 'muted'}`} onClick={() => setPaso(1)}>
+                  <b>{revisar.length}</b><span>{revisar.length === 1 ? 'por revisar' : 'por revisar'}</span>
+                </button>
+                <button className={`czw-kpi ${sinCargo.length ? 'info' : 'muted'}`} onClick={() => setPaso(2)}>
+                  <b>{sinCargo.length}</b><span>sin cargo en Clara</span>
+                </button>
+                {sinFactura.length > 0 && (
+                  <button className="czw-kpi muted" onClick={() => setPaso(2)}>
+                    <b>{sinFactura.length}</b><span>{sinFactura.length === 1 ? 'cargo sin comprobante' : 'cargos sin comprobante'}</span>
+                  </button>
+                )}
+              </div>
+              <nav className="czw-steps" aria-label="Pasos de la revisión">
+                {PASOS.map(p => (
+                  <button key={p.n} className={`czw-step${paso === p.n ? ' active' : ''}${paso > p.n ? ' done' : ''}`} aria-current={paso === p.n ? 'step' : undefined} onClick={() => setPaso(p.n)}>
+                    <span className="czw-step-n">{paso > p.n ? <Check size={12} /> : p.n}</span>
+                    <span className="czw-step-txt">{p.label}{p.extra && <em>{p.extra}</em>}</span>
+                  </button>
+                ))}
+              </nav>
+            </header>
+
+            {/* ── Una sola tarea a la vez ── */}
+            <div className="cz-scroll czw-body">
+              {paso === 1 && (
+                <div className="cz-pane">
+                  {matchedRows.length === 0 ? (
+                    <>
+                      <h3 className="czw-h">No encontramos coincidencias</h3>
+                      <p className="czw-p">Ningún cargo de este archivo coincide con tus comprobantes. Revisa que sea el estado de cuenta del mismo periodo.</p>
+                    </>
+                  ) : revisar.length ? (
+                    <>
+                      <h3 className="czw-h">{revisar.length === 1 ? 'Hay 1 coincidencia que requiere tu revisión' : `Hay ${revisar.length} coincidencias que requieren tu revisión`}</h3>
+                      <p className="czw-p">Confirma si es la misma compra o márcala como «No corresponde». Las que dejes sin decidir no se aplicarán.</p>
+                      {revisar.map(renderMatch)}
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="czw-h">Nada que revisar</h3>
+                      <p className="czw-p">{sinObs.length === 1 ? 'La coincidencia cuadró' : `Las ${sinObs.length} coincidencias cuadraron`} según las reglas. Puedes ver el detalle si quieres.</p>
+                    </>
+                  )}
+                  {sinObs.length > 0 && (
+                    <div className="czw-acc">
+                      <button className="czw-acc-head" aria-expanded={verSinObs} onClick={() => setVerSinObs(v => !v)}>
+                        <CheckCircle2 size={15} className="czw-acc-ic" />
+                        {verSinObs ? 'Ocultar' : 'Ver'} {sinObs.length} {sinObs.length === 1 ? 'coincidencia sin observaciones' : 'coincidencias sin observaciones'}
+                        <ChevronDown size={15} className={`cz-chev${verSinObs ? ' is-open' : ''}`} />
+                      </button>
+                      {verSinObs && <div className="czw-acc-body">{sinObs.map(renderMatch)}</div>}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {paso === 2 && (
+                <div className="cz-pane">
+                  {sinFactura.length > 0 && (
+                    <>
+                      <h3 className="czw-h">{sinFactura.length === 1 ? 'Hay 1 cargo de Clara sin factura o ticket' : `Hay ${sinFactura.length} cargos de Clara sin factura o ticket`}</h3>
+                      <p className="czw-p">Clara ya los cobró y falta subir su comprobante. No es un adeudo: es papeleo pendiente.</p>
+                      {sinFactura.map(renderSinFactura)}
+                      <div className="czw-sep" />
+                    </>
+                  )}
+                  <h3 className="czw-h">
+                    {sinCargo.length === 0 ? 'Todas tus facturas aparecen en Clara'
+                      : sinCargo.length === 1 ? 'Hay 1 factura que no aparece en este archivo de Clara'
+                      : `Hay ${sinCargo.length} facturas que no aparecen en este archivo de Clara`}
+                  </h3>
+                  {sinCargo.length > 0 && (
+                    <>
+                      <p className="czw-p">Es normal si pagaste con tu dinero, otra tarjeta o si el cargo pertenece a otro periodo. Indicar cómo se pagó es opcional e informativo: no cambia importes ni el Excel.</p>
+                      {sinCargo.length >= UMBRAL_FILTROS && (
+                        <>
+                          <div className="cz-search-row">
+                            <label className="cm-fs-search cz-search">
+                              <Search size={14} strokeWidth={2.2} />
+                              <input type="text" placeholder="Buscar por proveedor, folio, fecha o importe…" value={query} onChange={e => setQuery(e.target.value)} aria-label="Buscar facturas" />
+                            </label>
+                          </div>
+                          {renderChipsOrigen()}
+                        </>
+                      )}
+                      {faltanIds.length > 1 && !masivo && (
+                        <div className="czw-masivo-row">
+                          <button className="cz-link" onClick={() => setMasivo({ origen: null })}>Indicar el mismo medio de pago a las {faltanIds.length} que faltan</button>
+                        </div>
+                      )}
+                      {renderDeshacerYMasivo()}
+                      {(sinCargo.length >= UMBRAL_FILTROS ? verSinCargo : sinCargo).map(renderSinCargo)}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {paso === 3 && (
+                <div className="cz-pane">
+                  <h3 className="czw-h">{aplicables.length ? 'Listo para aplicar' : 'No hay coincidencias para aplicar'}</h3>
+                  <ul className="czw-sum">
+                    <li className="ok">
+                      <CheckCircle2 size={16} />
+                      <span><b>{sinObs.filter(seAplica).length}</b> {sinObs.filter(seAplica).length === 1 ? 'coincidencia sin observaciones' : 'coincidencias sin observaciones'} se aplicarán.</span>
+                    </li>
+                    {revisar.length > 0 && (
+                      <li className={revPendientes.length ? 'warn' : 'ok'}>
+                        <AlertTriangle size={16} />
+                        <span>
+                          Por revisar: <b>{revConfirmadas.length}</b> {revConfirmadas.length === 1 ? 'confirmada (se aplica)' : 'confirmadas (se aplican)'}
+                          {revisar.filter(m => decision[m.invoiceId] === 'descartada').length > 0 && <> · <b>{revisar.filter(m => decision[m.invoiceId] === 'descartada').length}</b> no {revisar.filter(m => decision[m.invoiceId] === 'descartada').length === 1 ? 'corresponde' : 'corresponden'}</>}
+                          {revPendientes.length > 0 && <> · <b>{revPendientes.length}</b> sin decidir: {revPendientes.length === 1 ? <><b>no se aplicará</b> y queda sin vincular</> : <><b>no se aplicarán</b> y quedan sin vincular</>}</>}.
+                        </span>
+                      </li>
+                    )}
+                    {descartadas.filter(m => !requiereRevision(m)).length > 0 && (
+                      <li className="muted">
+                        <X size={16} />
+                        <span><b>{descartadas.filter(m => !requiereRevision(m)).length}</b> {descartadas.filter(m => !requiereRevision(m)).length === 1 ? 'marcada como «No corresponde»: no se vincula' : 'marcadas como «No corresponde»: no se vinculan'}.</span>
+                      </li>
+                    )}
+                    {sinCargo.length > 0 && (
+                      <li className="info">
+                        <FileText size={16} />
+                        <span><b>{sinCargo.length}</b> {sinCargo.length === 1 ? 'factura no aparece' : 'facturas no aparecen'} en este archivo de Clara; <b>{indicados}</b> con medio de pago indicado.</span>
+                      </li>
+                    )}
+                    {sinFactura.length > 0 && (
+                      <li className="muted">
+                        <CreditCard size={16} />
+                        <span><b>{sinFactura.length}</b> {sinFactura.length === 1 ? 'cargo de Clara queda' : 'cargos de Clara quedan'} sin comprobante (papeleo pendiente, no adeudo).</span>
+                      </li>
+                    )}
+                  </ul>
+                  <p className="czw-p">
+                    Al aplicar, cada factura vinculada toma la fecha y el monto que cobró Clara. Lo que no se aplique queda como estaba.
+                    Los medios de pago que indicaste se guardan apliques o no.
+                  </p>
+                  {revPendientes.length > 0 && (
+                    <button className="cz-link" onClick={() => setPaso(1)}>← Volver y decidir {revPendientes.length === 1 ? 'la pendiente' : `las ${revPendientes.length} pendientes`}</button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ── Pie: una sola acción primaria según el paso ── */}
+            <footer className="cm-fs-footer czw-foot">
+              <div className="czw-foot-left">
+                <button className="cz-link" onClick={() => setAvanzado(true)}>Ver conciliación completa</button>
+                <button className="cz-link czw-link-muted" onClick={pedirSalir}>No aplicar la conciliación</button>
+              </div>
+              {paso > 1 && (
+                <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={() => setPaso(paso - 1)}>Volver</button>
+              )}
+              {paso < 3
+                ? <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={() => setPaso(paso + 1)}>Continuar <ArrowRight size={14} /></button>
+                : <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={aplicar}>{etiquetaAplicar}</button>}
+            </footer>
+          </>
+        )}
+
+        {salir && (
+          <div className="czw-salir" role="alertdialog" aria-labelledby="czw-salir-t">
+            <div className="czw-salir-box">
+              <h3 id="czw-salir-t">¿Salir sin aplicar la conciliación?</h3>
+              <p>Se pierden las decisiones de esta revisión (confirmar / no corresponde). Los medios de pago que indicaste sí se guardan.</p>
+              <div className="czw-salir-actions">
+                <button className="cz-btn" onClick={() => setSalir(false)} autoFocus>Seguir revisando</button>
+                <button className="cz-btn danger" onClick={handleCancel}>Salir sin aplicar</button>
+              </div>
+            </div>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   )
@@ -5501,7 +5783,10 @@ export default function App() {
     // "fecha de transaccion" también contiene "transaccion", por eso la
     // descripción se busca con match exacto del encabezado "Transacción".
     const colFecha    = findCol('fecha de transacc', 0)
-    const colDesc     = findColExact('transaccion', 2)
+    // El export nuevo de Clara (con "ID de Transacción" y "Fecha y Hora
+    // Local") nombra la descripción "Comercio"; sin esto caía al índice 2,
+    // que ahí es la hora local, y el modal mostraba "2026-10-26 12:59:46".
+    const colDesc     = findColExact('transaccion', findColExact('comercio', 2))
     const colMontoOrg = findCol('monto original', 3)
     const colMoneda   = findCol('moneda original', 4)
     const colMontoMXN = findCol('monto en mxn', 5)
@@ -5515,7 +5800,12 @@ export default function App() {
     // (the new default). Matched rows will overwrite this with the CSV's
     // dCSV; unmatched rows keep the invoice date so the FECHA DE COBRO
     // column never shows a blank.
-    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '', matchMetodo: '', matchConfianza: 0 }))
+    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '', matchMetodo: '', matchConfianza: 0, matchConfirmado: false }))
+    // Estado de cada gasto ANTES de los pases (ya reseteado). Si en el
+    // asistente el usuario marca un vínculo como «No corresponde» o deja una
+    // coincidencia dudosa sin decidir, ese gasto se restaura desde aquí al
+    // aplicar: queda exactamente como si el motor no lo hubiera vinculado.
+    const baseLista = nl.map(g => ({ ...g }))
 
     // Normalize for fuzzy-suggestion comparison: strip accents, lowercase,
     // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
@@ -6121,6 +6411,7 @@ export default function App() {
       ticketsMatched,
       foreignMatched: foreignMatchesTotal,
       pendingLista: nl,
+      baseLista,
     })
     e.target.value = ''
   }
@@ -7045,6 +7336,24 @@ export default function App() {
     setLista(prev => prev.map(anota))
     setConciliacion(prev => prev?.pendingLista ? { ...prev, pendingLista: prev.pendingLista.map(anota) } : prev)
   }, [])
+  // Lista final al aplicar la conciliación: pendingLista, salvo los gastos
+  // excluidos en el asistente, que vuelven a su estado previo (baseLista)
+  // conservando la anotación de medio de pago hecha en el modal.
+  const listaConciliada = (conc, excluidos = [], confirmados = []) => {
+    if (!conc?.pendingLista) return lista
+    const fuera = new Set(excluidos)
+    const conf = new Set(confirmados)
+    const base = new Map((conc.baseLista || []).map(g => [g.id, g]))
+    return conc.pendingLista.map(g => !fuera.has(g.id) || !base.has(g.id)
+      ? (conf.has(g.id) && g.hizoMatch ? { ...g, matchConfirmado: true } : g)
+      : {
+      ...base.get(g.id),
+      origenPagoDeclarado: g.origenPagoDeclarado,
+      origenPagoNota: g.origenPagoNota,
+      origenPagoActualizadoEn: g.origenPagoActualizadoEn,
+    })
+  }
+
   const verFacturaDe = id => {
     const g = (conciliacion?.pendingLista || lista).find(x => x.id === id) || lista.find(x => x.id === id)
     if (!g) return
@@ -8125,20 +8434,20 @@ export default function App() {
           <ConciliacionModal
             data={conciliacion}
             onClose={() => setConciliacion(null)}
-            onConfirm={() => {
-              const count = conciliacion.matches || 0
-              if (conciliacion.pendingLista) setLista(conciliacion.pendingLista)
+            onConfirm={(excluidos = [], confirmados = []) => {
+              const count = (conciliacion.matchedRows || []).length - excluidos.length
+              setLista(listaConciliada(conciliacion, excluidos, confirmados))
               setConciliacion(null)
-              setToast(`✓ Conciliación aplicada · ${count} ${count === 1 ? 'cargo vinculado' : 'cargos vinculados'}`)
+              setToast(`✓ Conciliación aplicada · ${count} ${count === 1 ? 'cargo vinculado' : 'cargos vinculados'}${excluidos.length ? ` · ${excluidos.length} sin aplicar` : ''}`)
             }}
             onCancel={() => setConciliacion(null)}
             onSetOrigen={setOrigenPago}
             onVerFactura={verFacturaDe}
             esEspecial={esColaboradorEspecial}
-            onAgregarManual={() => {
+            onAgregarManual={(_cargo, excluidos = [], confirmados = []) => {
               // Apply pending matches first so they aren't wiped when
               // agregarManual mutates lista. Then close + add a manual row.
-              if (conciliacion.pendingLista) setLista(conciliacion.pendingLista)
+              setLista(listaConciliada(conciliacion, excluidos, confirmados))
               setConciliacion(null)
               agregarManual()
             }}
