@@ -3881,3 +3881,43 @@ input[type="date"].dw-in { color-scheme: dark; }
   .czw-tip { grid-template-columns: 1fr; gap: 8px; }
   .czw-tip-act { justify-content: space-between; }
 }
+
+/* Retroalimentación al decidir un vínculo (confirmar / no corresponde). */
+.cz-card { transition: border-color 0.35s ease, background-color 0.35s ease, opacity 0.25s ease; }
+.cz-card.is-confirmada { border-color: rgba(89, 211, 155, 0.55); background: rgba(89, 211, 155, 0.05); animation: czConfirm 0.9s ease-out; }
+.cz-card.is-confirmada .cz-reason { color: var(--text-muted); }
+@keyframes czConfirm {
+  0%   { box-shadow: 0 0 0 0 rgba(89, 211, 155, 0.55); }
+  60%  { box-shadow: 0 0 0 10px rgba(89, 211, 155, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(89, 211, 155, 0); }
+}
+.cz-decide-done { flex: 1 1 260px; display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-muted); }
+.cz-decide-done b { color: var(--text-primary); }
+.cz-decide-done.ok b { color: var(--smto-green); }
+.cz-decide-seal {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08); color: var(--text-muted);
+}
+.cz-decide-done.ok .cz-decide-seal { background: var(--smto-green); color: #06281a; box-shadow: 0 0 0 4px rgba(89, 211, 155, 0.18); }
+.cz-btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+.cz-btn-ghost:hover:not(:disabled) { color: var(--text-primary); background: rgba(255, 255, 255, 0.05); }
+
+.czw-kpi b { display: inline-block; }
+.czw-kpi-check { vertical-align: -2px; color: var(--smto-green); }
+.czw-listo { display: flex; align-items: flex-start; gap: 12px; }
+.czw-listo .czw-h { color: var(--smto-green); }
+.czw-listo-ic {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--smto-green); color: #06281a; margin-top: 1px;
+}
+.cm-fs-btn.czw-ready { animation: czReady 1.6s ease-out 2; }
+@keyframes czReady {
+  0%   { box-shadow: 0 0 0 0 rgba(89, 211, 155, 0.6); }
+  70%  { box-shadow: 0 0 0 12px rgba(89, 211, 155, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(89, 211, 155, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cz-card.is-confirmada, .cm-fs-btn.czw-ready { animation: none; }
+}

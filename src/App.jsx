@@ -3258,7 +3258,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
     const dec = decision[m.invoiceId]
     const conflictoOrigenLabel = conflicto(m) ? ORIGEN_POR_KEY[origenDe(m.invoiceId)]?.label : null
     return (
-      <div key={id} className={`cz-card${rev ? ' is-rev' : ''}${open ? ' is-open' : ''}${dec === 'descartada' ? ' is-descartada' : ''}`}>
+      <div key={id} className={`cz-card${rev && !dec ? ' is-rev' : ''}${open ? ' is-open' : ''}${dec === 'descartada' ? ' is-descartada' : ''}${dec === 'confirmada' ? ' is-confirmada' : ''}`}>
         <button className="cz-card-head" aria-expanded={open} onClick={() => setExpandedId(open ? null : id)}>
           <div className="cz-side">
             <span className="cz-side-label">Clara cobró</span>
@@ -3284,12 +3284,35 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
         <p className="cz-reason">{motivo(m)}</p>
         {(rev || dec) && (
           <div className="cz-decide">
-            <span className="cz-decide-q">
-              {dec === 'confirmada' ? 'Confirmaste que es la misma compra: se aplicará.'
-                : dec === 'descartada' ? 'Marcaste que no corresponde: no se vinculará y el cargo quedará sin comprobante.'
-                : '¿Es la misma compra?'}
-            </span>
-            {rev && (
+            {dec ? (
+              // Retroalimentación al decidir: sello animado + texto de qué
+              // pasará, y un solo botón para deshacer.
+              <motion.span
+                key={dec}
+                className={`cz-decide-done ${dec === 'confirmada' ? 'ok' : 'muted'}`}
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <motion.span
+                  className="cz-decide-seal"
+                  initial={{ scale: 0, rotate: -45 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ type: 'spring', stiffness: 420, damping: 16 }}
+                >
+                  {dec === 'confirmada' ? <Check size={14} strokeWidth={3} /> : <X size={14} strokeWidth={3} />}
+                </motion.span>
+                <span>
+                  <b>{dec === 'confirmada' ? 'Vínculo confirmado' : 'No corresponde'}</b>
+                  {dec === 'confirmada' ? ' · se aplicará al terminar' : ' · no se vinculará y el cargo quedará sin comprobante'}
+                </span>
+              </motion.span>
+            ) : (
+              <span className="cz-decide-q">¿Es la misma compra?</span>
+            )}
+            {dec ? (
+              <button className="cz-btn cz-btn-ghost" onClick={() => decidir(m.invoiceId, dec)}>Deshacer</button>
+            ) : rev && (
               <button className={`cz-btn${dec === 'confirmada' ? ' primary' : ''}`} aria-pressed={dec === 'confirmada'} onClick={() => {
                 if (conflictoOrigenLabel && dec !== 'confirmada') guardarOrigen([m.invoiceId], null, '')
                 decidir(m.invoiceId, 'confirmada')
@@ -3297,9 +3320,11 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                 <Check size={14} /> {conflictoOrigenLabel && dec !== 'confirmada' ? `Confirmar y quitar «${conflictoOrigenLabel}»` : 'Confirmar vínculo'}
               </button>
             )}
-            <button className={`cz-btn${dec === 'descartada' ? ' is-on' : ''}`} aria-pressed={dec === 'descartada'} onClick={() => decidir(m.invoiceId, 'descartada')}>
-              <X size={14} /> No corresponde
-            </button>
+            {!dec && (
+              <button className="cz-btn" onClick={() => decidir(m.invoiceId, 'descartada')}>
+                <X size={14} /> No corresponde
+              </button>
+            )}
           </div>
         )}
         {open && (
@@ -3481,7 +3506,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
   // facturas son ruido.
   const UMBRAL_FILTROS = 12
   const PASOS = [
-    { n: 1, label: 'Revisar coincidencias', extra: [revPendientes.length ? `${revPendientes.length} pendiente${revPendientes.length === 1 ? '' : 's'}` : '', conPropina.length ? `${conPropina.length} propina${conPropina.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') },
+    { n: 1, label: 'Revisar coincidencias', extra: [revPendientes.length ? `${revPendientes.length} pendiente${revPendientes.length === 1 ? '' : 's'}` : revisar.length ? 'revisado ✓' : '', conPropina.length ? `${conPropina.length} propina${conPropina.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') },
     { n: 2, label: 'Otros pagos', extra: sinCargo.length + sinFactura.length ? `${sinCargo.length + sinFactura.length}` : '' },
     { n: 3, label: 'Finalizar', extra: '' },
   ]
@@ -3667,8 +3692,11 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                 <button className="czw-kpi ok" onClick={() => { setPaso(1); setVerSinObs(true) }}>
                   <b>{sinObs.length}</b><span>sin observaciones</span>
                 </button>
-                <button className={`czw-kpi ${revisar.length ? 'warn' : 'muted'}`} onClick={() => setPaso(1)}>
-                  <b>{revisar.length}</b><span>{revisar.length === 1 ? 'por revisar' : 'por revisar'}</span>
+                <button className={`czw-kpi ${revPendientes.length ? 'warn' : revisar.length ? 'ok' : 'muted'}`} onClick={() => setPaso(1)}>
+                  <motion.b key={revPendientes.length} initial={{ scale: 1.5, opacity: 0.4 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 380, damping: 18 }}>
+                    {revPendientes.length}
+                  </motion.b>
+                  <span>{revisar.length && !revPendientes.length ? <>por revisar <Check size={13} strokeWidth={3} className="czw-kpi-check" /></> : 'por revisar'}</span>
                 </button>
                 <button className={`czw-kpi ${sinCargo.length ? 'info' : 'muted'}`} onClick={() => setPaso(2)}>
                   <b>{sinCargo.length}</b><span>sin cargo en Clara</span>
@@ -3705,8 +3733,24 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                     </>
                   ) : revisar.length ? (
                     <>
-                      <h3 className="czw-h">{revisar.length === 1 ? 'Hay 1 coincidencia que requiere tu revisión' : `Hay ${revisar.length} coincidencias que requieren tu revisión`}</h3>
-                      <p className="czw-p">Confirma si es la misma compra o márcala como «No corresponde». Las que dejes sin decidir no se aplicarán.</p>
+                      <AnimatePresence mode="wait" initial={false}>
+                        {revPendientes.length ? (
+                          <motion.div key="pend" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: 0.18 }}>
+                            <h3 className="czw-h">{revPendientes.length === 1 ? 'Hay 1 coincidencia que requiere tu revisión' : `Hay ${revPendientes.length} coincidencias que requieren tu revisión`}</h3>
+                            <p className="czw-p">Confirma si es la misma compra o márcala como «No corresponde». Las que dejes sin decidir no se aplicarán.</p>
+                          </motion.div>
+                        ) : (
+                          <motion.div key="listo" className="czw-listo" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: 0.2 }}>
+                            <motion.span className="czw-listo-ic" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 420, damping: 15, delay: 0.05 }}>
+                              <Check size={16} strokeWidth={3} />
+                            </motion.span>
+                            <div>
+                              <h3 className="czw-h">{revisar.length === 1 ? 'Revisaste la coincidencia' : `Revisaste las ${revisar.length} coincidencias`}</h3>
+                              <p className="czw-p">Todo listo en este paso. Continúa para ver los otros pagos.</p>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                       {revisar.map(renderMatch)}
                     </>
                   ) : (
@@ -3876,7 +3920,7 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
                 <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={() => setPaso(paso - 1)}>Volver</button>
               )}
               {paso < 3
-                ? <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={() => setPaso(paso + 1)}>Continuar <ArrowRight size={14} /></button>
+                ? <button type="button" key={paso === 1 && revisar.length && !revPendientes.length ? 'listo' : 'normal'} className={`cm-fs-btn cm-fs-btn-primary${paso === 1 && revisar.length && !revPendientes.length ? ' czw-ready' : ''}`} onClick={() => setPaso(paso + 1)}>Continuar <ArrowRight size={14} /></button>
                 : <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={aplicar}>{etiquetaAplicar}</button>}
             </footer>
           </>
