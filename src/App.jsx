@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback, memo } from 'react'
+import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -1628,6 +1629,103 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MENÚ DESPLEGABLE DE LA BARRA
+   Solo agrupa visualmente acciones que ya existen: cada item llama al
+   mismo handler que antes tenía su propio botón. El menú va en un portal a
+   <body> con position:fixed (medido del botón): el backdrop-filter de la
+   barra crea un contexto de apilamiento que lo dejaba debajo de los KPIs, y
+   así tampoco lo recorta el scroll horizontal de la barra en móvil.
+═══════════════════════════════════════════════════ */
+
+function ToolbarMenu({ id, title, icon, variant = 'primary', isDisabled = false, items, align = 'left' }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const menuRef = useRef(null)
+  const visibles = items.filter(it => !it.hidden)
+
+  const toggle = () => {
+    if (isDisabled) return
+    if (open) { setOpen(false); return }
+    const r = btnRef.current.getBoundingClientRect()
+    setPos(align === 'right'
+      ? { top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) }
+      : { top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - 288)) })
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = e => {
+      if (menuRef.current?.contains(e.target) || btnRef.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    const onKey = e => {
+      if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus() }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const els = [...(menuRef.current?.querySelectorAll('.tb-menu-item:not(:disabled)') || [])]
+        if (!els.length) return
+        const i = els.indexOf(document.activeElement)
+        const next = e.key === 'ArrowDown' ? (i + 1) % els.length : (i - 1 + els.length) % els.length
+        els[next].focus()
+      }
+    }
+    const close = () => setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    // Foco al primer item para navegar con flechas.
+    requestAnimationFrame(() => menuRef.current?.querySelector('.tb-menu-item:not(:disabled)')?.focus())
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        id={id}
+        ref={btnRef}
+        className={`btn-premium ${variant}${isDisabled ? ' disabled' : ''}${open ? ' is-open' : ''}`}
+        onClick={toggle}
+        disabled={isDisabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {icon && <span className="btn-icon">{icon}</span>}
+        {title}
+        <ChevronDown size={14} className="tb-chevron" aria-hidden="true" />
+      </button>
+      {open && pos && createPortal(
+        <div className="tb-menu" role="menu" ref={menuRef} style={pos}>
+          {visibles.map(it => (
+            <button
+              key={it.label}
+              role="menuitem"
+              className="tb-menu-item"
+              disabled={it.disabled}
+              onClick={() => { setOpen(false); it.onClick() }}
+            >
+              <span className="tb-menu-ic" aria-hidden="true">{it.icon}</span>
+              <span className="tb-menu-txt">
+                <span className="tb-menu-label">{it.label}</span>
+                {it.hint && <span className="tb-menu-hint">{it.hint}</span>}
+              </span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    RECORRIDO GUIADO — "Cómo utilizar"
    Spotlight sobre cada botón clave + popover con el paso.
 ═══════════════════════════════════════════════════ */
@@ -1636,20 +1734,20 @@ const TOUR_STEPS = [
   {
     targetId: 'tour-carpeta',
     icon: '📁',
-    title: 'Paso 1 · Cargar Carpeta',
-    body: 'Empieza aquí. Selecciona la carpeta que contiene tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla.',
+    title: 'Paso 1 · Agregar comprobantes',
+    body: 'Empieza aquí. Abre este menú y elige «Cargar carpeta» para seleccionar la carpeta con tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla. En el mismo menú puedes importar un reporte previo, cargar una foto o agregar un gasto manual.',
   },
   {
     targetId: 'tour-banco',
     icon: '🏦',
-    title: 'Paso 2 · Validar Banco',
+    title: 'Paso 2 · Conciliar banco',
     body: 'Antes, descarga el estado de cuenta de Clara del periodo de tu reporte. Luego súbelo aquí: la app concilia cada gasto con su cargo en el banco y detecta propinas.',
   },
   {
     targetId: 'tour-zip',
     icon: '📦',
-    title: 'Paso 3 · Exportar a ZIP',
-    body: 'Descarga el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor: victor.aceves@smto.mx',
+    title: 'Paso 3 · Exportar',
+    body: 'Abre «Exportar» y elige «Excel + facturas (ZIP)» para descargar el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor: victor.aceves@smto.mx',
   },
 ]
 
@@ -3513,6 +3611,20 @@ export default function App() {
   const [busqueda,      setBusqueda]      = useState('')
   const searchInputRef = useRef(null)
 
+  // Densidad de la tabla — preferencia de UI por navegador (no son datos
+  // fiscales). localStorage puede no existir (modo privado) → try/catch.
+  const [densidad, setDensidad] = useState(() => {
+    try { return localStorage.getItem('smto-densidad') === 'compacta' ? 'compacta' : 'comoda' } catch { return 'comoda' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('smto-densidad', densidad) } catch { /* sin storage */ }
+  }, [densidad])
+
+  // Respaldo: el reporte solo vive en memoria. Guardamos la referencia de
+  // `lista` del último export exitoso (Excel o ZIP); si cambió desde entonces
+  // hay trabajo sin respaldar → indicador en el header + aviso al salir.
+  const [ultimoExport, setUltimoExport] = useState(null)
+
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
   const photoRef  = useRef(null)       // subir foto existente (galería / archivos)
@@ -3584,11 +3696,22 @@ export default function App() {
       totalFacturado:   sum('totalCFDI'),
       ivaTotal:         sum('iva'),
       retencionesTotal: sum('retenciones'),
-      sinCobrar:        lista.filter(g => !g.fechaCobro).length,
       count:            lista.length,
+      // Dos progresos INDEPENDIENTES: hizoMatch (banco) ≠ validado (manual).
+      conciliadas:      lista.filter(g => g.hizoMatch).length,
+      validadas:        lista.filter(g => g.validado).length,
       porMoneda,
     }
   }, [lista])
+
+  const sinRespaldo = lista.length > 0 && lista !== ultimoExport
+  useEffect(() => {
+    if (!sinRespaldo) return
+    // El navegador muestra su propio texto genérico; solo pedimos el aviso.
+    const onBeforeUnload = e => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [sinRespaldo])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const fmtDivisa = (code, n) =>
     `${simboloMoneda(code) || code + ' '}${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -5594,6 +5717,7 @@ export default function App() {
     })
     a.click()
     URL.revokeObjectURL(a.href)
+    setUltimoExport(lista)
 
     // 4) Success modal — generic PremiumModal with three stats. Si se detectó
     //    PDF idéntico entre folios distintos, el modal pasa a 'warning' y lista
@@ -6231,6 +6355,7 @@ export default function App() {
       const a = Object.assign(document.createElement('a'), { href: url, download: filename })
       a.click()
       URL.revokeObjectURL(url)
+      setUltimoExport(lista)
       setExportExito({
         title: '¡Excel Generado!',
         subtitle: 'Reporte descargado en formato oficial SMTO',
@@ -6287,11 +6412,18 @@ export default function App() {
       {/* ─── CABECERA ─── */}
       <div className="header">
         <div className="header-logo">
-          <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
+          <img src="/logo.png" alt="SMTO" style={{ height: '40px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.04</span></h1>
+          <h1 className="header-title">Control de gastos<span className="version-badge">v9.05</span></h1>
           <div className="header-sub">
+            {colaborador && (
+              <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
+                <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
+                <span>{colaborador.nombre}</span>
+                <span className="colab-chip-cat">{colaborador.categoria}</span>
+              </button>
+            )}
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
               {carpetaNombre}
@@ -6302,56 +6434,50 @@ export default function App() {
               {lista.length} registros
             </span>
           </div>
-          {colaborador && (
-            <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
-              <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
-              <span>{colaborador.nombre}</span>
-              <span className="colab-chip-cat">{colaborador.categoria}</span>
-            </button>
-          )}
         </div>
-        <div className="guide-btn-group">
-          <button className="guide-btn guide-btn-clara" onClick={() => setShowClaraGuide(true)} title="Manual para descargar el estado de cuenta de Clara">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-            ¿Cómo Descargar tu estado de cuenta CLARA?
-          </button>
-          <button className="guide-btn" onClick={() => setTourStep(0)} title="Recorrido paso a paso">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            ¿Cómo utilizar la app?
-          </button>
+        <div className="header-right">
+          {lista.length > 0 && (
+            <span
+              className={`respaldo-pill${sinRespaldo ? ' pendiente' : ' ok'}`}
+              title="El reporte vive solo en este navegador: si cierras o recargas la página se pierde lo que no hayas exportado. Exporta el Excel o el ZIP como respaldo; después puedes continuarlo con «Importar reporte»."
+            >
+              {sinRespaldo ? <AlertTriangle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+              <span className="respaldo-txt">{sinRespaldo ? 'Sin respaldo · exporta antes de cerrar' : 'Respaldo exportado'}</span>
+              <span className="respaldo-txt-short">{sinRespaldo ? 'Sin respaldo' : 'Respaldado'}</span>
+            </span>
+          )}
+          <ToolbarMenu
+            title="Ayuda"
+            variant="ghost"
+            align="right"
+            icon={<Info size={15} />}
+            items={[
+              { label: '¿Cómo utilizar la app?', hint: 'Recorrido paso a paso', icon: <Sparkles size={16} />, onClick: () => setTourStep(0) },
+              { label: '¿Cómo descargar tu estado de cuenta Clara?', hint: 'Manual con capturas', icon: <FileText size={16} />, onClick: () => setShowClaraGuide(true) },
+            ]}
+          />
         </div>
       </div>
 
       <div className="divider" />
 
-      {/* ─── BARRA DE ACCIONES ─── */}
+      {/* ─── BARRA DE ACCIONES ───
+          Reorganización visual: cada item del menú llama exactamente al mismo
+          handler que tenía su botón. Las funciones especiales (Saldos, Nómina)
+          siguen como botones visibles para quien las tiene. */}
       <div className="action-bar">
         <div className="action-group">
-          <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
-          <PremiumButton
-            title={importSuccess ? 'Importado' : 'Importar reporte'}
-            variant={importSuccess ? 'success' : 'ghost'}
-            onClick={() => document.getElementById('import-xlsx-input').click()}
-            icon={importSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-            )}
+          <ToolbarMenu
+            id="tour-carpeta"
+            title={carpetaSuccess ? 'Cargado' : importSuccess ? 'Importado' : 'Agregar comprobantes'}
+            variant={carpetaSuccess || importSuccess ? 'success' : 'primary'}
+            icon={carpetaSuccess || importSuccess ? <Check size={15} strokeWidth={2.5} /> : <Plus size={15} strokeWidth={2.5} />}
+            items={[
+              { label: 'Cargar carpeta', hint: 'XML y PDF de tus facturas', icon: '📁', onClick: () => folderRef.current?.click() },
+              { label: 'Importar reporte', hint: 'Excel previo para continuar', icon: '📥', onClick: () => document.getElementById('import-xlsx-input').click() },
+              { label: 'Cargar foto / ticket', hint: 'Cámara, galería o PDF (OCR)', icon: '📸', onClick: () => setShowPhotoChoice(true) },
+              { label: 'Agregar manualmente', hint: 'Captura un gasto a mano', icon: '✍️', onClick: agregarManual },
+            ]}
           />
           <input
             id="import-xlsx-input"
@@ -6360,23 +6486,7 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleImportExcel}
           />
-          <PremiumButton
-            id="tour-carpeta"
-            title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
-            variant={carpetaSuccess ? 'success' : 'primary'}
-            onClick={() => folderRef.current?.click()}
-            icon={carpetaSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-              </svg>
-            )}
-          />
-          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
-          <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          <PremiumButton id="tour-banco" title="Conciliar banco" icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
               title="Cotejar con Saldos"
@@ -6408,72 +6518,100 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleNominaFile}
           />
-          {(() => {
-            const total = lista.length
-            const validados = lista.filter(g => g.validado).length
-            const allDone = total > 0 && validados === total
-            return total > 0 ? (
-              <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <span>
-                  {allDone
-                    ? `✓ ${total} facturas validadas`
-                    : `${validados} / ${total} validadas`}
-                </span>
-              </div>
-            ) : null
-          })()}
         </div>
         <div className="action-group">
-          <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
-          <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
+          <ToolbarMenu
+            id="tour-zip"
+            title="Exportar"
+            variant="export"
+            align="right"
+            isDisabled={!lista.length}
+            icon={<Download size={15} />}
+            items={[
+              { label: 'Excel', hint: 'Reporte oficial SMTO (.xlsx)', icon: '📊', onClick: exportarExcel },
+              { label: 'Excel + facturas (ZIP)', hint: 'Para enviar a contabilidad', icon: '📦', onClick: exportar },
+            ]}
+          />
         </div>
       </div>
 
-      {/* ─── BARRA DE MÉTRICAS ─── */}
+      {/* ─── BARRA DE MÉTRICAS ───
+          Conciliación bancaria (hizoMatch) y revisión manual (validado) son
+          progresos independientes y se muestran por separado. */}
       <div className="metrics-bar">
-        <div className="metric-card" style={{ '--accent': '#0A84FF' }}>
-          <div className="metric-label">Total Facturado</div>
+        <div className="metric-card" title="Suma de la columna TOTAL de todas las facturas del reporte, en pesos (incluye impuestos).">
+          <div className="metric-label">Total facturado</div>
           <div className="metric-value">{fmtMoney(metrics.totalFacturado)}</div>
+          <div className="metric-hint">MXN · con impuestos</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#BF5AF2' }}>
-          <div className="metric-label">IVA Total</div>
+        <div className="metric-card" title="Suma del IVA trasladado de todas las facturas.">
+          <div className="metric-label">IVA total</div>
           <div className="metric-value">{fmtMoney(metrics.ivaTotal)}</div>
+          <div className="metric-hint">Trasladado</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#FF9500' }}>
-          <div className="metric-label">Retenciones</div>
-          <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
-        </div>
+        {metrics.retencionesTotal !== 0 && (
+          <div className="metric-card" title="Suma de retenciones (ISR / IVA) de las facturas.">
+            <div className="metric-label">Retenciones</div>
+            <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
+            <div className="metric-hint">ISR / IVA retenido</div>
+          </div>
+        )}
         {/* Divisas — con UNA moneda extranjera muestra su total con su símbolo
             ("Total CNY ¥249.11"); con varias, cuántas hay (desglose en el
             tooltip) porque sumarlas entre sí no significa nada. Espejo del
-            comportamiento aprobado de la tarjeta del Excel. */}
+            comportamiento aprobado de la tarjeta del Excel. Solo aparece si
+            hay montos en moneda extranjera. */}
         {(() => {
           const divisas = Object.entries(metrics.porMoneda)
+          if (!divisas.length) return null
           const detalle = divisas.map(([c, v]) => `${c} ${fmtDivisa(c, v)}`).join('  ·  ')
           return (
-            <div className="metric-card" style={{ '--accent': '#59D39B' }} title={detalle || undefined}>
+            <div className="metric-card" title={detalle}>
               <div className="metric-label">
-                {divisas.length === 1 ? `Total ${divisas[0][0]}` : divisas.length > 1 ? 'Moneda extranjera' : 'Total USD'}
+                {divisas.length === 1 ? `Total ${divisas[0][0]}` : 'Moneda extranjera'}
               </div>
               <div className="metric-value">
-                {divisas.length === 0 ? fmtMoney(0)
-                  : divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1])
-                  : `${divisas.length} divisas`}
+                {divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1]) : `${divisas.length} divisas`}
               </div>
+              <div className="metric-hint">Monto en su moneda original</div>
             </div>
           )
         })()}
-        <div className="metric-card" style={{ '--accent': '#30D158' }}>
+        <div className="metric-card" title="Número de renglones del reporte.">
           <div className="metric-label">Registros</div>
           <div className="metric-value">{metrics.count}</div>
+          <div className="metric-hint">En el reporte</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#FF453A' }}>
-          <div className="metric-label">Por Corroborar</div>
-          <div className="metric-value">{metrics.sinCobrar}</div>
-        </div>
+        {(() => {
+          const n = metrics.count, c = metrics.conciliadas
+          const pct = n ? Math.round((c / n) * 100) : 0
+          return (
+            <div className="metric-card" title="Facturas que la conciliación ligó a un cargo del estado de cuenta. Que una factura no esté conciliada no es un adeudo: puede ser de otro periodo, otra tarjeta o efectivo.">
+              <div className="metric-label">Conciliadas con banco</div>
+              <div className={`metric-value${c === 0 ? ' is-empty' : ''}`}>
+                {c === 0 ? '—' : <>{c}<span className="metric-of"> de {n}</span></>}
+              </div>
+              {c === 0
+                ? <div className="metric-hint">Aún sin conciliar</div>
+                : <div className="metric-progress" aria-label={`${pct}% conciliado`}><span style={{ width: `${pct}%` }} /></div>}
+            </div>
+          )
+        })()}
+        {(() => {
+          const n = metrics.count, v = metrics.validadas
+          const pct = n ? Math.round((v / n) * 100) : 0
+          return (
+            <div className={`metric-card${n > 0 && v === n ? ' is-done' : ''}`} title="Facturas que marcaste como revisadas con la casilla de cada renglón. Es independiente de la conciliación bancaria.">
+              <div className="metric-label">Revisadas manualmente</div>
+              <div className={`metric-value${n === 0 ? ' is-empty' : ''}`}>
+                {n === 0 ? '—' : <>{v}<span className="metric-of"> de {n}</span></>}
+              </div>
+              {n === 0
+                ? <div className="metric-hint">Sin registros</div>
+                : <div className="metric-progress revision" aria-label={`${pct}% revisado`}><span style={{ width: `${pct}%` }} /></div>}
+            </div>
+          )
+        })()}
       </div>
 
       {/* ─── BUSCADOR UNIVERSAL ─── */}
@@ -6505,6 +6643,10 @@ export default function App() {
             </button>
           )}
           <span className="search-kbd">⌘K</span>
+          <div className="density-toggle" role="group" aria-label="Densidad de la tabla">
+            <button className={densidad === 'comoda' ? 'active' : ''} aria-pressed={densidad === 'comoda'} onClick={() => setDensidad('comoda')}>Cómoda</button>
+            <button className={densidad === 'compacta' ? 'active' : ''} aria-pressed={densidad === 'compacta'} onClick={() => setDensidad('compacta')}>Compacta</button>
+          </div>
         </div>
       )}
 
@@ -6591,7 +6733,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <table style={{
+          <table className={densidad === 'compacta' ? 'density-compact' : undefined} style={{
             // Sticky-column left offsets — Proveedor pins right after the
             // Estado column. Resizing Estado shifts the pinned Proveedor cell
             // correctly because we read its width from colWidths.
