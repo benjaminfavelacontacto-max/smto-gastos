@@ -229,6 +229,7 @@ const POLIZAS_CLARA = {
   'Luis Castillo': '4375',
   'Jorge Perales': '1294',
   'Marcos Ascencio': '3109',
+  'Alberth Cruz': '2900',
 }
 
 // Roster fiscal de empleados — fuente: RFC Empleados.xlsx. Se usa para
@@ -375,6 +376,7 @@ const COLABORADORES = [
   { categoria: 'Servicio', nombre: 'Jorge Perales' },
   { categoria: 'Servicio', nombre: 'Marcos Ascencio' },
   { categoria: 'Servicio', nombre: 'Noe Lua' },
+  { categoria: 'Servicio', nombre: 'Alberth Cruz' },
   { categoria: 'Ventas', nombre: 'Emmanuel Navarro' },
   { categoria: 'Ventas', nombre: 'Carlos Ponce' },
   { categoria: 'Ventas', nombre: 'Gemma Gonzalez' },
