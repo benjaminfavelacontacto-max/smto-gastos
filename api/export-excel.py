@@ -838,7 +838,15 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # de DIFERENCIA: cobrado − (facturado + propina). Así un tip legítimo
         # nunca aparece como discrepancia, y sólo se marca en rojo cuando el
         # banco cargó más que factura + propina.
-        es_clara = banco.lower() == 'clara mxn credito'
+        # Pagos en EFECTIVO (forma 01) no pasan por la tarjeta: aunque el banco
+        # caiga al default Clara, no se concilian (U/V/W vacías).
+        es_efectivo = str(g.get('formaPago', '') or '').strip() == '01'
+        es_clara = banco.lower() == 'clara mxn credito' and not es_efectivo
+        # COBRADO de la propina (sub-renglón). El cargo de Clara se reparte:
+        # renglón principal = cargo − propina, sub-renglón = propina. Así cada
+        # renglón cuadra solo (factura vs factura, propina vs propina) y Σ U
+        # sigue siendo el cargo completo. None = sin cargo (SIN CONCILIAR).
+        cobrado_propina = None
         if es_clara:
             propina_actual = round(g.get('montoPropina', 0) or 0, 2)
             # FACTURADO = monto de la factura SIN propina (el CFDI no incluye el tip).
@@ -856,9 +864,10 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 # muestre el número correcto en CUALQUIER visor — Excel,
                 # Numbers, Quick Look, Google Sheets — sin depender de que
                 # recalcule fórmulas. Resta la propina sólo cuando existe.
-                cobrado = monto_cobrado
-                diff_num = round(cobrado - facturado - propina_actual, 2)
+                diff_num = round(monto_cobrado - facturado - propina_actual, 2)
                 diferencia = diff_num
+                cobrado = round(monto_cobrado - propina_actual, 2)
+                cobrado_propina = propina_actual
             elif algo_conciliado:
                 # Hubo corrida de banco y ESTA fila no encontró su cargo:
                 # decirlo explícitamente en vez de fingir que cuadra en $0.
@@ -868,16 +877,17 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             else:
                 # Export sin validación bancaria: estimado factura+propina
                 # (comportamiento histórico — DIFERENCIA 0 hasta conciliar).
-                cobrado = round((g.get('totalCFDI', 0) or 0) + propina_actual, 2)
-                diff_num = round(cobrado - facturado - propina_actual, 2)
+                cobrado = round(g.get('totalCFDI', 0) or 0, 2)
+                diff_num = round(cobrado - facturado, 2)
                 diferencia = diff_num
+                cobrado_propina = propina_actual
             # Acumular para la banda de totales. FACTURADO suma la propina para
             # que cuadre contra COBRADO (que ya la trae en el cargo de tarjeta).
             # Los renglones "SIN CONCILIAR" suman su FACTURADO+propina pero NO su
             # COBRADO (no hay cargo real) → la DIFERENCIA total delata el faltante.
             total_facturado_band += facturado + propina_actual
             if isinstance(cobrado, (int, float)):
-                total_cobrado_band += cobrado
+                total_cobrado_band += cobrado + (cobrado_propina or 0)
         else:
             facturado = ''
             cobrado = ''
@@ -967,11 +977,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         # PÓLIZA, misma FORMA PAGO, mismo BANCO, mismo USUARIO y T/C. Cambia
         # sólo: FACTURA = "N/A", CONCEPTO = "Propina", IMPORTE = monto de la
         # propina, IVA = 0, ISR = 0, ISH/IEPS = 0, RETENCIÓN = 0, TOTAL = la propina.
-        # En renglones Clara, FACTURADO (V) lleva la MISMA propina del IMPORTE,
-        # para que Σ FACTURADO "(incluye propinas)" cuadre contra Σ COBRADO.
-        # COBRADO (U) queda vacía con formato moneda: el cargo del renglón
-        # principal ya trae la propina; si Clara la cobró aparte, aquí se
-        # captura a mano y la suma de la banda de totales la toma. DIFERENCIA
+        # En renglones Clara, COBRADO (U) y FACTURADO (V) llevan la MISMA
+        # propina del IMPORTE: el renglón principal muestra el cargo SIN la
+        # propina, así cada renglón cuadra solo y Σ U = cargo total de Clara.
+        # Si la fila quedó SIN CONCILIAR, U queda vacía (con formato moneda)
+        # para captura manual; la banda de totales es SUM y la toma. DIFERENCIA
         # (W) queda vacía (el renglón principal ya contempla la propina).
         if propina_mxn > 0 or propina_ext > 0:
             ws.row_dimensions[row].height = 15
@@ -1024,6 +1034,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 (20, usuario,                'center', 'normal'),
             ]
             if es_clara:
+                if cobrado_propina:
+                    pcells.append((21, cobrado_propina, 'center', 'currency'))  # COBRADO = propina
                 pcells.append((22, propina_actual, 'center', 'currency'))  # FACTURADO = propina
             for col, val, align, style_type in pcells:
                 cell = ws.cell(row=row, column=col, value=val)
@@ -1158,7 +1170,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v9.02'
+    ft.value = 'SMTO Engineering · v9.03'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
