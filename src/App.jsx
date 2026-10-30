@@ -2201,7 +2201,7 @@ function NumCell({ g, upd, field, prefix, suffix, format = true, compact = false
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial, openDetail, isActive }) {
+const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, openImagen, tiposList, isSpecial, openDetail, isActive }) {
   // Callbacks bound to this row's id. useCallback keeps their identity stable
   // across the parent's re-renders (update/remove are themselves stable), so
   // React.memo above can skip re-rendering every OTHER row on each keystroke —
@@ -2261,24 +2261,7 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
               title="Ver imagen original"
               onClick={(e) => {
                 e.stopPropagation()
-                const w = window.open('', '_blank')
-                if (w) {
-                  w.document.write(`
-                    <html>
-                      <head>
-                        <title>${g.proveedor || 'Imagen'}</title>
-                        <style>
-                          body { margin: 0; background: #0a0a0a; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-                          img { max-width: 100%; max-height: 100vh; object-fit: contain; }
-                        </style>
-                      </head>
-                      <body>
-                        <img src="${g.imageDataURL}" alt="${g.proveedor || ''}" />
-                      </body>
-                    </html>
-                  `)
-                  w.document.close()
-                }
+                openImagen(g.imageDataURL, g.proveedor || 'Imagen del ticket')
               }}
             >
               IMG
@@ -2550,7 +2533,67 @@ function DrawerReadOnly({ label, value, mono, hint }) {
   )
 }
 
-function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPrev, onNext, posicion, onSetOrigen }) {
+/* ═══════════════════════════════════════════════════
+   VISOR LATERAL DE DOCUMENTOS
+   Muestra el PDF (o la imagen del ticket) en un panel a la derecha, sin
+   sacar al usuario a otra pestaña. Si el panel de detalle está abierto, el
+   visor se acomoda a su izquierda para ver factura y datos lado a lado.
+   Esc cierra SOLO el visor (no el detalle ni el modal de conciliación).
+═══════════════════════════════════════════════════ */
+function DocViewer({ doc, conDrawer, onClose }) {
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  const abrirEnPestana = () => {
+    if (doc.tipo === 'pdf') { window.open(doc.url, '_blank'); return }
+    const w = window.open('', '_blank')
+    if (!w) return
+    const img = w.document.createElement('img')
+    img.src = doc.url
+    img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
+    w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
+    w.document.body.appendChild(img)
+  }
+
+  return createPortal(
+    <motion.aside
+      className={`dv-panel${conDrawer ? ' con-drawer' : ''}`}
+      role="dialog"
+      aria-label={`Documento: ${doc.nombre}`}
+      initial={{ x: 40, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 40, opacity: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+    >
+      <header className="dv-head">
+        <FileText size={15} className="dv-icon" />
+        <span className="dv-title" title={doc.nombre}>{doc.nombre}</span>
+        <button className="dv-btn" onClick={abrirEnPestana} title="Abrir en una pestaña nueva">
+          <ArrowRight size={14} style={{ transform: 'rotate(-45deg)' }} /> Pestaña nueva
+        </button>
+        <button className="dw-icon-btn" onClick={onClose} title="Cerrar (Esc)" aria-label="Cerrar visor">
+          <X size={16} />
+        </button>
+      </header>
+      <div className="dv-body">
+        {doc.tipo === 'pdf'
+          ? <iframe className="dv-frame" src={`${doc.url}#view=FitH`} title={doc.nombre} />
+          : <img className="dv-img" src={doc.url} alt={doc.nombre} />}
+      </div>
+    </motion.aside>,
+    document.body
+  )
+}
+
+function ExpenseDrawer({ g, update, openPDF, openImagen, tiposList, isSpecial, onClose, onPrev, onNext, posicion, onSetOrigen }) {
   const upd = useCallback((field, val) => update(g.id, field, val), [update, g.id])
 
   // Esc cierra; Alt+↑/↓ navega (Alt para no robar las flechas de los inputs).
@@ -2580,15 +2623,7 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
     : g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL ? { t: 'Captura manual', c: 'muted' }
     : { t: 'Ticket / OCR', c: 'info' }
 
-  const verImagen = () => {
-    const w = window.open('', '_blank')
-    if (!w) return
-    const img = w.document.createElement('img')
-    img.src = g.imageDataURL
-    img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
-    w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
-    w.document.body.appendChild(img)
-  }
+  const verImagen = () => openImagen(g.imageDataURL, g.proveedor || 'Imagen del ticket')
 
   return (
     <motion.aside
@@ -6974,20 +7009,17 @@ export default function App() {
     }
   }
 
-  // ── Abrir PDF en nueva pestaña ──
-  // Estable (deps vacías, usa setModal directo) para preservar la memoización
-  // de GastoRow — así abrir un PDF no fuerza el re-render de toda la tabla.
+  // ── Visor lateral de PDF / imagen ──
+  // Estables (deps vacías, solo setVisor) para preservar la memoización de
+  // GastoRow — así abrir un documento no fuerza el re-render de la tabla.
+  // El object URL se revoca al cerrar el visor o al cambiar de documento.
+  const [visor, setVisor] = useState(null)   // { url, nombre, tipo: 'pdf'|'img', revocar }
+  useEffect(() => () => { if (visor?.revocar) URL.revokeObjectURL(visor.url) }, [visor])
+  const cerrarVisor = useCallback(() => setVisor(null), [])
   const openPDF = useCallback(pdfFile => {
     if (!pdfFile) return
     try {
-      const url = URL.createObjectURL(pdfFile)
-      const win = window.open(url, '_blank')
-      if (!win) setModal({
-        type: 'warning',
-        title: 'No se pudo abrir el PDF',
-        subtitle: 'Verifica que el navegador permita ventanas emergentes para este sitio.',
-        primaryLabel: 'Entendido',
-      })
+      setVisor({ url: URL.createObjectURL(pdfFile), nombre: pdfFile.name || 'Factura.pdf', tipo: 'pdf', revocar: true })
     } catch (err) {
       setModal({
         type: 'error',
@@ -6996,6 +7028,9 @@ export default function App() {
         primaryLabel: 'Entendido',
       })
     }
+  }, [])
+  const openImagen = useCallback((dataURL, nombre) => {
+    if (dataURL) setVisor({ url: dataURL, nombre: nombre || 'Imagen', tipo: 'img', revocar: false })
   }, [])
 
   // ── Medio de pago declarado (facturas sin cargo en Clara) ──
@@ -7014,15 +7049,7 @@ export default function App() {
     const g = (conciliacion?.pendingLista || lista).find(x => x.id === id) || lista.find(x => x.id === id)
     if (!g) return
     if (g.pdfFile) openPDF(g.pdfFile)
-    else if (g.imageDataURL) {
-      const w = window.open('', '_blank')
-      if (!w) return
-      const img = w.document.createElement('img')
-      img.src = g.imageDataURL
-      img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
-      w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
-      w.document.body.appendChild(img)
-    }
+    else if (g.imageDataURL) openImagen(g.imageDataURL, g.proveedor || 'Imagen del ticket')
   }
 
   // Aviso NO destructivo antes de exportar (Excel o ZIP): nada se modifica.
@@ -7097,6 +7124,18 @@ export default function App() {
   const hayFiltros = filtroRapido !== 'todos' || !!busqueda.trim()
 
   const drawerGasto = drawerId ? lista.find(g => g.id === drawerId) : null
+  // Con el visor abierto, navegar en el detalle (Anterior/Siguiente) cambia
+  // también el documento mostrado; si la nueva factura no tiene PDF/imagen,
+  // el visor se cierra para no dejar a la vista el documento de otra.
+  const drawerPrevRef = useRef(drawerId)
+  useEffect(() => {
+    if (drawerPrevRef.current === drawerId) return
+    drawerPrevRef.current = drawerId
+    if (!visor || !drawerGasto) return
+    if (drawerGasto.pdfFile) openPDF(drawerGasto.pdfFile)
+    else if (drawerGasto.imageDataURL) openImagen(drawerGasto.imageDataURL, drawerGasto.proveedor || 'Imagen del ticket')
+    else setVisor(null)
+  }, [drawerId]) // eslint-disable-line react-hooks/exhaustive-deps
   const drawerIdx = drawerGasto ? sortedLista.findIndex(g => g.id === drawerId) : -1
   // Si el gasto abierto se elimina, se cierra el panel.
   useEffect(() => { if (drawerId && !drawerGasto) setDrawerId(null) }, [drawerId, drawerGasto])
@@ -7664,6 +7703,7 @@ export default function App() {
                   update={update}
                   remove={removeGasto}
                   openPDF={openPDF}
+                  openImagen={openImagen}
                   tiposList={tiposList}
                   isSpecial={esColaboradorEspecial}
                   openDetail={setDrawerId}
@@ -7690,6 +7730,7 @@ export default function App() {
             g={drawerGasto}
             update={update}
             openPDF={openPDF}
+            openImagen={openImagen}
             tiposList={tiposList}
             isSpecial={esColaboradorEspecial}
             onClose={closeDrawer}
@@ -7698,6 +7739,12 @@ export default function App() {
             posicion={drawerIdx >= 0 ? `${drawerIdx + 1} de ${sortedLista.length}` : 'Fuera del filtro'}
             onSetOrigen={setOrigenPago}
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {visor && (
+          <DocViewer key={visor.url} doc={visor} conDrawer={!!drawerGasto && !conciliacion} onClose={cerrarVisor} />
         )}
       </AnimatePresence>
 
