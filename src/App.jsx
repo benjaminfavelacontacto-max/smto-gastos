@@ -1,9 +1,12 @@
 import { useState, useRef, useMemo, useEffect, useCallback, memo } from 'react'
+import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
+import { guardarBorrador, leerBorrador, borrarBorrador, CADUCIDAD_DIAS } from './borrador'
+import { isEligibleForTip } from './propinas'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -429,6 +432,95 @@ const COLUMNS = [
   { key: 'montoUSD',          label: 'Monto M.E.',   width: 110, sortable: true,  type: 'number' },
   { key: 'tipoCambio',        label: 'T/C',          width: 80,  sortable: true,  type: 'number' },
 ]
+
+/* Vistas de columnas de la tabla (solo presentación: ocultar una columna
+   jamás borra el dato, y el Excel/ZIP exportan todo igual). `check`,
+   `status` y `proveedor` siempre se ven. */
+const COLUMNAS_FIJAS = ['check', 'status', 'proveedor']
+const COLUMN_PRESETS = {
+  esencial:     { label: 'Esencial',     cols: ['fechaFac', 'fechaCobro', 'noFactura', 'tipo', 'totalCFDI', 'montoPropina', 'totalFinal'] },
+  contable:     { label: 'Contable',     cols: ['fechaFac', 'noFactura', 'concepto', 'tipo', 'importe', 'iva', 'isrTrasladado', 'retencionISR', 'retencionIVA', 'retenciones', 'totalCFDI', 'formaPago'] },
+  conciliacion: { label: 'Conciliación', cols: ['fechaFac', 'fechaCobro', 'noFactura', 'totalCFDI', 'formaPago', 'banco', 'propinaPorcentaje', 'montoPropina', 'totalFinal', 'montoUSD', 'tipoCambio'] },
+  todas:        { label: 'Todas',        cols: COLUMNS.map(c => c.key) },
+}
+const hiddenForPreset = key => {
+  const ver = new Set([...COLUMNAS_FIJAS, ...COLUMN_PRESETS[key].cols])
+  return COLUMNS.map(c => c.key).filter(k => !ver.has(k))
+}
+
+/* Medio de pago DECLARADO por el colaborador para facturas sin cargo en
+   Clara (efectivo propio, tarjeta personal…). Es una anotación informativa:
+   no toca hizoMatch, validado, montoCobrado, formaPago, banco ni importes, y
+   no viaja al Excel (export manda campos explícitos). */
+const ORIGENES_PAGO = [
+  { key: 'efectivo_propio',     label: 'Efectivo propio',           corto: 'Efectivo propio',  icon: '💵', desc: 'Lo pagué con mi dinero en efectivo.',          declarado: 'Efectivo propio · declarado' },
+  { key: 'tarjeta_personal',    label: 'Tarjeta personal',          corto: 'Tarjeta personal', icon: '💳', desc: 'Lo pagué con mi propia tarjeta.',              declarado: 'Tarjeta personal · declarado' },
+  { key: 'otra_cuenta_empresa', label: 'Otra cuenta de la empresa', corto: 'Otra cuenta',      icon: '🏦', desc: 'Se pagó por otro banco o cuenta empresarial.', declarado: 'Otra cuenta empresarial · declarado' },
+  { key: 'otro_periodo_clara',  label: 'Otro periodo de Clara',     corto: 'Otro periodo',     icon: '📅', desc: 'El movimiento podría estar en otro estado de cuenta.', declarado: 'Posible cargo en otro periodo · declarado' },
+  { key: 'sin_identificar',     label: 'No estoy seguro',           corto: 'Por identificar',  icon: '❔', desc: 'Lo dejaré por identificar sin marcarlo como error.', declarado: 'Por identificar' },
+  { key: 'efectivo_empresa',    label: 'Caja chica de la empresa',  corto: 'Caja chica',       icon: '🧾', desc: 'Efectivo de la empresa, no dinero personal.',  declarado: 'Caja chica · declarado', secundaria: true },
+]
+const ORIGEN_POR_KEY = Object.fromEntries(ORIGENES_PAGO.map(o => [o.key, o]))
+// Orígenes que contradicen un cargo de Clara: si la conciliación encuentra
+// cargo para una factura así declarada, se pide revisar (no se borra nada).
+const ORIGENES_FUERA_CLARA = new Set(['efectivo_propio', 'tarjeta_personal', 'otra_cuenta_empresa', 'efectivo_empresa'])
+const etiquetaOrigen = o => ORIGEN_POR_KEY[o]?.declarado || ''
+const conflictoOrigen = g => !!g.hizoMatch && ORIGENES_FUERA_CLARA.has(g.origenPagoDeclarado)
+// Declarada como pagada fuera de Clara, sin cargo, pero BANCO conserva Clara
+// (suele ser el valor por defecto del colaborador). Solo se AVISA al exportar:
+// el valor correcto lo decide contabilidad, aquí no se inventa ningún banco.
+const bancoContradiceOrigen = g => !g.hizoMatch && ORIGENES_FUERA_CLARA.has(g.origenPagoDeclarado) && /clara/i.test(g.banco || '')
+
+/* Filtros rápidos (chips) — solo filtran la VISTA; el export usa `lista`. */
+const tieneXML = g => !!(g.xmlContent || g.xmlFile)
+// matchConfirmado: el usuario confirmó el vínculo en el asistente de
+// conciliación («Confirmar vínculo»); ya no se pide revisarlo de nuevo.
+const necesitaRevisarMatch = g => conflictoOrigen(g) || (!!g.hizoMatch && !g.matchConfirmado && Number(g.matchConfianza) > 0 && Number(g.matchConfianza) < 80)
+
+/* Etiqueta legible del estado bancario de un gasto (texto, no solo color).
+   Sin método guardado (p. ej. cotejo con Saldos o datos viejos) → genérico. */
+const estadoBanco = g => {
+  if (!g.hizoMatch) {
+    const o = ORIGEN_POR_KEY[g.origenPagoDeclarado]
+    if (o && o.key !== 'sin_identificar') return { label: o.corto, cls: 'info', title: `${o.declarado}. Anotación del colaborador: no es una conciliación con Clara.` }
+    return { label: 'Sin conciliar', cls: 'muted', title: 'Aún no se liga a un cargo del estado de cuenta. No es un adeudo.' }
+  }
+  if (conflictoOrigen(g)) return { label: 'Revisar', cls: 'warn', title: `Declarada como «${ORIGEN_POR_KEY[g.origenPagoDeclarado].label}», pero la conciliación encontró un cargo en Clara que podría corresponder.` }
+  if (necesitaRevisarMatch(g)) return { label: 'Revisar', cls: 'warn', title: `Coincidencia por revisar: ${g.matchMetodo} (${g.matchConfianza}%)` }
+  const m = g.matchMetodo || ''
+  const label = /propina/i.test(m) ? 'Propina ✓' : /auth|autoriz/i.test(m) ? 'Código ✓' : 'Conciliado'
+  return { label, cls: 'ok', title: m ? `Conciliado con banco: ${m} (${g.matchConfianza}%)${g.matchConfirmado ? ' · vínculo confirmado por el colaborador' : ''}` : 'Conciliado con el banco' }
+}
+const FILTROS_RAPIDOS = [
+  { key: 'todos',       label: 'Todos',        test: () => true },
+  { key: 'porRevisar',  label: 'Por revisar',  test: g => !g.validado },
+  { key: 'sinXml',      label: 'Sin XML',      test: g => !tieneXML(g) },
+  { key: 'sinConciliar',label: 'Sin conciliar',test: g => !g.hizoMatch },
+  { key: 'conciliados', label: 'Conciliados',  test: g => !!g.hizoMatch },
+  // Solo se muestra si hay alguno: matches de confianza < 80 (mismo umbral que
+  // la pestaña "Revisar" del modal de conciliación).
+  { key: 'revisarMatch', label: 'Revisar coincidencia', test: g => necesitaRevisarMatch(g), soloSiHay: true },
+  { key: 'revisados',   label: 'Revisados',    test: g => !!g.validado },
+  // Ocultos: solo se llega desde "Requiere atención" (Resumen); como chip
+  // aparecen únicamente mientras están activos.
+  { key: 'xmlFaltante',    label: 'Recuperadas sin XML',    test: g => !!g.xmlFaltante, oculto: true },
+  { key: 'sinImporte',     label: 'Sin importe',            test: g => !(Number(g.totalCFDI) || 0) && !(Number(g.montoExtranjero) || Number(g.montoUSD) || 0), oculto: true },
+  { key: 'meSinConciliar', label: 'M.E. sin conciliar',     test: g => normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !g.hizoMatch, oculto: true },
+  { key: 'bancoClaraDeclarada', label: 'BANCO dice Clara · pagada fuera', test: g => bancoContradiceOrigen(g), oculto: true },
+  { key: 'sinClasificarPago', label: 'Sin cargo · medio sin indicar', test: g => !g.hizoMatch && (!g.origenPagoDeclarado || g.origenPagoDeclarado === 'sin_identificar'), oculto: true },
+  { key: 'cobroAntes',     label: 'Cobro antes de factura', test: g => !!g.hizoMatch && !!g.fechaFac && !!cobroToIso(g.fechaCobro) && cobroToIso(g.fechaCobro) < g.fechaFac, oculto: true },
+]
+
+/* fechaCobro → YYYY-MM-DD para <input type="date">. Datos viejos en memoria
+   pueden traer DD/MM/YYYY del banco. */
+const cobroToIso = f => {
+  if (!f) return ''
+  if (f.includes('/')) {
+    const [d, m, y] = f.split('/')
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+  }
+  return f
+}
 
 /* Símbolo por divisa — espejo de CURRENCY_SYMBOLS en api/export-excel.py, para
    que la tabla muestre exactamente el mismo símbolo que el Excel. */
@@ -1509,6 +1601,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     })(),
     fechaFac,
     concepto:   conceptoClasif,
+    // Clave SAT del primer concepto: evidencia objetiva del giro (p. ej.
+    // combustibles 1510xxxx) para la elegibilidad de propina. No va al Excel.
+    claveProdServ,
     tipo: rfc === 'FNI970829JR9'
       ? tipoPeajeFNI(colaborador)
       : autoDetectTipo(proveedor, descripcionFirstLine, usaTiposExtendidos(colaborador) ? undefined : categoriaEfectiva(colaborador), claveProdServ, rfc),
@@ -1628,6 +1723,103 @@ function PremiumButton({ title, icon, variant = 'primary', isDisabled = false, o
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: MENÚ DESPLEGABLE DE LA BARRA
+   Solo agrupa visualmente acciones que ya existen: cada item llama al
+   mismo handler que antes tenía su propio botón. El menú va en un portal a
+   <body> con position:fixed (medido del botón): el backdrop-filter de la
+   barra crea un contexto de apilamiento que lo dejaba debajo de los KPIs, y
+   así tampoco lo recorta el scroll horizontal de la barra en móvil.
+═══════════════════════════════════════════════════ */
+
+function ToolbarMenu({ id, title, icon, variant = 'primary', isDisabled = false, items = [], align = 'left', renderContent, menuClassName = '' }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const btnRef = useRef(null)
+  const menuRef = useRef(null)
+  const visibles = items.filter(it => !it.hidden)
+
+  const toggle = () => {
+    if (isDisabled) return
+    if (open) { setOpen(false); return }
+    const r = btnRef.current.getBoundingClientRect()
+    setPos(align === 'right'
+      ? { top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) }
+      : { top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - 288)) })
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = e => {
+      if (menuRef.current?.contains(e.target) || btnRef.current?.contains(e.target)) return
+      setOpen(false)
+    }
+    const onKey = e => {
+      if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus() }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const els = [...(menuRef.current?.querySelectorAll('.tb-menu-item:not(:disabled)') || [])]
+        if (!els.length) return
+        const i = els.indexOf(document.activeElement)
+        const next = e.key === 'ArrowDown' ? (i + 1) % els.length : (i - 1 + els.length) % els.length
+        els[next].focus()
+      }
+    }
+    const close = () => setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    // Foco al primer item para navegar con flechas.
+    requestAnimationFrame(() => menuRef.current?.querySelector('.tb-menu-item:not(:disabled)')?.focus())
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        id={id}
+        ref={btnRef}
+        className={`btn-premium ${variant}${isDisabled ? ' disabled' : ''}${open ? ' is-open' : ''}`}
+        onClick={toggle}
+        disabled={isDisabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {icon && <span className="btn-icon">{icon}</span>}
+        {title}
+        <ChevronDown size={14} className="tb-chevron" aria-hidden="true" />
+      </button>
+      {open && pos && createPortal(
+        <div className={`tb-menu ${menuClassName}`} role="menu" ref={menuRef} style={pos}>
+          {renderContent ? renderContent(() => setOpen(false)) : visibles.map(it => (
+            <button
+              key={it.label}
+              role="menuitem"
+              className="tb-menu-item"
+              disabled={it.disabled}
+              onClick={() => { setOpen(false); it.onClick() }}
+            >
+              <span className="tb-menu-ic" aria-hidden="true">{it.icon}</span>
+              <span className="tb-menu-txt">
+                <span className="tb-menu-label">{it.label}</span>
+                {it.hint && <span className="tb-menu-hint">{it.hint}</span>}
+              </span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    RECORRIDO GUIADO — "Cómo utilizar"
    Spotlight sobre cada botón clave + popover con el paso.
 ═══════════════════════════════════════════════════ */
@@ -1636,20 +1828,20 @@ const TOUR_STEPS = [
   {
     targetId: 'tour-carpeta',
     icon: '📁',
-    title: 'Paso 1 · Cargar Carpeta',
-    body: 'Empieza aquí. Selecciona la carpeta que contiene tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla.',
+    title: 'Paso 1 · Agregar comprobantes',
+    body: 'Empieza aquí. Abre este menú y elige «Cargar carpeta» para seleccionar la carpeta con tus archivos XML y PDF de las facturas. La app los empareja automáticamente y llena la tabla. En el mismo menú puedes importar un reporte previo, cargar una foto o agregar un gasto manual.',
   },
   {
     targetId: 'tour-banco',
     icon: '🏦',
-    title: 'Paso 2 · Validar Banco',
+    title: 'Paso 2 · Conciliar banco',
     body: 'Antes, descarga el estado de cuenta de Clara del periodo de tu reporte. Luego súbelo aquí: la app concilia cada gasto con su cargo en el banco y detecta propinas.',
   },
   {
     targetId: 'tour-zip',
     icon: '📦',
-    title: 'Paso 3 · Exportar a ZIP',
-    body: 'Descarga el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor: victor.aceves@smto.mx',
+    title: 'Paso 3 · Exportar',
+    body: 'Abre «Exportar» y elige «Excel + facturas (ZIP)» para descargar el ZIP con tus facturas renombradas y el archivo de Excel. Esa carpeta completa es la que se le debe compartir al correo de Víctor: victor.aceves@smto.mx',
   },
 ]
 
@@ -2011,7 +2203,7 @@ function NumCell({ g, upd, field, prefix, suffix, format = true, compact = false
    COMPONENTE: FILA DE LA TABLA
 ═══════════════════════════════════════════════════ */
 
-const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList, isSpecial }) {
+const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, openImagen, tiposList, isSpecial, openDetail, isActive }) {
   // Callbacks bound to this row's id. useCallback keeps their identity stable
   // across the parent's re-renders (update/remove are themselves stable), so
   // React.memo above can skip re-rendering every OTHER row on each keystroke —
@@ -2040,17 +2232,10 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
   const [editingCobro, setEditingCobro] = useState(false)
   // type="date" needs YYYY-MM-DD on its value attr. Bank-matched DD/MM/YYYY
   // from legacy in-memory data still parses correctly via this guard.
-  const cobroIso = (() => {
-    if (!g.fechaCobro) return ''
-    if (g.fechaCobro.includes('/')) {
-      const [d, m, y] = g.fechaCobro.split('/')
-      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
-    }
-    return g.fechaCobro
-  })()
+  const cobroIso = cobroToIso(g.fechaCobro)
 
   return (
-    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new'].filter(Boolean).join(' ')}>
+    <tr className={[g.hizoMatch && 'row-match', g.isNew && 'row-new', isActive && 'row-active'].filter(Boolean).join(' ')}>
       {/* Checkbox */}
       <td className="td-chk">
         <input
@@ -2078,35 +2263,20 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
               title="Ver imagen original"
               onClick={(e) => {
                 e.stopPropagation()
-                const w = window.open('', '_blank')
-                if (w) {
-                  w.document.write(`
-                    <html>
-                      <head>
-                        <title>${g.proveedor || 'Imagen'}</title>
-                        <style>
-                          body { margin: 0; background: #0a0a0a; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-                          img { max-width: 100%; max-height: 100vh; object-fit: contain; }
-                        </style>
-                      </head>
-                      <body>
-                        <img src="${g.imageDataURL}" alt="${g.proveedor || ''}" />
-                      </body>
-                    </html>
-                  `)
-                  w.document.close()
-                }
+                openImagen(g.imageDataURL, g.proveedor || 'Imagen del ticket')
               }}
             >
               IMG
             </button>
           )}
-          <span
-            className={`pill ${g.hizoMatch ? 'pill-blue' : 'pill-dim'}`}
-            title={g.hizoMatch ? 'Conciliado con el Banco' : 'Pendiente en Banco'}
-          >
-            {g.hizoMatch ? '✓ OK' : '·'}
-          </span>
+          {(() => {
+            const eb = estadoBanco(g)
+            return (
+              <span className={`pill pill-banco ${eb.cls}`} title={eb.title}>
+                {g.hizoMatch || eb.cls === 'info' ? eb.label : '·'}
+              </span>
+            )
+          })()}
         </div>
       </td>
 
@@ -2259,6 +2429,13 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             ? `${simboloMoneda(monedaRow) || ''}${totalNativo.toFixed(2)} ${monedaRow}`
             : `$${totalFinalMXN.toFixed(2)}`}
         </span>
+        {(Number(g.montoPropina) > 0 || (propinaNativa && Number(g.propinaExtranjero) > 0)) && (
+          <div className="total-tip-hint">
+            incl. propina {Number(g.montoPropina) > 0
+              ? `$${Number(g.montoPropina).toFixed(2)}`
+              : `${simboloMoneda(monedaRow) || ''}${Number(g.propinaExtranjero).toFixed(2)}`}
+          </div>
+        )}
       </td>
 
       {/* Monto USD — editing it auto-derives Tipo de Cambio from totalCFDI.
@@ -2299,8 +2476,19 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
         />
       </td>
 
-      {/* Eliminar — sticky-right action column; button only visible on row hover */}
+      {/* Acciones — sticky-right: ver detalle (siempre) + eliminar (en hover) */}
       <td className="td-delete">
+        <div className="row-actions">
+        <button
+          className="btn-detail-row"
+          onClick={() => openDetail(g.id)}
+          title="Ver detalle de la factura"
+          aria-label="Ver detalle de la factura"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/>
+          </svg>
+        </button>
         <button
           className="btn-delete-row"
           onClick={onDelete}
@@ -2313,10 +2501,590 @@ const GastoRow = memo(function GastoRow({ g, update, remove, openPDF, tiposList,
             <path d="M9 6V4h6v2"/>
           </svg>
         </button>
+        </div>
       </td>
     </tr>
   )
 })
+
+/* ═══════════════════════════════════════════════════
+   COMPONENTE: PANEL LATERAL DE DETALLE
+   Lee y escribe el MISMO gasto de `lista` por id, a través del mismo
+   `update(id, field, value)` que usa la tabla — así el recálculo de TOTAL,
+   propina y retenciones es idéntico. Los campos con lógica propia de la
+   tabla (Monto M.E. → T/C, propina nativa) se muestran solo lectura aquí.
+═══════════════════════════════════════════════════ */
+
+function DrawerField({ label, children, hint }) {
+  return (
+    <label className="dw-field">
+      <span className="dw-label">{label}</span>
+      {children}
+      {hint && <span className="dw-hint">{hint}</span>}
+    </label>
+  )
+}
+
+function DrawerReadOnly({ label, value, mono, hint }) {
+  return (
+    <div className="dw-field">
+      <span className="dw-label">{label}</span>
+      <span className={`dw-ro${mono ? ' is-mono' : ''}`}>{value || <span className="dw-empty">—</span>}</span>
+      {hint && <span className="dw-hint">{hint}</span>}
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
+   VISOR LATERAL DE DOCUMENTOS
+   Muestra el PDF (o la imagen del ticket) en un panel a la derecha, sin
+   sacar al usuario a otra pestaña. Si el panel de detalle está abierto, el
+   visor se acomoda a su izquierda para ver factura y datos lado a lado.
+   Esc cierra SOLO el visor (no el detalle ni el modal de conciliación).
+═══════════════════════════════════════════════════ */
+function DocViewer({ doc, conDrawer, onClose }) {
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  const abrirEnPestana = () => {
+    if (doc.tipo === 'pdf') { window.open(doc.url, '_blank'); return }
+    const w = window.open('', '_blank')
+    if (!w) return
+    const img = w.document.createElement('img')
+    img.src = doc.url
+    img.style.cssText = 'max-width:100%;max-height:100vh;object-fit:contain'
+    w.document.body.style.cssText = 'margin:0;background:#0a0a0a;display:flex;align-items:center;justify-content:center;min-height:100vh'
+    w.document.body.appendChild(img)
+  }
+
+  return createPortal(
+    <motion.aside
+      className={`dv-panel${conDrawer ? ' con-drawer' : ''}`}
+      role="dialog"
+      aria-label={`Documento: ${doc.nombre}`}
+      initial={{ x: 40, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 40, opacity: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+    >
+      <header className="dv-head">
+        <FileText size={15} className="dv-icon" />
+        <span className="dv-title" title={doc.nombre}>{doc.nombre}</span>
+        <button className="dv-btn" onClick={abrirEnPestana} title="Abrir en una pestaña nueva">
+          <ArrowRight size={14} style={{ transform: 'rotate(-45deg)' }} /> Pestaña nueva
+        </button>
+        <button className="dw-icon-btn" onClick={onClose} title="Cerrar (Esc)" aria-label="Cerrar visor">
+          <X size={16} />
+        </button>
+      </header>
+      <div className="dv-body">
+        {doc.tipo === 'pdf'
+          ? <iframe className="dv-frame" src={`${doc.url}#view=FitH`} title={doc.nombre} />
+          : <img className="dv-img" src={doc.url} alt={doc.nombre} />}
+      </div>
+    </motion.aside>,
+    document.body
+  )
+}
+
+function ExpenseDrawer({ g, update, openPDF, openImagen, tiposList, isSpecial, onClose, onPrev, onNext, posicion, onSetOrigen }) {
+  const upd = useCallback((field, val) => update(g.id, field, val), [update, g.id])
+
+  // Esc cierra; Alt+↑/↓ navega (Alt para no robar las flechas de los inputs).
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') onClose()
+      else if (e.altKey && e.key === 'ArrowUp' && onPrev) { e.preventDefault(); onPrev() }
+      else if (e.altKey && e.key === 'ArrowDown' && onNext) { e.preventDefault(); onNext() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, onPrev, onNext])
+
+  const monedaRow = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+  const totalFinalMXN = (Number(g.totalCFDI) || 0) + (Number(g.montoPropina) || 0)
+  const totalNativo = (Number(g.montoExtranjero) || 0) + (Number(g.propinaExtranjero) || 0)
+  const fmt = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtNat = n => `${simboloMoneda(monedaRow) || ''}${(Number(n) || 0).toFixed(2)} ${monedaRow}`
+  // Ticket extranjero sin conciliar: total nativo en vez de un "$0.00" engañoso.
+  const propinaNativaDw = monedaRow !== 'MXN' && !(Number(g.montoPropina) > 0)
+  const muestraTotal = () =>
+    monedaRow !== 'MXN' && totalFinalMXN === 0 && totalNativo > 0 ? fmtNat(totalNativo) : fmt(totalFinalMXN)
+
+  const docEstado = g.xmlFaltante ? { t: 'Falta XML', c: 'warn' }
+    : tieneXML(g) && g.tienePDF ? { t: 'XML + PDF', c: 'ok' }
+    : tieneXML(g) ? { t: 'Solo XML', c: 'info' }
+    : g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL ? { t: 'Captura manual', c: 'muted' }
+    : { t: 'Ticket / OCR', c: 'info' }
+
+  const verImagen = () => openImagen(g.imageDataURL, g.proveedor || 'Imagen del ticket')
+
+  return (
+    <motion.aside
+      className="dw-panel"
+      role="dialog"
+      aria-label={`Detalle de ${g.proveedor || 'factura'}`}
+      initial={{ x: 40, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 40, opacity: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+    >
+      <header className="dw-head">
+        <div className="dw-nav">
+          <button className="dw-icon-btn" onClick={onPrev} disabled={!onPrev} title="Anterior (Alt+↑)" aria-label="Factura anterior">
+            <ChevronDown size={16} style={{ transform: 'rotate(180deg)' }} />
+          </button>
+          <button className="dw-icon-btn" onClick={onNext} disabled={!onNext} title="Siguiente (Alt+↓)" aria-label="Factura siguiente">
+            <ChevronDown size={16} />
+          </button>
+          {posicion && <span className="dw-pos">{posicion}</span>}
+          <button className="dw-icon-btn dw-close" onClick={onClose} title="Cerrar (Esc)" aria-label="Cerrar detalle">
+            <X size={16} />
+          </button>
+        </div>
+        <h2 className="dw-title">{g.proveedor || 'Sin proveedor'}</h2>
+        <div className="dw-sub">
+          <span className="is-mono">{g.noFactura || 'Sin folio'}</span>
+          <span>·</span>
+          <span>{formatDateDisplay(g.fechaFac) || 'Sin fecha'}</span>
+          <span>·</span>
+          <span className="dw-total">{muestraTotal()}</span>
+          {Number(g.montoPropina) > 0 && <span className="dw-tip-chip">incl. propina {fmt(g.montoPropina)}</span>}
+        </div>
+        <div className="dw-badges">
+          <span className={`st-badge ${docEstado.c}`}>{docEstado.t}</span>
+          <span className={`st-badge ${estadoBanco(g).cls}`} title={estadoBanco(g).title}>
+            {necesitaRevisarMatch(g) ? 'Revisar coincidencia' : g.hizoMatch ? 'Conciliado con banco' : 'Sin conciliar'}
+          </span>
+          <span className={`st-badge ${g.validado ? 'ok' : 'warn'}`}>{g.validado ? 'Revisado' : 'Por revisar'}</span>
+          {!g.hizoMatch && ORIGEN_POR_KEY[g.origenPagoDeclarado] && g.origenPagoDeclarado !== 'sin_identificar' && (
+            <span className="st-badge info">{etiquetaOrigen(g.origenPagoDeclarado)}</span>
+          )}
+        </div>
+      </header>
+
+      <div className="dw-body">
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Documentos</h3>
+          <div className="dw-docs">
+            <button className="dw-doc-btn" disabled={!g.tienePDF} onClick={() => openPDF(g.pdfFile)}>
+              <FileText size={15} /> {g.tienePDF ? 'Abrir PDF' : 'Sin PDF'}
+            </button>
+            {g.imageDataURL && (
+              <button className="dw-doc-btn" onClick={verImagen}>
+                <FileText size={15} /> Ver imagen original
+              </button>
+            )}
+            <span className={`dw-doc-flag${tieneXML(g) ? ' ok' : ''}`}>
+              {tieneXML(g) ? <Check size={13} /> : <X size={13} />} XML {tieneXML(g) ? 'cargado' : 'no cargado'}
+            </span>
+          </div>
+          {g.uuid && g.uuid !== 'MANUAL' && <DrawerReadOnly label="UUID (folio fiscal)" value={g.uuid} mono />}
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Datos de la factura</h3>
+          <div className="dw-grid">
+            <DrawerField label="Proveedor">
+              <input className="dw-in" value={g.proveedor || ''} onChange={e => upd('proveedor', e.target.value)} />
+            </DrawerField>
+            <DrawerReadOnly label="RFC" value={g.rfc} mono />
+            <DrawerField label="Factura (folio)">
+              <input className="dw-in is-mono" value={g.noFactura || ''} onChange={e => upd('noFactura', e.target.value)} />
+            </DrawerField>
+            <DrawerField label="Fecha factura" hint="DD-MM-AAAA">
+              <input className="dw-in" value={formatDateDisplay(g.fechaFac)} onChange={e => upd('fechaFac', parseDateDisplay(e.target.value))} />
+            </DrawerField>
+            <DrawerField label="Concepto">
+              <input className="dw-in" value={g.concepto || ''} onChange={e => upd('concepto', e.target.value)} />
+            </DrawerField>
+            <DrawerField label="Tipo de gasto">
+              <select className="dw-in" value={g.tipo || ''} onChange={e => upd('tipo', e.target.value)}>
+                <option value="">— Tipo —</option>
+                {tiposList.map(t => <option key={t} value={t}>{t}</option>)}
+                {g.tipo && !tiposList.includes(g.tipo) && <option value={g.tipo}>{g.tipo}</option>}
+              </select>
+            </DrawerField>
+          </div>
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Importes</h3>
+          <div className="dw-grid dw-grid-num">
+            <DrawerField label="Subtotal"><NumCell g={g} upd={upd} field="importe" prefix="$" /></DrawerField>
+            <DrawerField label="IVA"><NumCell g={g} upd={upd} field="iva" prefix="$" /></DrawerField>
+            <DrawerField label="ISH / IEPS"><NumCell g={g} upd={upd} field="isrTrasladado" prefix="$" /></DrawerField>
+            <DrawerField label="Ret. ISR"><NumCell g={g} upd={upd} field="retencionISR" prefix="$" /></DrawerField>
+            <DrawerField label="Ret. IVA"><NumCell g={g} upd={upd} field="retencionIVA" prefix="$" /></DrawerField>
+            <DrawerField label="Retenciones"><NumCell g={g} upd={upd} field="retenciones" prefix="$" /></DrawerField>
+            <DrawerField label="Total factura"><NumCell g={g} upd={upd} field="totalCFDI" prefix="$" /></DrawerField>
+          </div>
+        </section>
+
+        {/* Propina — mismo update() que la tabla: editar % recalcula $ y
+            viceversa. Ticket extranjero sin conciliar: la propina vive en su
+            divisa (lógica propia de la tabla), aquí solo lectura. */}
+        <section className="dw-sec dw-sec-tip">
+          <h3 className="dw-sec-title">Propina</h3>
+          <div className="dw-grid dw-grid-num">
+            {propinaNativaDw ? (
+              <DrawerReadOnly label={`Propina (${monedaRow})`} value={Number(g.propinaExtranjero) > 0 ? fmtNat(g.propinaExtranjero) : null} hint="En ticket extranjero se edita en la tabla" />
+            ) : (
+              <>
+                <DrawerField label="Propina %"><NumCell g={g} upd={upd} field="propinaPorcentaje" suffix="%" compact /></DrawerField>
+                <DrawerField label="Propina $"><NumCell g={g} upd={upd} field="montoPropina" prefix="$" compact /></DrawerField>
+              </>
+            )}
+            <DrawerReadOnly label="Total final" value={muestraTotal()} hint="Factura + propina" />
+          </div>
+          {g.hizoMatch && /propina/i.test(g.matchMetodo || '') && (
+            <p className="dw-tip-note">La conciliación detectó esta propina: {g.matchMetodo}.</p>
+          )}
+        </section>
+
+        <section className="dw-sec">
+          <h3 className="dw-sec-title">Pago y conciliación</h3>
+          <div className="dw-grid">
+            <DrawerField label="Forma de pago">
+              <select className="dw-in" value={g.formaPago} onChange={e => upd('formaPago', e.target.value)}>
+                <option value="04">04 - Tarjeta de Crédito</option>
+                <option value="02">02 - Efectivo</option>
+                <option value="03">03 - Transferencia</option>
+                <option value="01">01 - Efectivo (otro)</option>
+                <option value="99">99 - Por Definir</option>
+              </select>
+            </DrawerField>
+            <DrawerField label="Fecha de cobro" hint={g.hizoMatch ? 'Tomada del estado de cuenta' : 'Igual a la fecha de factura hasta conciliar'}>
+              <input type="date" className="dw-in" value={cobroToIso(g.fechaCobro)} onChange={e => upd('fechaCobro', e.target.value)} />
+            </DrawerField>
+            {isSpecial && (
+              <DrawerField label="Banco">
+                <select className="dw-in" value={g.banco || ''} onChange={e => upd('banco', e.target.value)}>
+                  <option value="">—</option>
+                  {BANCOS_DISPONIBLES.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </DrawerField>
+            )}
+            {!isSpecial && (
+              <DrawerReadOnly label="Banco asignado en el reporte" value={g.banco} hint="Columna BANCO del Excel. Un valor por defecto no prueba quién pagó." />
+            )}
+            {(!g.hizoMatch || conflictoOrigen(g)) && (
+              <DrawerField
+                label="Medio de pago declarado"
+                hint={conflictoOrigen(g)
+                  ? 'Hay un cargo de Clara ligado a esta factura: revisa si la declaración es correcta.'
+                  : 'Informativo: no concilia, no cambia importes y no va al Excel.'}
+              >
+                <select className="dw-in" value={g.origenPagoDeclarado || ''} onChange={e => onSetOrigen([g.id], e.target.value || null, g.origenPagoNota)}>
+                  <option value="">Sin indicar</option>
+                  {ORIGENES_PAGO.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>
+              </DrawerField>
+            )}
+            {g.hizoMatch && g.matchMetodo && (
+              <DrawerReadOnly
+                label="Cómo se concilió"
+                value={`${g.matchMetodo} · ${g.matchConfianza}%`}
+                hint={necesitaRevisarMatch(g) ? 'Confianza baja: confirma que sea el cargo correcto' : 'Calculado por el motor de conciliación'}
+              />
+            )}
+            <DrawerReadOnly label="Cobrado en banco" value={g.hizoMatch && Number(g.montoCobrado) > 0 ? fmt(g.montoCobrado) : null} hint={g.hizoMatch ? undefined : 'Se llena al conciliar'} />
+            {(Number(g.montoUSD) > 0 || monedaRow !== 'MXN') && (
+              <>
+                <DrawerReadOnly label={`Monto M.E. (${monedaRow === 'MXN' ? 'USD' : monedaRow})`} value={Number(g.montoUSD) > 0 ? String(g.montoUSD) : null} hint="Se edita en la tabla" />
+                <DrawerReadOnly label="Tipo de cambio" value={Number(g.tipoCambio) > 0 ? String(g.tipoCambio) : null} />
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <footer className="dw-foot">
+        <label className={`dw-review${g.validado ? ' is-on' : ''}`}>
+          <input type="checkbox" checked={!!g.validado} onChange={e => upd('validado', e.target.checked)} />
+          <span>Marcar como revisada</span>
+        </label>
+        <button className="btn-premium primary" onClick={onNext || onClose}>
+          {onNext ? 'Siguiente' : 'Cerrar'}
+        </button>
+      </footer>
+    </motion.aside>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
+   COMPONENTE: PESTAÑA RESUMEN
+   Solo lectura, derivado de `lista`. Nada aquí toca la exportación. Los
+   montos son el TOTAL facturado en pesos (misma base que el KPI); los gastos
+   en moneda extranjera aún sin convertir NO se suman (se reportan aparte),
+   para no mezclar divisas.
+═══════════════════════════════════════════════════ */
+
+const fmtMXN = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+function BarList({ rows, emptyText }) {
+  if (!rows.length) return <div className="rs-empty">{emptyText}</div>
+  const max = Math.max(...rows.map(r => r.value), 0) || 1
+  return (
+    <div className="rs-bars" role="table">
+      {rows.map(r => (
+        <div key={r.label} className="rs-bar-row" role="row" title={`${r.label}: ${fmtMXN(r.value)} · ${r.count} ${r.count === 1 ? 'registro' : 'registros'}`}>
+          <span className="rs-bar-label" role="cell">{r.label}</span>
+          <span className="rs-bar-track" role="cell" aria-hidden="true">
+            <span className="rs-bar-fill" style={{ width: `${Math.max(1.5, (r.value / max) * 100)}%` }} />
+          </span>
+          <span className="rs-bar-val" role="cell">{fmtMXN(r.value)}</span>
+          <span className="rs-bar-n" role="cell">{r.count}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ResumenPanel({ lista, avisos, onIrAFiltro }) {
+  const [criterioFecha, setCriterioFecha] = useState('fechaFac')
+
+  const datos = useMemo(() => {
+    const enPesos = lista.filter(g => (Number(g.totalCFDI) || 0) !== 0)
+    const sinConvertir = lista.filter(g =>
+      normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !(Number(g.totalCFDI) || 0))
+    const agrupa = (arr, keyFn) => {
+      const m = new Map()
+      for (const g of arr) {
+        const k = keyFn(g)
+        const cur = m.get(k) || { label: k, value: 0, count: 0 }
+        cur.value += Number(g.totalCFDI) || 0
+        cur.count++
+        m.set(k, cur)
+      }
+      return [...m.values()]
+    }
+    const porTipo = agrupa(enPesos, g => g.tipo || 'Sin tipo').sort((a, b) => b.value - a.value)
+    const provs = agrupa(enPesos, g => (g.proveedor || 'Sin proveedor').trim()).sort((a, b) => b.value - a.value)
+    const TOP = 8
+    const porProveedor = provs.length > TOP + 1
+      ? [...provs.slice(0, TOP), provs.slice(TOP).reduce((acc, r) => ({ label: `Otros (${provs.length - TOP})`, value: acc.value + r.value, count: acc.count + r.count }), { value: 0, count: 0 })]
+      : provs
+
+    const conciliadas = lista.filter(g => g.hizoMatch)
+    const facturado = enPesos.reduce((s, g) => s + (Number(g.totalCFDI) || 0), 0)
+    const cobrado = conciliadas.reduce((s, g) => s + (Number(g.montoCobrado) || 0), 0)
+
+    const monedas = new Map()
+    for (const g of lista) {
+      const c = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+      if (c === 'MXN') continue
+      const cur = monedas.get(c) || { code: c, count: 0, nativo: 0, convertidas: 0 }
+      cur.count++
+      cur.nativo += (Number(g.montoExtranjero) || Number(g.montoUSD) || 0) + (Number(g.propinaExtranjero) || 0)
+      if ((Number(g.totalCFDI) || 0) > 0) cur.convertidas++
+      monedas.set(c, cur)
+    }
+
+    const docs = { xmlPdf: 0, soloXml: 0, ticket: 0, manual: 0 }
+    for (const g of lista) {
+      if (tieneXML(g) && g.tienePDF) docs.xmlPdf++
+      else if (tieneXML(g)) docs.soloXml++
+      else if (g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL) docs.manual++
+      else docs.ticket++
+    }
+
+    return { porTipo, porProveedor, sinConvertir, facturado, cobrado, conciliadas: conciliadas.length, monedas: [...monedas.values()], docs }
+  }, [lista])
+
+  // Serie por día — fecha de factura o de cobro, elegida explícitamente.
+  // fechaCobro = fechaFac hasta conciliar, por eso se aclara en el subtítulo.
+  const porDia = useMemo(() => {
+    const m = new Map()
+    for (const g of lista) {
+      const iso = criterioFecha === 'fechaCobro' ? cobroToIso(g.fechaCobro) : (g.fechaFac || '')
+      const v = Number(g.totalCFDI) || 0
+      if (!iso || !v) continue
+      const cur = m.get(iso) || { iso, value: 0, count: 0 }
+      cur.value += v
+      cur.count++
+      m.set(iso, cur)
+    }
+    return [...m.values()].sort((a, b) => a.iso.localeCompare(b.iso))
+  }, [lista, criterioFecha])
+  const maxDia = Math.max(...porDia.map(d => d.value), 0) || 1
+
+  const n = lista.length
+  const pctBanco = n ? Math.round((datos.conciliadas / n) * 100) : 0
+  const revisadas = lista.filter(g => g.validado).length
+  const pctRev = n ? Math.round((revisadas / n) * 100) : 0
+
+  return (
+    <div className="rs-wrap">
+      {/* Requiere atención — informativo; cada aviso lleva a su filtro. */}
+      <section className="rs-card rs-atencion">
+        <div className="rs-card-head">
+          <h3>Requiere atención</h3>
+          <span className="rs-card-sub">Avisos informativos: nada se bloquea ni se cambia solo</span>
+        </div>
+        {avisos.length === 0 ? (
+          <div className="rs-ok"><CheckCircle2 size={16} /> Todo en orden: no hay avisos pendientes.</div>
+        ) : (
+          <ul className="rs-avisos">
+            {avisos.map(a => (
+              <li key={a.key}>
+                <button className={`rs-aviso ${a.nivel}`} onClick={() => onIrAFiltro(a.filtro)}>
+                  <span className="rs-aviso-ic" aria-hidden="true">
+                    {a.nivel === 'warn' ? <AlertTriangle size={15} /> : <Info size={15} />}
+                  </span>
+                  <span className="rs-aviso-txt">
+                    <span className="rs-aviso-t"><strong>{a.count}</strong> {a.titulo}</span>
+                    <span className="rs-aviso-d">{a.detalle}</span>
+                  </span>
+                  <span className="rs-aviso-go">Ver <ArrowRight size={13} /></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Progresos independientes */}
+      <section className="rs-card">
+        <div className="rs-card-head"><h3>Avance del reporte</h3></div>
+        <div className="rs-progress-grid">
+          <div className="rs-progress">
+            <div className="rs-progress-top"><span>Conciliación bancaria</span><strong>{datos.conciliadas} de {n}</strong></div>
+            <div className="metric-progress"><span style={{ width: `${pctBanco}%` }} /></div>
+            <span className="rs-progress-hint">Facturas ligadas a un cargo del estado de cuenta</span>
+          </div>
+          <div className="rs-progress">
+            <div className="rs-progress-top"><span>Revisión manual</span><strong>{revisadas} de {n}</strong></div>
+            <div className="metric-progress revision"><span style={{ width: `${pctRev}%` }} /></div>
+            <span className="rs-progress-hint">Facturas marcadas con la casilla de revisión</span>
+          </div>
+        </div>
+        <div className="rs-stats">
+          <div className="rs-stat"><span>Facturado (MXN)</span><strong>{fmtMXN(datos.facturado)}</strong></div>
+          <div className="rs-stat" title="Suma de lo que el estado de cuenta cobró en las facturas conciliadas. Solo existe después de conciliar.">
+            <span>Cobrado en banco</span>
+            <strong className={datos.conciliadas ? '' : 'is-empty'}>{datos.conciliadas ? fmtMXN(datos.cobrado) : 'Sin conciliar'}</strong>
+          </div>
+          <div className="rs-stat"><span>XML + PDF</span><strong>{datos.docs.xmlPdf}</strong></div>
+          <div className="rs-stat"><span>Solo XML</span><strong>{datos.docs.soloXml}</strong></div>
+          <div className="rs-stat"><span>Ticket / OCR</span><strong>{datos.docs.ticket}</strong></div>
+          <div className="rs-stat"><span>Captura manual</span><strong>{datos.docs.manual}</strong></div>
+        </div>
+      </section>
+
+      {/* Sin cargo en Clara, por medio de pago DECLARADO. Solo tiene sentido
+          después de conciliar; es avance de captura, no de conciliación. */}
+      {lista.some(g => g.hizoMatch) && (() => {
+        const sinCargo = lista.filter(g => !g.hizoMatch)
+        if (!sinCargo.length) return null
+        const cuenta = k => sinCargo.filter(g => (g.origenPagoDeclarado || 'sin_identificar') === k).length
+        const porIdentificar = cuenta('sin_identificar')
+        return (
+          <section className="rs-card">
+            <div className="rs-card-head">
+              <h3>Facturas sin cargo en Clara: {sinCargo.length}</h3>
+              <span className="rs-card-sub">{sinCargo.length - porIdentificar} de {sinCargo.length} con medio de pago indicado · declarado por el colaborador</span>
+            </div>
+            <div className="rs-origenes">
+              {ORIGENES_PAGO.filter(o => !o.secundaria || cuenta(o.key)).map(o => (
+                <div key={o.key} className="rs-origen">
+                  <span aria-hidden="true">{o.icon}</span>
+                  <strong>{cuenta(o.key)}</strong>
+                  <span>{o.key === 'sin_identificar' ? 'Por identificar' : o.label}</span>
+                </div>
+              ))}
+            </div>
+            {porIdentificar > 0 && (
+              <button className="chip-clear" style={{ marginTop: 10 }} onClick={() => onIrAFiltro('sinClasificarPago')}>
+                Ver las {porIdentificar} por identificar →
+              </button>
+            )}
+          </section>
+        )
+      })()}
+
+      <div className="rs-grid-2">
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Gasto por tipo</h3>
+            <span className="rs-card-sub">Total facturado en pesos · registros</span>
+          </div>
+          <BarList rows={datos.porTipo} emptyText="Sin importes en pesos todavía." />
+        </section>
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Principales proveedores</h3>
+            <span className="rs-card-sub">Total facturado en pesos · registros</span>
+          </div>
+          <BarList rows={datos.porProveedor} emptyText="Sin importes en pesos todavía." />
+        </section>
+      </div>
+
+      <section className="rs-card">
+        <div className="rs-card-head">
+          <h3>Gasto por día</h3>
+          <div className="density-toggle" role="group" aria-label="Fecha a usar">
+            <button className={criterioFecha === 'fechaFac' ? 'active' : ''} aria-pressed={criterioFecha === 'fechaFac'} onClick={() => setCriterioFecha('fechaFac')}>Fecha de factura</button>
+            <button className={criterioFecha === 'fechaCobro' ? 'active' : ''} aria-pressed={criterioFecha === 'fechaCobro'} onClick={() => setCriterioFecha('fechaCobro')}>Fecha de cobro</button>
+          </div>
+        </div>
+        {criterioFecha === 'fechaCobro' && (
+          <p className="rs-note">Hasta conciliar, la fecha de cobro es igual a la de factura; solo las conciliadas traen la fecha real del banco.</p>
+        )}
+        {porDia.length === 0 ? <div className="rs-empty">Sin importes con fecha.</div> : (
+          <div className="rs-cols" role="table">
+            {porDia.map(d => (
+              <div key={d.iso} className="rs-col" role="row" title={`${formatDateDisplay(d.iso)}: ${fmtMXN(d.value)} · ${d.count} ${d.count === 1 ? 'registro' : 'registros'}`}>
+                <span className="rs-col-track" aria-hidden="true">
+                  <span className="rs-col-fill" style={{ height: `${Math.max(2, (d.value / maxDia) * 100)}%` }} />
+                </span>
+                <span className="rs-col-label" role="cell">{formatDateDisplay(d.iso).slice(0, 5)}</span>
+                <span className="sr-only" role="cell">{fmtMXN(d.value)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {(datos.monedas.length > 0) && (
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Moneda extranjera</h3>
+            <span className="rs-card-sub">Cada divisa por separado: no se suman entre sí</span>
+          </div>
+          <table className="rs-table">
+            <thead><tr><th>Divisa</th><th>Registros</th><th>Total en su moneda</th><th>Con monto en pesos</th></tr></thead>
+            <tbody>
+              {datos.monedas.map(m => (
+                <tr key={m.code}>
+                  <td>{m.code}</td>
+                  <td>{m.count}</td>
+                  <td>{simboloMoneda(m.code) || ''}{m.nativo.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td>
+                    <span className={`st-badge ${m.convertidas === m.count ? 'ok' : 'warn'}`}>
+                      {m.convertidas} de {m.count}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {datos.sinConvertir.length > 0 && (
+            <p className="rs-note">{datos.sinConvertir.length} {datos.sinConvertir.length === 1 ? 'gasto' : 'gastos'} en moneda extranjera aún sin monto en pesos: no entran en las gráficas de arriba hasta conciliar (no son gastos de $0).</p>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
 
 /* ═══════════════════════════════════════════════════
    COMPONENTE: MODAL DE CONCILIACIÓN (glass + framer-motion)
@@ -2354,578 +3122,852 @@ function KpiCard({ variants, accent, Icon, value }) {
   )
 }
 
-function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual }) {
-  const total = Math.max(1, data.bancoRows || 0)
-  const pct = Math.min(100, Math.round((data.matches / total) * 100))
-  const sinCargoRows = data.facturasSinCargo || []
-  const docsSubidos = data.docsSubidos || 0
-  const cBanco    = useCountUp(data.bancoRows)
-  const cMatches  = useCountUp(data.matches)
-  const cSin      = useCountUp(data.sinFactura.length)
-  const cSinCargo = useCountUp(sinCargoRows.length)
-  const cPropinas = useCountUp(data.propinas)
-  const cPct      = useCountUp(pct)
-
+function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual, onSetOrigen, onVerFactura, esEspecial }) {
   const matchedRows = data.matchedRows || []
-  const revisionRows = matchedRows.filter(m => m.confidence < 80)
-  const matchCount = data.matches || 0
+  const sinFactura  = data.sinFactura || []
+  const sinCargo    = data.facturasSinCargo || []
+  const totalCargos = matchedRows.length + sinFactura.length
+  const totalDocs   = matchedRows.length + sinCargo.length
 
-  // Normalize close/cancel: an explicit Cancel is the same as closing the
-  // modal without confirming — matches don't get applied either way.
+  // El gasto VIVO (pendingLista) por id: la clasificación de origen de pago
+  // se actualiza mientras el modal está abierto.
+  const gastosPorId = useMemo(() => new Map((data.pendingLista || []).map(g => [g.id, g])), [data.pendingLista])
+  const origenDe = id => gastosPorId.get(id)?.origenPagoDeclarado || null
+  const tieneDoc = id => { const g = gastosPorId.get(id); return !!(g && (g.tienePDF || g.imageDataURL)) }
+  const conflicto = m => ORIGENES_FUERA_CLARA.has(origenDe(m.invoiceId))
+  // Clases EXCLUYENTES del universo banco: revisar ∪ sinObs = vinculados.
+  const requiereRevision = m => m.confidence < 80 || conflicto(m)
+  const revisar = matchedRows.filter(requiereRevision)
+  const sinObs  = matchedRows.filter(m => !requiereRevision(m))
+
   const handleCancel = onCancel || onClose
 
-  const [tab, setTab] = useState('matches')
+  // ── Decisiones del asistente ── No tocan ningún dato hasta «Aplicar».
+  // decision[invoiceId] = 'confirmada' | 'descartada'. Una coincidencia «por
+  // revisar» SIN decisión explícita no se aplica (queda sin vincular, con
+  // aviso en el resumen); una «sin observaciones» se aplica salvo que el
+  // usuario la marque «No corresponde». No reutiliza `validado` (revisión
+  // manual del renglón): es solo la decisión sobre el vínculo banco↔factura.
+  const [decision, setDecision] = useState({})
+  const decidir = (invoiceId, d) => setDecision(prev => {
+    const n = { ...prev }
+    if (n[invoiceId] === d) delete n[invoiceId]; else n[invoiceId] = d
+    return n
+  })
+  const seAplica = m => decision[m.invoiceId] === 'descartada' ? false
+    : requiereRevision(m) ? decision[m.invoiceId] === 'confirmada' : true
+  const aplicables = matchedRows.filter(seAplica)
+  const excluidos = matchedRows.filter(m => !seAplica(m)).map(m => m.invoiceId)
+  const revPendientes = revisar.filter(m => !decision[m.invoiceId])
+  const revConfirmadas = revisar.filter(m => decision[m.invoiceId] === 'confirmada')
+  const descartadas = matchedRows.filter(m => decision[m.invoiceId] === 'descartada')
+  const [paso, setPaso] = useState(1)
+  const [avanzado, setAvanzado] = useState(false)
+  const [verSinObs, setVerSinObs] = useState(false)
+  const [salir, setSalir] = useState(false)
+  const confirmados = revConfirmadas.map(m => m.invoiceId)
+  // ── Propinas detectadas ── Se destacan aparte: el motor las INFIRIÓ
+  // (cargo − factura, o impresa en el ticket) y al aplicar se vuelven un
+  // renglón de propina en el reporte, así que el colaborador debe verlas.
+  const conPropina = matchedRows.filter(m => m.propina > 0)
+  const propinasAplican = conPropina.filter(seAplica)
+  const sumaPropinas = lst => lst.filter(m => (m.invoiceMoneda || 'MXN') === 'MXN').reduce((a, m) => a + (Number(m.propina) || 0), 0)
+  const origenPropina = m => /^Propina sugerida/.test(m.method) || m.pass === 0 ? 'Impresa en el ticket' : 'Estimada: cargo − factura'
+  const aplicar = () => (aplicables.length ? onConfirm(excluidos, confirmados) : handleCancel())
+  // Salir sin aplicar: si ya decidió algo, confirmar antes de perderlo.
+  const pedirSalir = () => (Object.keys(decision).length ? setSalir(true) : handleCancel())
+  const [tab, setTab] = useState(revisar.length ? 'revisar' : sinFactura.length ? 'sinFactura' : 'coincidencias')
   const [query, setQuery] = useState('')
-  const [filterKey, setFilterKey] = useState('all')
   const [expandedId, setExpandedId] = useState(null)
-  const [loading, setLoading] = useState(true)
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(t)
-  }, [])
+  const [ayuda, setAyuda] = useState(false)
+  const [filtroOrigen, setFiltroOrigen] = useState('todas')
+  const [editando, setEditando] = useState(null)      // { id, origen, nota }
+  const [masivo, setMasivo] = useState(null)          // { origen } panel de clasificación masiva
+  const [deshacer, setDeshacer] = useState(null)      // { previos: [{id, origen, nota}], texto }
 
-  // Esc → cancel, Enter → confirm. Skip Enter when the user is typing in a
-  // form control (the search input is right there).
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        handleCancel && handleCancel()
+        if (salir) setSalir(false)
+        else if (editando) setEditando(null)
+        else if (masivo) setMasivo(null)
+        else pedirSalir()
       } else if (e.key === 'Enter') {
         const tag = e.target && e.target.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return
+        if (salir) return
         e.preventDefault()
-        onConfirm && onConfirm()
+        // Enter avanza el asistente; solo aplica en el último paso.
+        if (!avanzado && paso < 3) setPaso(paso + 1)
+        else aplicar()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleCancel, onConfirm])
+  })
 
   const fmtMoney = (n, currency = 'MXN') => {
     const num = Number(n) || 0
     const code = (currency || 'MXN').toUpperCase()
-    // US$ para dólares (no confundirlo con pesos) y el símbolo nativo para el
-    // resto: antes CUALQUIER divisa que no fuera USD se pintaba con "$", así
-    // que un cargo en yuanes salía como "$244.11 CNY".
     const pre = code === 'USD' ? 'US$' : code === 'MXN' ? '$' : (simboloMoneda(code) || '')
     return `${pre}${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
+  // Clara llena "Monto original" también en cargos en pesos: solo es divisa
+  // si la fila lo dice.
+  const tieneDivisa = m => (m.csvMoneda || 'MXN') !== 'MXN' && m.csvAmountUSD > 0
+  // Si el banco no trae descripción, fallback honesto: nunca el proveedor del
+  // match como si viniera del banco.
+  const descCargo = (desc, fecha, monto, moneda) =>
+    desc || `Cargo del ${formatDateDisplay(fecha)} por ${fmtMoney(monto, moneda)}`
 
-  const matchesPassesFilter = (m) => {
-    if (filterKey === 'usd') return m.csvMoneda === 'USD' || m.invoiceMoneda === 'USD'
-    if (filterKey === 'mxn') return (m.csvMoneda || 'MXN') === 'MXN' && (m.invoiceMoneda || 'MXN') === 'MXN'
-    if (filterKey === 'tickets') return m.isTicket
-    if (filterKey === 'facturas') return !m.isTicket
-    return true
-  }
-  const sinFactPassesFilter = (s) => {
-    if (filterKey === 'usd') return (s.moneda || 'MXN') === 'USD'
-    if (filterKey === 'mxn') return (s.moneda || 'MXN') === 'MXN'
-    return true   // tickets/facturas filter is only meaningful for matched rows
-  }
-  const sinCargoPassesFilter = (f) => {
-    if (filterKey === 'usd') return (f.moneda || 'MXN') === 'USD'
-    if (filterKey === 'mxn') return (f.moneda || 'MXN') === 'MXN'
-    if (filterKey === 'tickets') return f.isTicket
-    if (filterKey === 'facturas') return !f.isTicket
-    return true
-  }
-  // Clara llena "Monto original" incluso en cargos en pesos, así que un match
-  // MXN traía csvAmountUSD == csvAmountMXN y la tarjeta mostraba el mismo
-  // dinero dos veces (en pesos y en "USD"). Solo es divisa si la fila lo dice.
-  const tieneDivisa = (m) => (m.csvMoneda || 'MXN') !== 'MXN' && m.csvAmountUSD > 0
+  const q = query.trim().toLowerCase()
+  const coincide = (...campos) => !q || campos.some(c => String(c ?? '').toLowerCase().includes(q))
+  const matchVisible = m => coincide(m.invoiceName, m.invoiceNumber, m.csvDescripcion, m.csvAuth, m.csvAmountMXN, m.invoiceTotal, formatDateDisplay(m.csvDate))
 
-  const matchesQuery = (txt) => {
-    if (!query.trim()) return true
-    const q = query.trim().toLowerCase()
-    return (txt || '').toLowerCase().includes(q)
+  // Motivo legible de cada vínculo (los códigos 99/95/85/80/70/40 quedan
+  // como diagnóstico, no como mensaje).
+  const motivo = m => {
+    const o = origenDe(m.invoiceId)
+    if (conflicto(m)) return `La marcaste como «${ORIGEN_POR_KEY[o]?.label}», pero encontramos un cargo en Clara que podría corresponder. Revisa cuál es correcto.`
+    if (m.descuadre) return 'La factura más la propina no suman exactamente lo que cobró Clara. Revisa el monto.'
+    if (m.pass === 3) return `${m.method}: el cargo y la factura casi coinciden. Verifica que sea la misma compra.`
+    if (m.pass === 0) return 'Mismo código de autorización que el ticket.'
+    if (/^Propina sugerida/.test(m.method)) return 'La propina viene impresa en el ticket.'
+    if (m.propina > 0) return `Posible propina de ${fmtMoney(m.propina, m.invoiceMoneda)}${m.propinaPct > 0 ? ` (${m.propinaPct.toFixed(1)}%)` : ''}: el cargo es mayor que la factura.`
+    return 'El monto del cargo y el de la factura coinciden al centavo.'
+  }
+  const diferencia = m => {
+    if ((m.invoiceMoneda || 'MXN') !== 'MXN' || tieneDivisa(m)) return null
+    return +((m.csvAmountMXN || 0) - (m.invoiceTotal || 0) - (m.propina || 0)).toFixed(2)
   }
 
-  const visibleMatches = matchedRows
-    .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
-    .sort((a, b) => b.confidence - a.confidence)
-  const visibleSin      = data.sinFactura.filter(s => sinFactPassesFilter(s) && matchesQuery(s.descripcion))
-  const visibleSinCargo = sinCargoRows
-    .filter(f => sinCargoPassesFilter(f) && (matchesQuery(f.proveedor) || matchesQuery(f.noFactura)))
-  const visibleRevision = revisionRows
-    .filter(m => matchesPassesFilter(m) && (matchesQuery(m.invoiceName) || matchesQuery(m.csvDescripcion)))
-    .sort((a, b) => b.confidence - a.confidence)
-
-  // Confidence tier → chip class + human label. Anything < 50 shouldn't
-  // surface here (Pass 2 rejects below 50, Pass 3 floors at 60), but we
-  // still bucket it as 'Revisar' defensively.
-  const confidenceTier = c => {
-    if (c >= 95) return { cls: 'cm-conf-green',  label: 'Alta confianza' }
-    if (c >= 75) return { cls: 'cm-conf-blue',   label: 'Confianza media' }
-    return            { cls: 'cm-conf-yellow', label: 'Revisar' }
+  const guardarOrigen = (ids, origen, nota) => {
+    const previos = ids.map(id => ({ id, origen: origenDe(id), nota: gastosPorId.get(id)?.origenPagoNota || '' }))
+    onSetOrigen(ids, origen, nota)
+    return previos
   }
+
+  // ── Tarjeta banco ↔ comprobante ──
+  const renderMatch = (m, i) => {
+    const id = `${m.invoiceId}-${i}`
+    const open = expandedId === id
+    const rev = requiereRevision(m)
+    const dif = diferencia(m)
+    const cobradoInv = tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN
+    const dec = decision[m.invoiceId]
+    const conflictoOrigenLabel = conflicto(m) ? ORIGEN_POR_KEY[origenDe(m.invoiceId)]?.label : null
+    return (
+      <div key={id} className={`cz-card${rev && !dec ? ' is-rev' : ''}${open ? ' is-open' : ''}${dec === 'descartada' ? ' is-descartada' : ''}${dec === 'confirmada' ? ' is-confirmada' : ''}`}>
+        <button className="cz-card-head" aria-expanded={open} onClick={() => setExpandedId(open ? null : id)}>
+          <div className="cz-side">
+            <span className="cz-side-label">Clara cobró</span>
+            <strong className="cz-amount">{fmtMoney(m.csvAmountMXN)} MXN</strong>
+            {tieneDivisa(m) && <span className="cz-amount-alt">{fmtMoney(m.csvAmountUSD, m.csvMoneda)} {m.csvMoneda}</span>}
+            <span className="cz-meta">{formatDateDisplay(m.csvDate)} · {descCargo(m.csvDescripcion, m.csvDate, m.csvAmountMXN)}</span>
+          </div>
+          <ArrowRight size={16} className="cz-arrow" aria-hidden="true" />
+          <div className="cz-side">
+            <span className="cz-side-label">{m.isTicket ? 'Ticket' : 'Factura'}</span>
+            <strong className="cz-amount">{fmtMoney(m.invoiceTotal, m.invoiceMoneda)}{m.invoiceMoneda && m.invoiceMoneda !== 'MXN' ? ` ${m.invoiceMoneda}` : ''}</strong>
+            <span className="cz-meta">{m.invoiceName}{m.invoiceNumber ? ` · ${m.invoiceNumber}` : ''}</span>
+          </div>
+          <div className="cz-status">
+            {dec === 'descartada' ? <span className="st-badge muted">No corresponde</span>
+              : dec === 'confirmada' ? <span className="st-badge ok">Confirmada por ti</span>
+              : <span className={`st-badge ${rev ? 'warn' : 'ok'}`}>{rev ? 'Requiere revisión' : 'Sin observaciones'}</span>}
+            {dif !== null && dif !== 0 && <span className="cz-dif">Diferencia {fmtMoney(dif)}</span>}
+            {m.propina > 0 && <span className="cz-tip">+ propina {fmtMoney(m.propina, m.invoiceMoneda)}</span>}
+          </div>
+          <ChevronDown size={15} className={`cz-chev${open ? ' is-open' : ''}`} aria-hidden="true" />
+        </button>
+        <p className="cz-reason">{motivo(m)}</p>
+        {(rev || dec) && (
+          <div className="cz-decide">
+            {dec ? (
+              // Retroalimentación al decidir: sello animado + texto de qué
+              // pasará, y un solo botón para deshacer.
+              <motion.span
+                key={dec}
+                className={`cz-decide-done ${dec === 'confirmada' ? 'ok' : 'muted'}`}
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <motion.span
+                  className="cz-decide-seal"
+                  initial={{ scale: 0, rotate: -45 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ type: 'spring', stiffness: 420, damping: 16 }}
+                >
+                  {dec === 'confirmada' ? <Check size={14} strokeWidth={3} /> : <X size={14} strokeWidth={3} />}
+                </motion.span>
+                <span>
+                  <b>{dec === 'confirmada' ? 'Vínculo confirmado' : 'No corresponde'}</b>
+                  {dec === 'confirmada' ? ' · se aplicará al terminar' : ' · no se vinculará y el cargo quedará sin comprobante'}
+                </span>
+              </motion.span>
+            ) : (
+              <span className="cz-decide-q">¿Es la misma compra?</span>
+            )}
+            {dec ? (
+              <button className="cz-btn cz-btn-ghost" onClick={() => decidir(m.invoiceId, dec)}>Deshacer</button>
+            ) : rev && (
+              <button className={`cz-btn${dec === 'confirmada' ? ' primary' : ''}`} aria-pressed={dec === 'confirmada'} onClick={() => {
+                if (conflictoOrigenLabel && dec !== 'confirmada') guardarOrigen([m.invoiceId], null, '')
+                decidir(m.invoiceId, 'confirmada')
+              }}>
+                <Check size={14} /> {conflictoOrigenLabel && dec !== 'confirmada' ? `Confirmar y quitar «${conflictoOrigenLabel}»` : 'Confirmar vínculo'}
+              </button>
+            )}
+            {!dec && (
+              <button className="cz-btn" onClick={() => decidir(m.invoiceId, 'descartada')}>
+                <X size={14} /> No corresponde
+              </button>
+            )}
+          </div>
+        )}
+        {open && (
+          <div className="cz-detail">
+            <div className="cz-math">
+              Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)}
+              {m.propina > 0 && <> + {/^Propina sugerida/.test(m.method) ? 'propina del ticket' : 'posible propina'} {fmtMoney(m.propina, m.invoiceMoneda)}</>}
+              {' '}{dif === null || dif === 0 ? '=' : '≠'} <b>{fmtMoney(cobradoInv, m.invoiceMoneda)} cobrados por Clara</b>
+              {dif !== null && dif !== 0 && <> · diferencia de <b>{fmtMoney(dif)}</b></>}
+            </div>
+            <div className="cz-grid">
+              <div><span>Fecha del cargo</span><strong>{formatDateDisplay(m.csvDate)}</strong></div>
+              <div><span>Descripción en Clara</span><strong>{m.csvDescripcion || 'Clara no trae descripción'}</strong></div>
+              {m.csvAuth && <div><span>Código de autorización</span><strong>{m.csvAuth}</strong></div>}
+              <div><span>Folio</span><strong className="is-mono">{m.invoiceNumber || '—'}</strong></div>
+              <div><span>Fecha factura</span><strong>{formatDateDisplay(m.invoiceFecha) || '—'}</strong></div>
+              <div><span>Tipo</span><strong>{m.invoiceTipo || '—'}</strong></div>
+            </div>
+            <div className="cz-actions">
+              <button className="cz-btn" disabled={!tieneDoc(m.invoiceId)} onClick={() => onVerFactura(m.invoiceId)}>
+                <FileText size={14} /> {tieneDoc(m.invoiceId) ? 'Ver factura' : 'Sin PDF'}
+              </button>
+              {conflicto(m) && (
+                <button className="cz-btn" onClick={() => guardarOrigen([m.invoiceId], null, '')}>
+                  Quitar «{ORIGEN_POR_KEY[origenDe(m.invoiceId)]?.label}» y dejar el cargo
+                </button>
+              )}
+              {!rev && !dec && (
+                <button className="cz-btn" onClick={() => decidir(m.invoiceId, 'descartada')}><X size={14} /> No corresponde</button>
+              )}
+              <span className="cz-diag">Diagnóstico: pase {m.pass} · {m.method} · {m.confidence}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Datos de cada pestaña ──
+  const verRevisar = revisar.filter(matchVisible)
+  const verCoinc   = sinObs.filter(matchVisible)
+  const verSinFact = sinFactura.filter(s => coincide(s.descripcion, s.monto, formatDateDisplay(s.fecha)))
+  const esPorIdentificar = o => !o || o === 'sin_identificar'
+  const conteoOrigen = sinCargo.reduce((acc, f) => {
+    const o = origenDe(f.id) || 'sin_identificar'
+    acc[o] = (acc[o] || 0) + 1
+    return acc
+  }, {})
+  const indicados = sinCargo.filter(f => !esPorIdentificar(origenDe(f.id))).length
+  const verSinCargo = sinCargo
+    .filter(f => filtroOrigen === 'todas' || (filtroOrigen === 'sin_identificar' ? esPorIdentificar(origenDe(f.id)) : origenDe(f.id) === filtroOrigen))
+    .filter(f => coincide(f.proveedor, f.noFactura, f.total, formatDateDisplay(f.fecha)))
+  const faltanIds = sinCargo.filter(f => esPorIdentificar(origenDe(f.id))).map(f => f.id)
+
+  const renderSinFactura = (s, i) => (
+                    <div key={i} className="cz-card cz-card-simple">
+                      <div className="cz-simple-main">
+                        <span className="cz-side-label">Clara cobró</span>
+                        <strong className="cz-amount">{fmtMoney(s.monto, s.moneda || 'MXN')} {s.moneda || 'MXN'}</strong>
+                        <span className="cz-meta">{formatDateDisplay(s.fecha)} · {descCargo(s.descripcion, s.fecha, s.monto, s.moneda)}</span>
+                        {s.sugerencias && s.sugerencias.length > 0 && (
+                          <span className="cz-suggest">¿Será alguno que ya subiste? {s.sugerencias.map(sg => <em key={sg.id}>{sg.proveedor}</em>)}</span>
+                        )}
+                      </div>
+                      <div className="cz-simple-side">
+                        <span className="st-badge muted">Sin factura o ticket</span>
+                        <button className="cz-btn" onClick={() => onAgregarManual && onAgregarManual(s, excluidos, confirmados)} title="Aplica las coincidencias, cierra esta ventana y agrega un renglón manual">
+                          <Plus size={13} /> Aplicar y capturar a mano
+                        </button>
+                      </div>
+                    </div>
+  )
+
+  const renderSinCargo = f => {
+                    const o = origenDe(f.id)
+                    const abierto = editando?.id === f.id
+                    return (
+                      <div key={f.id} className={`cz-card cz-card-simple${abierto ? ' is-open' : ''}`}>
+                        <div className="cz-simple-main">
+                          <span className="cz-side-label">{f.isTicket ? 'Ticket' : 'Factura'}</span>
+                          <strong className="cz-amount">{fmtMoney(f.total, f.moneda)}{f.moneda && f.moneda !== 'MXN' ? ` ${f.moneda}` : ' MXN'}</strong>
+                          <span className="cz-meta">{f.proveedor}{f.noFactura ? ` · ${f.noFactura}` : ''} · Factura: {formatDateDisplay(f.fecha) || '—'}</span>
+                          <span className="cz-origen-line">
+                            <span className="st-badge muted">No aparece en este estado de Clara</span>
+                            {esPorIdentificar(o)
+                              ? <span className="cz-origen-empty">{o === 'sin_identificar' ? 'Por identificar' : 'Medio de pago sin indicar'}</span>
+                              : <span className="st-badge info">{etiquetaOrigen(o)}</span>}
+                          </span>
+                        </div>
+                        <div className="cz-simple-side">
+                          <button className="cz-btn primary" onClick={() => setEditando({ id: f.id, origen: o, nota: gastosPorId.get(f.id)?.origenPagoNota || '' })}>
+                            {esPorIdentificar(o) ? 'Indicar cómo se pagó' : 'Cambiar'}
+                          </button>
+                          <button className="cz-btn" disabled={!tieneDoc(f.id)} onClick={() => onVerFactura(f.id)}>
+                            <FileText size={13} /> {tieneDoc(f.id) ? 'Ver factura' : 'Sin PDF'}
+                          </button>
+                        </div>
+                        {abierto && (
+                          <div className="cz-editor">
+                            <div className="cz-editor-title">¿Cómo pagaste esta factura?</div>
+                            <SelectorOrigen valor={editando.origen} onChange={v => setEditando(e => ({ ...e, origen: v }))} esEspecial={esEspecial} />
+                            <label className="cz-nota">
+                              <span>Nota (opcional)</span>
+                              <input type="text" value={editando.nota} maxLength={140} placeholder="Ej. Pagué con mi dinero personal" onChange={e => setEditando(ed => ({ ...ed, nota: e.target.value }))} />
+                            </label>
+                            <div className="cz-editor-actions">
+                              {o && <button className="cz-btn" onClick={() => { const previos = guardarOrigen([f.id], null, ''); setDeshacer({ previos, texto: 'Quitaste la clasificación.' }); setEditando(null) }}>Quitar clasificación</button>}
+                              <button className="cz-btn" onClick={() => setEditando(null)}>Dejar pendiente</button>
+                              <button className="cz-btn primary" disabled={!editando.origen} onClick={() => {
+                                const previos = guardarOrigen([f.id], editando.origen, editando.nota)
+                                setDeshacer({ previos, texto: `Guardaste «${ORIGEN_POR_KEY[editando.origen].label}» en ${f.proveedor}.` })
+                                setEditando(null)
+                              }}>Guardar clasificación</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+  }
+
+  const renderDeshacerYMasivo = () => (
+    <>
+                {deshacer && (
+                  <div className="cz-undo">
+                    {deshacer.texto}
+                    <button className="cz-link" onClick={() => {
+                      for (const p of deshacer.previos) onSetOrigen([p.id], p.origen, p.nota)
+                      setDeshacer(null)
+                    }}>Deshacer</button>
+                  </div>
+                )}
+
+                {masivo && (
+                  <div className="cz-editor cz-masivo">
+                    <div className="cz-editor-title">¿Cómo pagaste las {faltanIds.length} facturas sin clasificar?</div>
+                    <SelectorOrigen valor={masivo.origen} onChange={o => setMasivo({ origen: o })} esEspecial={esEspecial} />
+                    <div className="cz-editor-actions">
+                      <button className="cz-btn" onClick={() => setMasivo(null)}>Cancelar</button>
+                      <button className="cz-btn primary" disabled={!masivo.origen} onClick={() => {
+                        const previos = guardarOrigen(faltanIds, masivo.origen, '')
+                        setDeshacer({ previos, texto: `Marcaste ${faltanIds.length} ${faltanIds.length === 1 ? 'factura' : 'facturas'} como «${ORIGEN_POR_KEY[masivo.origen].label}».` })
+                        setMasivo(null)
+                      }}>Aplicar a {faltanIds.length} {faltanIds.length === 1 ? 'factura' : 'facturas'}</button>
+                    </div>
+                  </div>
+                )}
+
+    </>
+  )
+
+  const renderChipsOrigen = () => (
+                <div className="chips cz-origen-chips" role="group" aria-label="Filtrar por medio de pago">
+                  {[{ key: 'todas', label: 'Todas', n: sinCargo.length }, { key: 'sin_identificar', label: 'Por identificar', n: sinCargo.length - indicados },
+                    ...ORIGENES_PAGO.filter(o => o.key !== 'sin_identificar' && (!o.secundaria || conteoOrigen[o.key])).map(o => ({ key: o.key, label: o.corto, n: conteoOrigen[o.key] || 0 }))]
+                    .map(f => (
+                      <button key={f.key} className={`chip${filtroOrigen === f.key ? ' active' : ''}`} aria-pressed={filtroOrigen === f.key} onClick={() => setFiltroOrigen(f.key)}>
+                        {f.label}<span className="chip-n">{f.n}</span>
+                      </button>
+                    ))}
+                </div>
+  )
+
+  const TABS = [
+    { key: 'revisar',       grupo: 'banco', label: 'Necesitan revisión',             n: revisar.length,    cls: 'warn' },
+    { key: 'sinFactura',    grupo: 'banco', label: 'Cargos sin factura o ticket',    n: sinFactura.length, cls: 'muted' },
+    { key: 'coincidencias', grupo: 'banco', label: 'Coincidencias sin observaciones', n: sinObs.length,    cls: 'ok' },
+    { key: 'sinCargo',      grupo: 'docs',  label: 'Facturas sin cargo en Clara',    n: sinCargo.length,   cls: 'info' },
+  ]
+  const visibles = { revisar: verRevisar.length, sinFactura: verSinFact.length, coincidencias: verCoinc.length, sinCargo: verSinCargo.length }[tab]
+  const totalesTab = { revisar: revisar.length, sinFactura: sinFactura.length, coincidencias: sinObs.length, sinCargo: sinCargo.length }[tab]
+
+  const cta = revisar.length
+    ? { label: `Revisar ${revisar.length} ${revisar.length === 1 ? 'coincidencia' : 'coincidencias'}`, tab: 'revisar' }
+    : sinFactura.length
+    ? { label: `Ver ${sinFactura.length} ${sinFactura.length === 1 ? 'cargo' : 'cargos'} sin comprobante`, tab: 'sinFactura' }
+    : { label: 'Ver todas las coincidencias', tab: 'coincidencias' }
+
+  // Búsqueda y filtros por medio de pago solo con muchos documentos: con 3
+  // facturas son ruido.
+  const UMBRAL_FILTROS = 12
+  const PASOS = [
+    { n: 1, label: 'Revisar coincidencias', extra: [revPendientes.length ? `${revPendientes.length} pendiente${revPendientes.length === 1 ? '' : 's'}` : revisar.length ? 'revisado ✓' : '', conPropina.length ? `${conPropina.length} propina${conPropina.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') },
+    { n: 2, label: 'Otros pagos', extra: sinCargo.length + sinFactura.length ? `${sinCargo.length + sinFactura.length}` : '' },
+    { n: 3, label: 'Finalizar', extra: '' },
+  ]
+  const etiquetaAplicar = !aplicables.length ? 'Cerrar sin aplicar'
+    : aplicables.length === matchedRows.length
+      ? `Aplicar ${aplicables.length} ${aplicables.length === 1 ? 'coincidencia' : 'coincidencias'}`
+      : `Aplicar ${aplicables.length} de ${matchedRows.length} coincidencias`
+
+  const pct = totalCargos ? Math.round((matchedRows.length / totalCargos) * 100) : 0
 
   return (
-    <motion.div
-      className="cm-fs-overlay"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      onClick={onClose}
-    >
+    <motion.div className="cm-fs-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
       <motion.div
-        className="cm-fs-shell"
+        className="cm-fs-shell cz-shell"
+        role="dialog"
+        aria-labelledby="cz-title"
         initial={{ opacity: 0, y: 24, scale: 0.985 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 12, scale: 0.99 }}
         transition={{ type: 'spring', stiffness: 240, damping: 26 }}
-        onClick={e => e.stopPropagation()}
       >
-        <button className="cm-fs-close" onClick={onClose} aria-label="Cerrar">
+        <button className="cm-fs-close" onClick={pedirSalir} aria-label="Cerrar sin aplicar" title="Cerrar sin aplicar">
           <X size={18} />
         </button>
 
-        {/* ───── TOP SUMMARY BAR ───── */}
-        <header className="cm-fs-summary">
-          <div className="cm-fs-summary-top">
-            <div className="cm-fs-summary-titles">
-              <h2 className="cm-fs-title">Listo — así quedó tu conciliación</h2>
-              <p className="cm-fs-subtitle">
-                Comparamos los <b>{data.bancoRows}</b> {data.bancoRows === 1 ? 'cargo' : 'cargos'} de tu estado de
-                cuenta de Clara contra los <b>{docsSubidos}</b>{' '}
-                {docsSubidos === 1 ? 'comprobante que subiste' : 'comprobantes que subiste'}.
+        {avanzado ? (
+          <>
+          <div className="cz-scroll">
+            {/* ── Encabezado ── */}
+            <header className="cz-head">
+              <h2 className="cz-title" id="cz-title">Conciliación completa</h2>
+              <p className="cz-sub">
+                Comparamos <b>{totalCargos}</b> {totalCargos === 1 ? 'cargo' : 'cargos'} de Clara con <b>{totalDocs}</b> {totalDocs === 1 ? 'factura o ticket' : 'facturas y tickets'}.
               </p>
-            </div>
-            <div className="cm-fs-summary-toolbar">
-              <label className="cm-fs-search">
-                <Search size={14} strokeWidth={2.2} />
-                <input
-                  type="text"
-                  placeholder="Buscar por proveedor o descripción…"
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                />
-              </label>
-              <select
-                className="cm-fs-filter"
-                value={filterKey}
-                onChange={e => setFilterKey(e.target.value)}
-              >
-                <option value="all">Todos</option>
-                <option value="usd">USD</option>
-                <option value="mxn">MXN</option>
-                <option value="tickets">Tickets</option>
-                <option value="facturas">Facturas</option>
-              </select>
-              <button
-                className="cm-fs-export"
-                disabled
-                title="Próximamente"
-                onClick={e => e.preventDefault()}
-              >
-                <Download size={14} /> Exportar
-              </button>
-            </div>
-          </div>
+              <p className="cz-msg">
+                <Info size={14} aria-hidden="true" /> Los cargos del estado ya se realizaron. Aquí verificamos cuáles tienen comprobante; esto no significa que debas dinero.
+              </p>
+            </header>
 
-          <div className="cm-fs-progress">
-            <motion.div
-              className="cm-fs-progress-fill"
-              initial={{ width: 0 }}
-              animate={{ width: `${pct}%` }}
-              transition={{ duration: 1.0, ease: 'easeOut', delay: 0.15 }}
-            />
-          </div>
+            {/* ── Dos universos, cada uno con su denominador ── */}
+            <section className="cz-universos">
+              <div className="cz-uni">
+                <div className="cz-uni-head"><CreditCard size={15} aria-hidden="true" /> Movimientos en Clara <strong>{totalCargos} {totalCargos === 1 ? 'cargo' : 'cargos'}</strong></div>
+                <div className="cz-uni-chips">
+                  <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{sinObs.length}</b> sin observaciones</button>
+                  <button className="cz-chip warn" onClick={() => setTab('revisar')}><b>{revisar.length}</b> requieren revisión</button>
+                  <button className="cz-chip muted" onClick={() => setTab('sinFactura')}><b>{sinFactura.length}</b> sin factura o ticket</button>
+                </div>
+                <div className="cz-progress-label">Coincidencias propuestas: <b>{matchedRows.length} de {totalCargos}</b></div>
+                <div className="cz-progress" aria-label={`${pct}% de los cargos con coincidencia propuesta`}><span style={{ width: `${pct}%` }} /></div>
+              </div>
+              <div className="cz-uni">
+                <div className="cz-uni-head"><FileText size={15} aria-hidden="true" /> Comprobantes cargados <strong>{totalDocs} {totalDocs === 1 ? 'documento' : 'documentos'}</strong></div>
+                <div className="cz-uni-chips">
+                  <button className="cz-chip ok" onClick={() => setTab('coincidencias')}><b>{matchedRows.length}</b> vinculados con Clara</button>
+                  <button className="cz-chip info" onClick={() => setTab('sinCargo')}><b>{sinCargo.length}</b> sin cargo en este estado</button>
+                </div>
+                {sinCargo.length > 0 && (
+                  <div className="cz-progress-label">Medio de pago indicado: <b>{indicados} de {sinCargo.length}</b></div>
+                )}
+              </div>
+            </section>
 
-          <p className="cm-fs-progress-caption">
-            {Math.round(cPct)}% de los cargos ya tienen su comprobante
-          </p>
+            <div className="cz-cta-row">
+              <button className="cz-cta" onClick={() => setTab(cta.tab)}>{cta.label} <ArrowRight size={14} /></button>
+              <button className="cz-link" aria-expanded={ayuda} onClick={() => setAyuda(v => !v)}>¿Qué significa cada resultado?</button>
+            </div>
+            {ayuda && (
+              <dl className="cz-ayuda">
+                <div><dt>Necesitan revisión</dt><dd>Cargo y factura parecen la misma compra, pero algo no cuadra al centavo o hay un dato que verificar.</dd></div>
+                <div><dt>Cargos sin factura o ticket</dt><dd>Clara ya los cobró y falta subir su comprobante. No es un adeudo: es papeleo pendiente.</dd></div>
+                <div><dt>Coincidencias sin observaciones</dt><dd>Cargo y factura coinciden según las reglas. No significa que tú ya los marcaste como revisados.</dd></div>
+                <div><dt>Facturas sin cargo en Clara</dt><dd>Comprobantes que no aparecen en este archivo. Es normal si pagaste en efectivo, con tu tarjeta, otra cuenta o en otro mes.</dd></div>
+              </dl>
+            )}
 
-          {/* Aviso anti-pánico: la gente leía "sin factura / pendiente" como
-              un adeudo. Este banner aclara, antes que cualquier número, que
-              esto es un checklist de documentos, no un estado de cuenta. */}
-          <div className="cm-fs-explainer">
-            <Info size={15} className="cm-fs-explainer-icon" />
-            <div>
-              <b>Esto no es un adeudo.</b> Estos cargos ya se pagaron con la tarjeta Clara. Aquí solo
-              ves <b>cuáles ya tienen su factura o ticket</b> y cuáles todavía no.
-            </div>
-          </div>
-
-          <div className="cm-fs-chips">
-            <div className="cm-fs-chip cm-chip-blue">
-              <CreditCard size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cBanco)}</div>
-                <div className="cm-fs-chip-label">Cargos en Clara</div>
-                <div className="cm-fs-chip-hint">líneas del estado de cuenta</div>
-              </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-green">
-              <Target size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cMatches)}</div>
-                <div className="cm-fs-chip-label">Ya tienen comprobante</div>
-                <div className="cm-fs-chip-hint">cargo vinculado a tu factura</div>
-              </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-amber">
-              <FileWarning size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cSin)}</div>
-                <div className="cm-fs-chip-label">Les falta comprobante</div>
-                <div className="cm-fs-chip-hint">sube su factura o ticket</div>
-              </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-slate">
-              <FileText size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cSinCargo)}</div>
-                <div className="cm-fs-chip-label">No están en el estado</div>
-                <div className="cm-fs-chip-hint">comprobantes de otro periodo o pago</div>
-              </div>
-            </div>
-            <div className="cm-fs-chip cm-chip-purple">
-              <Sparkles size={14} />
-              <div>
-                <div className="cm-fs-chip-value">{Math.round(cPropinas)}</div>
-                <div className="cm-fs-chip-label">Propinas estimadas</div>
-                <div className="cm-fs-chip-hint">el banco cobró más que la factura</div>
-              </div>
-            </div>
-          </div>
-
-          {(data.totalsMatched || data.totalsPending) && (
-            <div className="cm-fs-totals">
-              <div className="cm-fs-totals-block">
-                <span className="cm-fs-totals-label">Cargos ya comprobados</span>
-                <span className="cm-fs-totals-value cm-fs-totals-green">
-                  {fmtMoney(data.totalsMatched?.mxn)} MXN
-                  {data.totalsMatched?.usd > 0 && <> · {fmtMoney(data.totalsMatched.usd, 'USD')} USD</>}
-                </span>
-              </div>
-              <div className="cm-fs-totals-block">
-                <span className="cm-fs-totals-label">Cargos por comprobar</span>
-                <span className="cm-fs-totals-value cm-fs-totals-amber">
-                  {fmtMoney(data.totalsPending?.mxn)} MXN
-                  {data.totalsPending?.usd > 0 && <> · {fmtMoney(data.totalsPending.usd, 'USD')} USD</>}
-                </span>
-                <span className="cm-fs-totals-note">no es dinero que debas, es papeleo que falta</span>
-              </div>
-            </div>
-          )}
-        </header>
-
-        {/* ───── TABS ───── */}
-        <div className="cm-fs-tabs" role="tablist">
-          {[
-            { key: 'matches',  label: 'Conciliados',            icon: <Check size={14} />,       count: visibleMatches.length,  badgeClass: 'cm-fs-badge-green' },
-            { key: 'sin',      label: 'Cargos sin comprobante', icon: <FileWarning size={14} />, count: visibleSin.length,      badgeClass: 'cm-fs-badge-amber' },
-            { key: 'sincargo', label: 'No están en el estado',  icon: <FileText size={14} />,    count: visibleSinCargo.length, badgeClass: 'cm-fs-badge-slate' },
-            { key: 'revision', label: 'Revisar',                icon: <AlertCircle size={14} />, count: visibleRevision.length, badgeClass: 'cm-fs-badge-yellow' },
-          ].map(t => (
-            <button
-              key={t.key}
-              role="tab"
-              aria-selected={tab === t.key}
-              className={`cm-fs-tab ${tab === t.key ? 'is-active' : ''}`}
-              onClick={() => setTab(t.key)}
-            >
-              {t.icon}
-              <span>{t.label}</span>
-              <span className={`cm-fs-tab-badge ${t.badgeClass}`}>{t.count}</span>
-              {tab === t.key && (
-                <motion.span className="cm-fs-tab-underline" layoutId="cm-fs-tab-underline" />
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* ───── BODY ───── */}
-        <div className="cm-fs-body">
-          {loading ? (
-            <div className="cm-fs-skel-list">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="cm-fs-skel-card" />
+            {/* ── Pestañas por acción, agrupadas por universo ── */}
+            <div className="cz-tabs" role="tablist">
+              <span className="cz-tabs-group">Movimientos de Clara</span>
+              {TABS.filter(t => t.grupo === 'banco').map(t => (
+                <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
+                  {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
+                </button>
+              ))}
+              <span className="cz-tabs-sep" aria-hidden="true" />
+              <span className="cz-tabs-group">Comprobantes cargados</span>
+              {TABS.filter(t => t.grupo === 'docs').map(t => (
+                <button key={t.key} role="tab" aria-selected={tab === t.key} className={`cz-tab${tab === t.key ? ' active' : ''}`} onClick={() => { setTab(t.key); setExpandedId(null) }}>
+                  {t.label} <span className={`cz-tab-n ${t.cls}`}>{t.n}</span>
+                </button>
               ))}
             </div>
-          ) : (
-            <AnimatePresence mode="wait">
-              {tab === 'matches' && (
-                <motion.div
-                  key="matches"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-green">
-                    Cada tarjeta es un <b>cargo de tu estado de cuenta</b> (izquierda) que quedó vinculado
-                    con <b>el comprobante que subiste</b> (derecha). Haz clic en una para ver cómo cuadró.
+
+            <div className="cz-search-row">
+              <label className="cm-fs-search cz-search">
+                <Search size={14} strokeWidth={2.2} />
+                <input type="text" placeholder="Buscar por proveedor, folio, fecha, importe o descripción…" value={query} onChange={e => setQuery(e.target.value)} aria-label="Buscar en esta pestaña" />
+              </label>
+              <span className="cz-search-hint">{q ? `${visibles} visibles de ${totalesTab} · ` : ''}busca solo en esta pestaña</span>
+            </div>
+
+            {/* ── Contenido ── */}
+            <div className="cz-pane">
+              {tab === 'revisar' && (
+                <>
+                  <p className="cz-note">Estos cargos quedaron vinculados, pero conviene verificarlos. Si proveedor, fecha y monto son correctos, puedes aplicarlos así.</p>
+                  {verRevisar.length === 0
+                    ? <div className="cm-fs-empty">{revisar.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias por revisar.'}</div>
+                    : verRevisar.map(renderMatch)}
+                </>
+              )}
+
+              {tab === 'coincidencias' && (
+                <>
+                  <p className="cz-note">Vínculos sin observaciones según las reglas de conciliación. Que estén aquí no los marca como revisados por ti.</p>
+                  {verCoinc.length === 0
+                    ? <div className="cm-fs-empty">{sinObs.length ? 'Ninguna coincide con la búsqueda.' : 'No hay coincidencias sin observaciones.'}</div>
+                    : verCoinc.map(renderMatch)}
+                </>
+              )}
+
+              {tab === 'sinFactura' && (
+                <>
+                  <p className="cz-note">Clara ya cobró estos cargos y falta su factura o ticket en el reporte. No es dinero que debas.</p>
+                  {verSinFact.length === 0
+                    ? <div className="cm-fs-empty">{sinFactura.length ? 'Ninguno coincide con la búsqueda.' : 'Todos los cargos tienen su comprobante.'}</div>
+                    : verSinFact.map(renderSinFactura)}
+                </>
+              )}
+
+              {tab === 'sinCargo' && (
+                <>
+                  <p className="cz-note">
+                    Estas facturas no encontraron un movimiento en el estado de Clara que subiste. Puede ser normal si pagaste por otro medio o si el cargo aparece en otro periodo.
+                    Indicar el medio de pago es <b>informativo</b>: no equivale a comprobarlo contra Clara, no cambia importes y no aparece en el Excel contable.
+                  </p>
+
+                  <div className="cz-origen-resumen">
+                    <span><b>{sinCargo.length}</b> sin movimiento en este estado</span>
+                    <span>·</span>
+                    <span><b>{indicados} de {sinCargo.length}</b> con medio de pago indicado</span>
+                    {faltanIds.length > 0 && !masivo && (
+                      <button className="cz-btn" onClick={() => setMasivo({ origen: null })}>Clasificar las que faltan ({faltanIds.length})</button>
+                    )}
                   </div>
-                  {visibleMatches.length === 0 ? (
-                    <div className="cm-fs-empty">Ningún cargo conciliado cumple los filtros.</div>
-                  ) : visibleMatches.map((m, i) => {
-                    const id = `${m.invoiceId}-${i}`
-                    const isOpen = expandedId === id
-                    return (
-                      <div
-                        key={id}
-                        className={`cm-fs-card cm-fs-match-card ${isOpen ? 'is-open' : ''}`}
-                        onClick={() => setExpandedId(isOpen ? null : id)}
-                      >
-                        <div className="cm-fs-match-head">
-                          <div className="cm-fs-match-left">
-                            <CheckCircle2 size={18} className="cm-fs-match-check" />
+
+                  {renderChipsOrigen()}
+
+                  {renderDeshacerYMasivo()}
+
+                  {verSinCargo.length === 0
+                    ? <div className="cm-fs-empty">{sinCargo.length ? 'Ninguna factura en este filtro.' : 'Todas tus facturas encontraron su cargo en Clara.'}</div>
+                    : verSinCargo.map(renderSinCargo)}
+                </>
+              )}
+            </div>
+          </div>
+
+            <footer className="cm-fs-footer">
+              <span className="cm-fs-footer-hint">
+                Vista completa para auditoría. Las decisiones de «Confirmar vínculo» y «No corresponde» se respetan al aplicar.
+              </span>
+              <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={() => setAvanzado(false)}>← Volver al asistente</button>
+              <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={aplicar}>{etiquetaAplicar}</button>
+            </footer>
+          </>
+        ) : (
+          <>
+            {/* ── Encabezado compacto: contexto + 3 indicadores + pasos ── */}
+            <header className="czw-head">
+              <h2 className="cz-title" id="cz-title">Revisión de gastos</h2>
+              <p className="cz-sub">
+                Comparamos <b>{totalCargos}</b> {totalCargos === 1 ? 'movimiento' : 'movimientos'} de Clara con <b>{totalDocs}</b> {totalDocs === 1 ? 'comprobante' : 'comprobantes'}.
+                {' '}<button className="cz-link" aria-expanded={ayuda} onClick={() => setAyuda(v => !v)}>¿Qué significa?</button>
+              </p>
+              {ayuda && (
+                <p className="czw-ayuda">
+                  Los cargos de Clara ya se realizaron: aquí solo verificamos cuáles tienen su factura o ticket. <b>Esto no es un adeudo.</b>
+                  {' '}«Sin observaciones» significa que cuadran según las reglas, no que ya los revisaste tú.
+                </p>
+              )}
+              <div className="czw-kpis">
+                <button className="czw-kpi ok" onClick={() => { setPaso(1); setVerSinObs(true) }}>
+                  <b>{sinObs.length}</b><span>sin observaciones</span>
+                </button>
+                <button className={`czw-kpi ${revPendientes.length ? 'warn' : revisar.length ? 'ok' : 'muted'}`} onClick={() => setPaso(1)}>
+                  <motion.b key={revPendientes.length} initial={{ scale: 1.5, opacity: 0.4 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 380, damping: 18 }}>
+                    {revPendientes.length}
+                  </motion.b>
+                  <span>{revisar.length && !revPendientes.length ? <>por revisar <Check size={13} strokeWidth={3} className="czw-kpi-check" /></> : 'por revisar'}</span>
+                </button>
+                <button className={`czw-kpi ${sinCargo.length ? 'info' : 'muted'}`} onClick={() => setPaso(2)}>
+                  <b>{sinCargo.length}</b><span>sin cargo en Clara</span>
+                </button>
+                {conPropina.length > 0 && (
+                  <button className="czw-kpi tip" onClick={() => setPaso(1)} title="Propinas detectadas automáticamente al conciliar">
+                    <b>{conPropina.length}</b><span>{conPropina.length === 1 ? 'propina detectada' : 'propinas detectadas'} · {fmtMoney(sumaPropinas(conPropina))}</span>
+                  </button>
+                )}
+                {sinFactura.length > 0 && (
+                  <button className="czw-kpi muted" onClick={() => setPaso(2)}>
+                    <b>{sinFactura.length}</b><span>{sinFactura.length === 1 ? 'cargo sin comprobante' : 'cargos sin comprobante'}</span>
+                  </button>
+                )}
+              </div>
+              <nav className="czw-steps" aria-label="Pasos de la revisión">
+                {PASOS.map(p => (
+                  <button key={p.n} className={`czw-step${paso === p.n ? ' active' : ''}${paso > p.n ? ' done' : ''}`} aria-current={paso === p.n ? 'step' : undefined} onClick={() => setPaso(p.n)}>
+                    <span className="czw-step-n">{paso > p.n ? <Check size={12} /> : p.n}</span>
+                    <span className="czw-step-txt">{p.label}{p.extra && <em>{p.extra}</em>}</span>
+                  </button>
+                ))}
+              </nav>
+            </header>
+
+            {/* ── Una sola tarea a la vez ── */}
+            <div className="cz-scroll czw-body">
+              {paso === 1 && (
+                <div className="cz-pane">
+                  {matchedRows.length === 0 ? (
+                    <>
+                      <h3 className="czw-h">No encontramos coincidencias</h3>
+                      <p className="czw-p">Ningún cargo de este archivo coincide con tus comprobantes. Revisa que sea el estado de cuenta del mismo periodo.</p>
+                    </>
+                  ) : revisar.length ? (
+                    <>
+                      <AnimatePresence mode="wait" initial={false}>
+                        {revPendientes.length ? (
+                          <motion.div key="pend" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: 0.18 }}>
+                            <h3 className="czw-h">{revPendientes.length === 1 ? 'Hay 1 coincidencia que requiere tu revisión' : `Hay ${revPendientes.length} coincidencias que requieren tu revisión`}</h3>
+                            <p className="czw-p">Confirma si es la misma compra o márcala como «No corresponde». Las que dejes sin decidir no se aplicarán.</p>
+                          </motion.div>
+                        ) : (
+                          <motion.div key="listo" className="czw-listo" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: 0.2 }}>
+                            <motion.span className="czw-listo-ic" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 420, damping: 15, delay: 0.05 }}>
+                              <Check size={16} strokeWidth={3} />
+                            </motion.span>
                             <div>
-                              <div className="cm-fs-match-name">{m.csvDescripcion || '(sin descripción)'}</div>
-                              <div className="cm-fs-match-sub">{formatDateDisplay(m.csvDate)}</div>
+                              <h3 className="czw-h">{revisar.length === 1 ? 'Revisaste la coincidencia' : `Revisaste las ${revisar.length} coincidencias`}</h3>
+                              <p className="czw-p">Todo listo en este paso. Continúa para ver los otros pagos.</p>
                             </div>
-                          </div>
-                          <div className="cm-fs-match-center">
-                            <ArrowRight size={14} className="cm-fs-match-arrow" />
-                            <div>
-                              <div className="cm-fs-match-name">{m.invoiceName}</div>
-                              <div className="cm-fs-match-sub">
-                                {m.propina > 0
-                                  ? <span className="cm-fs-tip-pill"><Sparkles size={10} /> Propina estimada {fmtMoney(m.propina, m.invoiceMoneda)}</span>
-                                  : m.method}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      {revisar.map(renderMatch)}
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="czw-h">Nada que revisar</h3>
+                      <p className="czw-p">{sinObs.length === 1 ? 'La coincidencia cuadró' : `Las ${sinObs.length} coincidencias cuadraron`} según las reglas. Puedes ver el detalle si quieres.</p>
+                    </>
+                  )}
+                  {conPropina.length > 0 && (
+                    <section className="czw-tips" aria-labelledby="czw-tips-t">
+                      <div className="czw-tips-head">
+                        <h3 className="czw-h" id="czw-tips-t">
+                          {conPropina.length === 1 ? 'Detectamos 1 propina' : `Detectamos ${conPropina.length} propinas`}
+                          <span className="czw-tips-total">{fmtMoney(sumaPropinas(conPropina))}</span>
+                        </h3>
+                        <p className="czw-p">Clara cobró más que la factura y la diferencia cabe como propina. Al aplicar, cada una se agrega como renglón de propina debajo de su factura. Si alguna no es propina, márcala «No corresponde».</p>
+                      </div>
+                      <div className="czw-tips-list" role="table" aria-label="Propinas detectadas">
+                        {conPropina.map(t => {
+                          const dec = decision[t.invoiceId]
+                          const fuera = !seAplica(t)
+                          return (
+                            <div key={t.invoiceId} role="row" className={`czw-tip${fuera ? ' is-fuera' : ''}`}>
+                              <div className="czw-tip-who" role="cell">
+                                <strong>{t.invoiceName}</strong>
+                                <span>{t.invoiceNumber ? `${t.invoiceNumber} · ` : ''}{origenPropina(t)}</span>
+                              </div>
+                              <div className="czw-tip-math" role="cell">
+                                <span>Factura {fmtMoney(t.invoiceTotal, t.invoiceMoneda)}</span>
+                                <span className="czw-tip-plus">+ propina <b>{fmtMoney(t.propina, t.invoiceMoneda)}</b>{t.propinaPct > 0 ? ` (${+Number(t.propinaPct).toFixed(1)}%)` : ''}</span>
+                                <span>= cobro Clara {fmtMoney(t.csvAmountMXN)}</span>
+                              </div>
+                              <div className="czw-tip-act" role="cell">
+                                {dec === 'descartada'
+                                  ? <span className="st-badge muted">No corresponde</span>
+                                  : fuera
+                                    ? <span className="st-badge warn">Por revisar</span>
+                                    : <span className="st-badge ok">Se registrará</span>}
+                                <button className={`cz-btn${dec === 'descartada' ? ' is-on' : ''}`} aria-pressed={dec === 'descartada'} onClick={() => decidir(t.invoiceId, 'descartada')}>
+                                  {dec === 'descartada' ? 'Deshacer' : 'No corresponde'}
+                                </button>
                               </div>
                             </div>
-                          </div>
-                          <div className="cm-fs-match-right">
-                            {(() => {
-                              const tier = confidenceTier(m.confidence)
-                              return (
-                                <span
-                                  className={`cm-fs-conf ${tier.cls}`}
-                                  title={`${m.confidence}%`}
-                                >
-                                  {tier.label}
-                                </span>
-                              )
-                            })()}
-                            <div className="cm-fs-match-amount">
-                              {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
-                              {tieneDivisa(m) && <span>{fmtMoney(m.csvAmountUSD, 'USD')} {m.csvMoneda}</span>}
-                            </div>
-                            <ChevronDown size={14} className={`cm-fs-chev ${isOpen ? 'is-open' : ''}`} />
-                          </div>
-                        </div>
-                        <div className="cm-fs-match-detail" style={{ maxHeight: isOpen ? 260 : 0 }}>
-                          {/* La aritmética explícita evita el "¿por qué el banco
-                              me cobró más que la factura?" que dispara la duda. */}
-                          <div className="cm-fs-math">
-                            {m.propina > 0 ? (
-                              <>Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)} + propina{' '}
-                                {fmtMoney(m.propina, m.invoiceMoneda)}
-                                {m.propinaPct > 0 && <> ({m.propinaPct.toFixed(1)}%)</>} ={' '}
-                                <b>{fmtMoney(tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN, m.invoiceMoneda)} cobrados por Clara</b>
-                              </>
-                            ) : (
-                              <>Factura {fmtMoney(m.invoiceTotal, m.invoiceMoneda)} ={' '}
-                                <b>{fmtMoney(tieneDivisa(m) && m.invoiceMoneda !== 'MXN' ? m.csvAmountUSD : m.csvAmountMXN, m.invoiceMoneda)} cobrados por Clara</b>
-                              </>
-                            )}
-                          </div>
-                          <div className="cm-fs-detail-grid">
-                            <div><span>Cómo se vinculó</span><strong>{m.method}</strong></div>
-                            <div><span>Factura</span><strong>{m.invoiceNumber || '—'}</strong></div>
-                            <div><span>Total factura</span><strong>{fmtMoney(m.invoiceTotal, m.invoiceMoneda)}</strong></div>
-                            {m.propina > 0 && <div><span>Propina estimada</span><strong>{fmtMoney(m.propina, m.invoiceMoneda)}</strong></div>}
-                            {m.csvAuth && <div><span>Código autorización</span><strong>{m.csvAuth}</strong></div>}
-                            <div><span>Confianza</span><strong>{m.confidence}%</strong></div>
-                          </div>
-                        </div>
+                          )
+                        })}
                       </div>
-                    )
-                  })}
-                </motion.div>
+                    </section>
+                  )}
+                  {sinObs.length > 0 && (
+                    <div className="czw-acc">
+                      <button className="czw-acc-head" aria-expanded={verSinObs} onClick={() => setVerSinObs(v => !v)}>
+                        <CheckCircle2 size={15} className="czw-acc-ic" />
+                        {verSinObs ? 'Ocultar' : 'Ver'} {sinObs.length} {sinObs.length === 1 ? 'coincidencia sin observaciones' : 'coincidencias sin observaciones'}
+                        <ChevronDown size={15} className={`cz-chev${verSinObs ? ' is-open' : ''}`} />
+                      </button>
+                      {verSinObs && <div className="czw-acc-body">{sinObs.map(renderMatch)}</div>}
+                    </div>
+                  )}
+                </div>
               )}
 
-              {tab === 'sin' && (
-                <motion.div
-                  key="sin"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-amber">
-                    Estos cargos <b>sí aparecen en tu estado de cuenta de Clara</b>, pero todavía no subiste
-                    su factura o ticket. <b>No debes ese dinero</b> — ya se pagó con la tarjeta; lo único
-                    pendiente es el comprobante para el reporte.
-                  </div>
-                  {visibleSin.length === 0 ? (
-                    <div className="cm-fs-empty">Todos los cargos tienen su comprobante. 🎉</div>
-                  ) : visibleSin.map((s, i) => (
-                    <div key={i} className="cm-fs-card cm-fs-sin-card">
-                      <div className="cm-fs-sin-head">
-                        <div className="cm-fs-sin-left">
-                          <span className="cm-fs-badge cm-fs-badge-amber">Falta comprobante</span>
-                          <div>
-                            <div className="cm-fs-match-name">{s.descripcion || 'Sin descripción'}</div>
-                            <div className="cm-fs-match-sub">{formatDateDisplay(s.fecha)}</div>
+              {paso === 2 && (
+                <div className="cz-pane">
+                  {sinFactura.length > 0 && (
+                    <>
+                      <h3 className="czw-h">{sinFactura.length === 1 ? 'Hay 1 cargo de Clara sin factura o ticket' : `Hay ${sinFactura.length} cargos de Clara sin factura o ticket`}</h3>
+                      <p className="czw-p">Clara ya los cobró y falta subir su comprobante. No es un adeudo: es papeleo pendiente.</p>
+                      {sinFactura.map(renderSinFactura)}
+                      <div className="czw-sep" />
+                    </>
+                  )}
+                  <h3 className="czw-h">
+                    {sinCargo.length === 0 ? 'Todas tus facturas aparecen en Clara'
+                      : sinCargo.length === 1 ? 'Hay 1 factura que no aparece en este archivo de Clara'
+                      : `Hay ${sinCargo.length} facturas que no aparecen en este archivo de Clara`}
+                  </h3>
+                  {sinCargo.length > 0 && (
+                    <>
+                      <p className="czw-p">Es normal si pagaste con tu dinero, otra tarjeta o si el cargo pertenece a otro periodo. Indicar cómo se pagó es opcional e informativo: no cambia importes ni el Excel.</p>
+                      {sinCargo.length >= UMBRAL_FILTROS && (
+                        <>
+                          <div className="cz-search-row">
+                            <label className="cm-fs-search cz-search">
+                              <Search size={14} strokeWidth={2.2} />
+                              <input type="text" placeholder="Buscar por proveedor, folio, fecha o importe…" value={query} onChange={e => setQuery(e.target.value)} aria-label="Buscar facturas" />
+                            </label>
                           </div>
-                        </div>
-                        <div className="cm-fs-sin-right">
-                          <div className="cm-fs-match-amount">
-                            <span>{fmtMoney(s.monto, s.moneda || 'MXN')} {s.moneda || 'MXN'}</span>
-                          </div>
-                          <button
-                            className="cm-fs-add-manual"
-                            onClick={() => onAgregarManual && onAgregarManual(s)}
-                          >
-                            <Plus size={12} /> Agregar manualmente
-                          </button>
-                        </div>
-                      </div>
-                      {s.sugerencias && s.sugerencias.length > 0 && (
-                        <div className="cm-fs-suggest">
-                          <span className="cm-fs-suggest-label">¿Será alguno de estos que ya subiste?</span>
-                          {s.sugerencias.map(sg => (
-                            <span key={sg.id} className="cm-fs-suggest-chip">
-                              {sg.proveedor} <em>{sg.score}%</em>
-                            </span>
-                          ))}
+                          {renderChipsOrigen()}
+                        </>
+                      )}
+                      {faltanIds.length > 1 && !masivo && (
+                        <div className="czw-masivo-row">
+                          <button className="cz-link" onClick={() => setMasivo({ origen: null })}>Indicar el mismo medio de pago a las {faltanIds.length} que faltan</button>
                         </div>
                       )}
-                    </div>
-                  ))}
-                </motion.div>
+                      {renderDeshacerYMasivo()}
+                      {(sinCargo.length >= UMBRAL_FILTROS ? verSinCargo : sinCargo).map(renderSinCargo)}
+                    </>
+                  )}
+                </div>
               )}
 
-              {tab === 'sincargo' && (
-                <motion.div
-                  key="sincargo"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-slate">
-                    Estos comprobantes <b>sí los subiste</b>, pero no encontramos su cargo en este estado de
-                    cuenta. Es normal: suele ser de <b>otro periodo</b>, pagado con <b>otra tarjeta</b>,
-                    en <b>efectivo</b> o por <b>transferencia</b>. Se quedan en tu reporte tal cual.
-                  </div>
-                  {visibleSinCargo.length === 0 ? (
-                    <div className="cm-fs-empty">Todos tus comprobantes encontraron su cargo en Clara. 🎉</div>
-                  ) : visibleSinCargo.map((f, i) => (
-                    <div key={f.id || i} className="cm-fs-card cm-fs-nocharge-card">
-                      <div className="cm-fs-sin-head">
-                        <div className="cm-fs-sin-left">
-                          <span className="cm-fs-badge cm-fs-badge-slate">
-                            {f.isTicket ? 'Ticket' : 'Factura'}
-                          </span>
-                          <div>
-                            <div className="cm-fs-match-name">{f.proveedor}</div>
-                            <div className="cm-fs-match-sub">
-                              {formatDateDisplay(f.fecha)}{f.noFactura ? ` · ${f.noFactura}` : ''}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-sin-right">
-                          <div className="cm-fs-match-amount">
-                            <span>{fmtMoney(f.total, f.moneda)} {f.moneda}</span>
-                          </div>
-                          <span className="cm-fs-nocharge-hint">no aparece en este estado de cuenta</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </motion.div>
+              {paso === 3 && (
+                <div className="cz-pane">
+                  <h3 className="czw-h">{aplicables.length ? 'Listo para aplicar' : 'No hay coincidencias para aplicar'}</h3>
+                  <ul className="czw-sum">
+                    <li className="ok">
+                      <CheckCircle2 size={16} />
+                      <span><b>{sinObs.filter(seAplica).length}</b> {sinObs.filter(seAplica).length === 1 ? 'coincidencia sin observaciones' : 'coincidencias sin observaciones'} se aplicarán.</span>
+                    </li>
+                    {conPropina.length > 0 && (
+                      <li className="tip">
+                        <Sparkles size={16} />
+                        <span>
+                          <b>{propinasAplican.length}</b> {propinasAplican.length === 1 ? 'propina detectada se registrará' : 'propinas detectadas se registrarán'} por <b>{fmtMoney(sumaPropinas(propinasAplican))}</b>, cada una como renglón de propina debajo de su factura.
+                          {conPropina.length > propinasAplican.length && <> {conPropina.length - propinasAplican.length} no se {conPropina.length - propinasAplican.length === 1 ? 'aplica' : 'aplican'}.</>}
+                        </span>
+                      </li>
+                    )}
+                    {revisar.length > 0 && (
+                      <li className={revPendientes.length ? 'warn' : 'ok'}>
+                        <AlertTriangle size={16} />
+                        <span>
+                          Por revisar: <b>{revConfirmadas.length}</b> {revConfirmadas.length === 1 ? 'confirmada (se aplica)' : 'confirmadas (se aplican)'}
+                          {revisar.filter(m => decision[m.invoiceId] === 'descartada').length > 0 && <> · <b>{revisar.filter(m => decision[m.invoiceId] === 'descartada').length}</b> no {revisar.filter(m => decision[m.invoiceId] === 'descartada').length === 1 ? 'corresponde' : 'corresponden'}</>}
+                          {revPendientes.length > 0 && <> · <b>{revPendientes.length}</b> sin decidir: {revPendientes.length === 1 ? <><b>no se aplicará</b> y queda sin vincular</> : <><b>no se aplicarán</b> y quedan sin vincular</>}</>}.
+                        </span>
+                      </li>
+                    )}
+                    {descartadas.filter(m => !requiereRevision(m)).length > 0 && (
+                      <li className="muted">
+                        <X size={16} />
+                        <span><b>{descartadas.filter(m => !requiereRevision(m)).length}</b> {descartadas.filter(m => !requiereRevision(m)).length === 1 ? 'marcada como «No corresponde»: no se vincula' : 'marcadas como «No corresponde»: no se vinculan'}.</span>
+                      </li>
+                    )}
+                    {sinCargo.length > 0 && (
+                      <li className="info">
+                        <FileText size={16} />
+                        <span><b>{sinCargo.length}</b> {sinCargo.length === 1 ? 'factura no aparece' : 'facturas no aparecen'} en este archivo de Clara; <b>{indicados}</b> con medio de pago indicado.</span>
+                      </li>
+                    )}
+                    {sinFactura.length > 0 && (
+                      <li className="muted">
+                        <CreditCard size={16} />
+                        <span><b>{sinFactura.length}</b> {sinFactura.length === 1 ? 'cargo de Clara queda' : 'cargos de Clara quedan'} sin comprobante (papeleo pendiente, no adeudo).</span>
+                      </li>
+                    )}
+                  </ul>
+                  <p className="czw-p">
+                    Al aplicar, cada factura vinculada toma la fecha y el monto que cobró Clara. Lo que no se aplique queda como estaba.
+                    Los medios de pago que indicaste se guardan apliques o no.
+                  </p>
+                  {revPendientes.length > 0 && (
+                    <button className="cz-link" onClick={() => setPaso(1)}>← Volver y decidir {revPendientes.length === 1 ? 'la pendiente' : `las ${revPendientes.length} pendientes`}</button>
+                  )}
+                </div>
               )}
+            </div>
 
-              {tab === 'revision' && (
-                <motion.div
-                  key="revision"
-                  className="cm-fs-pane"
-                  initial={{ opacity: 0, x: 16 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -16 }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                >
-                  <div className="cm-fs-pane-note cm-note-yellow">
-                    Estos cargos <b>sí quedaron vinculados</b>, pero el monto o la propina no cuadran al
-                    centavo. Échales un ojo antes de continuar: si el proveedor y la fecha son correctos,
-                    puedes dejarlos así.
-                  </div>
-                  {visibleRevision.length === 0 ? (
-                    <div className="cm-fs-empty">Nada que revisar: todo cuadró con alta confianza. 🎉</div>
-                  ) : visibleRevision.map((m, i) => (
-                    <div key={`${m.invoiceId}-${i}`} className="cm-fs-card cm-fs-rev-card">
-                      <div className="cm-fs-match-head">
-                        <div className="cm-fs-match-left">
-                          <AlertCircle size={18} className="cm-fs-rev-icon" />
-                          <div>
-                            <div className="cm-fs-match-name">{m.csvDescripcion || '(sin descripción)'}</div>
-                            <div className="cm-fs-match-sub">{formatDateDisplay(m.csvDate)}</div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-match-center">
-                          <ArrowRight size={14} className="cm-fs-match-arrow" />
-                          <div>
-                            <div className="cm-fs-match-name">{m.invoiceName}</div>
-                            <div className="cm-fs-match-sub">Pase {m.pass} — {m.method}</div>
-                          </div>
-                        </div>
-                        <div className="cm-fs-match-right">
-                          {(() => {
-                            const tier = confidenceTier(m.confidence)
-                            return (
-                              <span className={`cm-fs-conf ${tier.cls}`} title={`${m.confidence}%`}>
-                                {tier.label}
-                              </span>
-                            )
-                          })()}
-                          <div className="cm-fs-match-amount">
-                            {m.csvAmountMXN > 0 && <span>{fmtMoney(m.csvAmountMXN)} MXN</span>}
-                            {tieneDivisa(m) && <span>{fmtMoney(m.csvAmountUSD, 'USD')} {m.csvMoneda}</span>}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="cm-fs-rev-note">
-                        {m.descuadre
-                          ? 'La factura más la propina no suman exactamente lo que cobró Clara. Revisa el monto antes de continuar.'
-                          : 'Coincidencia aproximada. Verifica proveedor, fecha y monto antes de continuar.'}
-                      </div>
-                    </div>
-                  ))}
-                </motion.div>
+            {/* ── Pie: una sola acción primaria según el paso ── */}
+            <footer className="cm-fs-footer czw-foot">
+              <div className="czw-foot-left">
+                <button className="cz-link" onClick={() => setAvanzado(true)}>Ver conciliación completa</button>
+                <button className="cz-link czw-link-muted" onClick={pedirSalir}>No aplicar la conciliación</button>
+              </div>
+              {paso > 1 && (
+                <button type="button" className="cm-fs-btn cm-fs-btn-secondary" onClick={() => setPaso(paso - 1)}>Volver</button>
               )}
-            </AnimatePresence>
-          )}
-        </div>
+              {paso < 3
+                ? <button type="button" key={paso === 1 && revisar.length && !revPendientes.length ? 'listo' : 'normal'} className={`cm-fs-btn cm-fs-btn-primary${paso === 1 && revisar.length && !revPendientes.length ? ' czw-ready' : ''}`} onClick={() => setPaso(paso + 1)}>Continuar <ArrowRight size={14} /></button>
+                : <button type="button" className="cm-fs-btn cm-fs-btn-primary" onClick={aplicar}>{etiquetaAplicar}</button>}
+            </footer>
+          </>
+        )}
 
-        {/* ───── LEYENDA + STICKY FOOTER ───── */}
-        <div className="cm-fs-legend">
-          <span className="cm-fs-legend-title">Cómo leer esto:</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-green" />Conciliado — el cargo y tu comprobante coinciden</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-amber" />Falta comprobante — el cargo ya se pagó, sube su factura</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-slate" />No está en el estado — comprobante de otro periodo o pago</span>
-          <span className="cm-fs-legend-item"><i className="cm-dot cm-dot-yellow" />Revisar — cuadró, pero conviene verificarlo</span>
-        </div>
-        <footer className="cm-fs-footer">
-          <span className="cm-fs-footer-hint">
-            {matchCount} {matchCount === 1 ? 'cargo quedará vinculado' : 'cargos quedarán vinculados'} en tu reporte
-          </span>
-          <button
-            type="button"
-            className="cm-fs-btn cm-fs-btn-secondary"
-            onClick={handleCancel}
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            className="cm-fs-btn cm-fs-btn-primary"
-            onClick={onConfirm}
-          >
-            Continuar
-          </button>
-        </footer>
+        {salir && (
+          <div className="czw-salir" role="alertdialog" aria-labelledby="czw-salir-t">
+            <div className="czw-salir-box">
+              <h3 id="czw-salir-t">¿Salir sin aplicar la conciliación?</h3>
+              <p>Se pierden las decisiones de esta revisión (confirmar / no corresponde). Los medios de pago que indicaste sí se guardan.</p>
+              <div className="czw-salir-actions">
+                <button className="cz-btn" onClick={() => setSalir(false)} autoFocus>Seguir revisando</button>
+                <button className="cz-btn danger" onClick={handleCancel}>Salir sin aplicar</button>
+              </div>
+            </div>
+          </div>
+        )}
       </motion.div>
     </motion.div>
+  )
+}
+
+/* Selector de medio de pago — tarjetas con radio, lenguaje cotidiano. Las
+   opciones poco frecuentes van bajo "Otras formas de pago". */
+function SelectorOrigen({ valor, onChange, esEspecial }) {
+  const [otras, setOtras] = useState(() => !!ORIGEN_POR_KEY[valor]?.secundaria)
+  const opciones = ORIGENES_PAGO.filter(o => !o.secundaria || otras)
+  const ayuda = valor && ORIGEN_POR_KEY[valor]
+  return (
+    <div className="cz-selector" role="radiogroup" aria-label="Medio de pago">
+      {opciones.map(o => (
+        <label key={o.key} className={`cz-opcion${valor === o.key ? ' active' : ''}`}>
+          <input type="radio" name="origen-pago" checked={valor === o.key} onChange={() => onChange(o.key)} />
+          <span className="cz-opcion-ic" aria-hidden="true">{o.icon}</span>
+          <span className="cz-opcion-txt"><b>{o.label}</b><span>{o.desc}</span></span>
+        </label>
+      ))}
+      {!otras && <button type="button" className="cz-link" onClick={() => setOtras(true)}>Otras formas de pago</button>}
+      {ayuda && (
+        <p className="cz-opcion-ayuda">
+          {valor === 'otro_periodo_clara' ? 'Podrás cotejarlo cuando subas el estado de cuenta correspondiente; no se marca como conciliada.'
+            : valor === 'otra_cuenta_empresa' && esEspecial ? 'Es una anotación. Para comprobarlo usa «Cotejar con Saldos» en la barra principal.'
+            : valor === 'sin_identificar' ? 'Queda por identificar, sin marcarse como error. Puedes cambiarlo cuando quieras.'
+            : 'Esta factura seguirá sin movimiento de Clara. Puedes cambiar la opción cuando lo necesites.'}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -3466,6 +4508,33 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
+  // ── Borrador local (IndexedDB, solo este navegador) ──
+  // estado: 'cargando' → 'activo' | 'no-disponible' | 'error' | 'lleno' | 'pausado'.
+  // `lista` guarda la referencia que se escribió: si coincide con la actual,
+  // el borrador está al día.
+  const [borrador, setBorrador] = useState({ estado: 'cargando', savedAt: null, lista: null })
+  const [ofertaBorrador, setOfertaBorrador] = useState(null)   // borrador encontrado al abrir
+  useEffect(() => {
+    leerBorrador()
+      .then(r => { if (r) setOfertaBorrador(r); setBorrador(b => ({ ...b, estado: 'activo' })) })
+      .catch(() => setBorrador(b => ({ ...b, estado: 'no-disponible' })))
+  }, [])
+  // Guarda con espera de 0.8 s tras el último cambio. No escribe nada
+  // mientras se decide si recuperar el borrador encontrado (para no pisarlo).
+  useEffect(() => {
+    if (borrador.estado !== 'activo' && borrador.estado !== 'error' && borrador.estado !== 'lleno') return
+    if (ofertaBorrador) return
+    if (borrador.lista === lista) return
+    const t = setTimeout(() => {
+      const op = lista.length
+        ? guardarBorrador({ lista, colaborador, carpetaNombre, appVersion: 'v9.05' })
+        : borrarBorrador().then(() => null)
+      op.then(savedAt => setBorrador({ estado: 'activo', savedAt, lista }))
+        .catch(err => setBorrador(b => ({ ...b, estado: err?.name === 'QuotaExceededError' ? 'lleno' : 'error' })))
+    }, 800)
+    return () => clearTimeout(t)
+  }, [lista, colaborador, carpetaNombre, borrador.estado, borrador.lista, ofertaBorrador])
+
   // Auto-fit del ancho de la columna FACTURA (colWidths[4]) al folio más
   // largo presente en la lista, para que folios como "F103069-141757" o
   // "FAC102026491" nunca se corten con elipsis. Se recalcula cuando cambia
@@ -3508,10 +4577,41 @@ export default function App() {
   // [14] total fac, [15] forma pago, [16] prop%, [17] prop$, [18] total final
   // 22 columnas: ...formaPago(15), banco(16, solo especiales), prop%(17),
   // prop$(18), totalFinal(19), montoUSD(20), tipoCambio(21)
-  const [colWidths, setColWidths] = useState([40, 110, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
+  const [colWidths, setColWidths] = useState([40, 150, 115, 120, 120, 260, 140, 100, 120, 110, 135, 110, 110, 110, 125, 160, 195, 95, 105, 130, 110, 80])
   const [sort,          setSort]          = useState({ field: null, dir: 'asc' })
   const [busqueda,      setBusqueda]      = useState('')
   const searchInputRef = useRef(null)
+
+  // Densidad de la tabla — preferencia de UI por navegador (no son datos
+  // fiscales). localStorage puede no existir (modo privado) → try/catch.
+  const [densidad, setDensidad] = useState(() => {
+    try { return localStorage.getItem('smto-densidad') === 'compacta' ? 'compacta' : 'comoda' } catch { return 'comoda' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('smto-densidad', densidad) } catch { /* sin storage */ }
+  }, [densidad])
+
+  // Respaldo: el reporte solo vive en memoria. Guardamos la referencia de
+  // `lista` del último export exitoso (Excel o ZIP); si cambió desde entonces
+  // hay trabajo sin respaldar → indicador en el header + aviso al salir.
+  const [ultimoExport, setUltimoExport] = useState(null)
+
+  // Columnas ocultas (preferencia de UI por navegador). Default: Esencial.
+  const [hiddenCols, setHiddenCols] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('smto-columnas-ocultas-v2'))
+      if (Array.isArray(v)) return v
+    } catch { /* sin storage o JSON inválido */ }
+    return hiddenForPreset('esencial')
+  })
+  useEffect(() => {
+    try { localStorage.setItem('smto-columnas-ocultas-v2', JSON.stringify(hiddenCols)) } catch { /* sin storage */ }
+  }, [hiddenCols])
+
+  const [filtroRapido, setFiltroRapido] = useState('todos')
+  const [drawerId,     setDrawerId]     = useState(null)   // gasto abierto en el panel lateral
+  const [bulkTipo,     setBulkTipo]     = useState(null)   // { tipo } mientras el modal de tipo masivo está abierto
+  const [vista,        setVista]        = useState('facturas') // 'facturas' | 'resumen' — vistas del mismo `lista`
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
@@ -3584,11 +4684,24 @@ export default function App() {
       totalFacturado:   sum('totalCFDI'),
       ivaTotal:         sum('iva'),
       retencionesTotal: sum('retenciones'),
-      sinCobrar:        lista.filter(g => !g.fechaCobro).length,
       count:            lista.length,
+      // Dos progresos INDEPENDIENTES: hizoMatch (banco) ≠ validado (manual).
+      conciliadas:      lista.filter(g => g.hizoMatch).length,
+      validadas:        lista.filter(g => g.validado).length,
       porMoneda,
     }
   }, [lista])
+
+  const sinRespaldo = lista.length > 0 && lista !== ultimoExport
+  // Con el borrador local al día no hace falta el aviso del navegador.
+  const avisarAlSalir = sinRespaldo && !(borrador.estado === 'activo' && borrador.lista === lista)
+  useEffect(() => {
+    if (!avisarAlSalir) return
+    // El navegador muestra su propio texto genérico; solo pedimos el aviso.
+    const onBeforeUnload = e => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [avisarAlSalir])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const fmtDivisa = (code, n) =>
     `${simboloMoneda(code) || code + ' '}${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -3597,10 +4710,12 @@ export default function App() {
   //    todos los campos significativos del gasto. Se aplica ANTES del sort
   //    para que el orden actuál actúe sobre el subset filtrado.
   const filteredLista = useMemo(() => {
+    const chip = FILTROS_RAPIDOS.find(f => f.key === filtroRapido)
+    const base = chip && filtroRapido !== 'todos' ? lista.filter(chip.test) : lista
     const q = busqueda.trim()
-    if (!q) return lista
+    if (!q) return base
     const nq = q.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
-    return lista.filter(g => {
+    return base.filter(g => {
       const haystack = [
         g.rfc, g.proveedor, g.noFactura, g.concepto, g.tipo,
         g.fechaFac, g.fechaCobro, g.formaPago, g.polizaNumero,
@@ -3615,7 +4730,11 @@ export default function App() {
         .toLowerCase()
       return haystack.includes(nq)
     })
-  }, [lista, busqueda])
+  }, [lista, busqueda, filtroRapido])
+
+  const conteoFiltros = useMemo(() => Object.fromEntries(
+    FILTROS_RAPIDOS.map(f => [f.key, lista.filter(f.test).length])
+  ), [lista])
 
   // ── Sort — three-state cycle (asc → desc → unsorted), null-safe, with
   //          date detection that accepts both YYYY-MM-DD and DD/MM/YYYY.
@@ -4769,7 +5888,10 @@ export default function App() {
     // "fecha de transaccion" también contiene "transaccion", por eso la
     // descripción se busca con match exacto del encabezado "Transacción".
     const colFecha    = findCol('fecha de transacc', 0)
-    const colDesc     = findColExact('transaccion', 2)
+    // El export nuevo de Clara (con "ID de Transacción" y "Fecha y Hora
+    // Local") nombra la descripción "Comercio"; sin esto caía al índice 2,
+    // que ahí es la hora local, y el modal mostraba "2026-10-26 12:59:46".
+    const colDesc     = findColExact('transaccion', findColExact('comercio', 2))
     const colMontoOrg = findCol('monto original', 3)
     const colMoneda   = findCol('moneda original', 4)
     const colMontoMXN = findCol('monto en mxn', 5)
@@ -4783,7 +5905,12 @@ export default function App() {
     // (the new default). Matched rows will overwrite this with the CSV's
     // dCSV; unmatched rows keep the invoice date so the FECHA DE COBRO
     // column never shows a blank.
-    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '' }))
+    const nl = lista.map(g => ({ ...g, hizoMatch: false, fechaCobro: g.fechaFac || '', matchMetodo: '', matchConfianza: 0, matchConfirmado: false }))
+    // Estado de cada gasto ANTES de los pases (ya reseteado). Si en el
+    // asistente el usuario marca un vínculo como «No corresponde» o deja una
+    // coincidencia dudosa sin decidir, ese gasto se restaura desde aquí al
+    // aplicar: queda exactamente como si el motor no lo hubiera vinculado.
+    const baseLista = nl.map(g => ({ ...g }))
 
     // Normalize for fuzzy-suggestion comparison: strip accents, lowercase,
     // squash non-alphanumerics. Sørensen-Dice on character bigrams gives a
@@ -4824,6 +5951,8 @@ export default function App() {
         invoiceNumber: g.noFactura || '',
         invoiceTotal: g.totalCFDI || 0,
         invoiceMoneda: g.moneda || 'MXN',
+        invoiceFecha: g.fechaFac || '',
+        invoiceTipo: g.tipo || '',
         isTicket: !!g.esTicket,
         csvDate: formatCobro(row.dCSV),
         csvDescripcion: row.descripcion || '',
@@ -4903,6 +6032,51 @@ export default function App() {
       csvRows.push({ dCSV, amounts, descripcion, matched: false, autorizacion, moneda, montoUSD, montoMXN, categoria })
     }
     const bancoRows = csvRows.length
+
+    // ── Vista previa antes de conciliar ── Solo informa qué se leyó del
+    // archivo (formato, movimientos, periodo); el usuario confirma y la
+    // conciliación corre exactamente igual que antes. Cancelar no toca nada.
+    {
+      const fechas = csvRows.map(r => r.dCSV).sort((a, b) => a - b)
+      const monedas = [...new Set(csvRows.map(r => r.moneda || 'MXN'))]
+      const conAuth = csvRows.some(r => r.autorizacion)
+      const formato = isClara
+        ? `Clara · ${isExcel ? 'Excel' : 'CSV'}${monedas.some(m => m !== 'MXN') ? ' · con moneda extranjera' : ''}`
+        : `Estado de cuenta genérico · ${isExcel ? 'Excel' : 'CSV'}`
+      const periodo = fechas.length
+        ? `${formatDateDisplay(formatCobro(fechas[0]))} al ${formatDateDisplay(formatCobro(fechas[fechas.length - 1]))}`
+        : 'Sin fechas legibles'
+      const avisos = []
+      if (!bancoRows) avisos.push('⚠ No encontramos movimientos con fecha y monto. Revisa que sea el estado de cuenta correcto.')
+      if (!isClara) avisos.push('No es un archivo de Clara: se buscarán fechas y montos en cada renglón (sin códigos de autorización).')
+      if (isClara && conAuth) avisos.push('Trae códigos de autorización: los tickets con OCR se pueden ligar por código.')
+      if (lista.some(g => g.hizoMatch)) avisos.push('Ya hay una conciliación aplicada: esta la reemplaza (podrás revisar antes de aplicar).')
+      // ¿El estado de cuenta corresponde a estas facturas? Si ninguna factura
+      // cae dentro del periodo de los cargos (±3 días) casi seguro es otro
+      // estado de cuenta, y los "matches" por monto/propina serían de otro viaje.
+      if (fechas.length) {
+        const DIA = 86400000
+        const ini = fechas[0].getTime() - 3 * DIA, fin = fechas[fechas.length - 1].getTime() + 3 * DIA
+        const fFac = lista.map(g => parseDateRobusto(g.fechaFac)).filter(Boolean)
+        if (fFac.length && !fFac.some(d => d.getTime() >= ini && d.getTime() <= fin)) {
+          fFac.sort((a, b) => a - b)
+          avisos.push(`⚠ Ninguna factura cae en el periodo de este estado de cuenta: las facturas son del ${formatDateDisplay(formatCobro(fFac[0]))} al ${formatDateDisplay(formatCobro(fFac[fFac.length - 1]))}. ¿Es el estado de cuenta correcto?`)
+        }
+      }
+      const continuar = await askConfirm({
+        type: bancoRows ? 'confirm' : 'warning',
+        title: 'Revisa el estado de cuenta',
+        subtitle: `${file.name}\n${formato}\nPeriodo: ${periodo}${avisos.length ? '\n\n' + avisos.join('\n') : ''}`,
+        stats: [
+          { value: bancoRows, label: bancoRows === 1 ? 'Movimiento' : 'Movimientos', color: '#38BDF8' },
+          { value: lista.length, label: lista.length === 1 ? 'Gasto en reporte' : 'Gastos en reporte', color: '#59D39B' },
+          { value: monedas.join(' · ') || '—', label: 'Moneda', color: 'rgba(255,255,255,0.7)' },
+        ],
+        primaryLabel: 'Conciliar',
+        secondaryLabel: 'Cancelar',
+      })
+      if (!continuar) { e.target.value = ''; return }
+    }
 
     // Date is a TIEBREAKER, not a filter. Pick the invoice whose fechaFac is
     // closest in time to the bank row's date. Invoices with no parseable date
@@ -5030,36 +6204,8 @@ export default function App() {
     // Clara CSV), falls back to keyword sniffing on proveedor + concepto.
     // The point is: a gas/uber/hotel CSV line can never bind to an invoice
     // via a phantom 18% tip — only direct totalCFDI matches survive.
-    const RESTAURANT_KEYWORDS = [
-      'restaurant', 'restaurante', 'bar', 'cafe', 'café', 'cafeteria', 'cafetería',
-      'comida', 'aerocomidas', 'taqueria', 'taquería', 'pizzeria', 'pizzería',
-      'grill', 'steakhouse', 'bistro', 'parrilla', 'cantina', 'fonda',
-      'sushi', 'cocina', 'kitchen', 'diner', 'eatery', 'jumper',
-      'wings', 'mariscos', 'marisqueria', 'marisquería', 'asador', 'birria',
-      'antojitos', 'burger', 'burguer', 'pub', 'brewery', 'cerveceria', 'cervecería',
-    ]
-    const TIP_ELIGIBLE_CATEGORIES = [
-      'alimentos', 'bares y bebidas alcoholicas', 'bares y bebidas alcohólicas',
-      'food', 'restaurants', 'restaurantes', 'comida', 'consumo', 'viaticos', 'viáticos',
-    ]
-    const isEligibleForTip = (inv, csvRow) => {
-      const csvCat = (csvRow?.categoria || '').toLowerCase().trim()
-      if (csvCat) {
-        // CSV has a category column. Trust it definitively in both directions:
-        // a food category → eligible; any other category → never tip.
-        return TIP_ELIGIBLE_CATEGORIES.some(c => csvCat.includes(c))
-      }
-      // No CSV category (non-Clara source, o estado de cuenta Clara en Excel
-      // que no trae la columna Categoría). Husmea palabras clave de restaurante
-      // tanto en la factura (proveedor + concepto) como en la descripción del
-      // propio movimiento bancario ("CASA MATRIA RESTAURANT", "REST WENDYS",
-      // "BUFALO WILD WINGS"), que suele delatar el giro aunque el proveedor del
-      // CFDI sea un nombre corporativo sin la palabra "restaurante".
-      const haystack = (
-        (inv?.proveedor || '') + ' ' + (inv?.concepto || '') + ' ' + (csvRow?.descripcion || '')
-      ).toLowerCase()
-      return RESTAURANT_KEYWORDS.some(kw => haystack.includes(kw))
-    }
+    // Elegibilidad (categoría Clara / palabras clave + veto por tipo de la
+    // factura) vive en src/propinas.js, con su prueba en scripts/.
     const asReceipt = inv => ({
       _raw: inv,  // kept so smartAmountMatch can re-check eligibility off proveedor/concepto
       isOCR: (inv.subtotal || 0) > 0 || (inv.propinaSugerida18 || inv.propinaSugerida20 || inv.propinaSugerida22) > 0,
@@ -5345,6 +6491,14 @@ export default function App() {
       return acc
     }, { mxn: 0, usd: 0 })
 
+    // Método y confianza FINALES del motor (ya con el guardián aplicado) en
+    // cada gasto, para que la tabla y el panel expliquen el match sin
+    // recalcular nada. No viajan al Excel (export usa campos explícitos).
+    for (const m of matchedRows) {
+      const g = nl.find(x => x.id === m.invoiceId)
+      if (g) { g.matchMetodo = m.method; g.matchConfianza = m.confidence }
+    }
+
     // Defer setLista — the modal now confirms/cancels the apply step.
     // pendingLista travels with the result object; onConfirm flushes it,
     // onCancel discards it. matchedRows/sinFactura are pre-snapshotted so
@@ -5362,6 +6516,7 @@ export default function App() {
       ticketsMatched,
       foreignMatched: foreignMatchesTotal,
       pendingLista: nl,
+      baseLista,
     })
     e.target.value = ''
   }
@@ -5594,6 +6749,7 @@ export default function App() {
     })
     a.click()
     URL.revokeObjectURL(a.href)
+    setUltimoExport(lista)
 
     // 4) Success modal — generic PremiumModal with three stats. Si se detectó
     //    PDF idéntico entre folios distintos, el modal pasa a 'warning' y lista
@@ -6231,6 +7387,7 @@ export default function App() {
       const a = Object.assign(document.createElement('a'), { href: url, download: filename })
       a.click()
       URL.revokeObjectURL(url)
+      setUltimoExport(lista)
       setExportExito({
         title: '¡Excel Generado!',
         subtitle: 'Reporte descargado en formato oficial SMTO',
@@ -6248,20 +7405,17 @@ export default function App() {
     }
   }
 
-  // ── Abrir PDF en nueva pestaña ──
-  // Estable (deps vacías, usa setModal directo) para preservar la memoización
-  // de GastoRow — así abrir un PDF no fuerza el re-render de toda la tabla.
+  // ── Visor lateral de PDF / imagen ──
+  // Estables (deps vacías, solo setVisor) para preservar la memoización de
+  // GastoRow — así abrir un documento no fuerza el re-render de la tabla.
+  // El object URL se revoca al cerrar el visor o al cambiar de documento.
+  const [visor, setVisor] = useState(null)   // { url, nombre, tipo: 'pdf'|'img', revocar }
+  useEffect(() => () => { if (visor?.revocar) URL.revokeObjectURL(visor.url) }, [visor])
+  const cerrarVisor = useCallback(() => setVisor(null), [])
   const openPDF = useCallback(pdfFile => {
     if (!pdfFile) return
     try {
-      const url = URL.createObjectURL(pdfFile)
-      const win = window.open(url, '_blank')
-      if (!win) setModal({
-        type: 'warning',
-        title: 'No se pudo abrir el PDF',
-        subtitle: 'Verifica que el navegador permita ventanas emergentes para este sitio.',
-        primaryLabel: 'Entendido',
-      })
+      setVisor({ url: URL.createObjectURL(pdfFile), nombre: pdfFile.name || 'Factura.pdf', tipo: 'pdf', revocar: true })
     } catch (err) {
       setModal({
         type: 'error',
@@ -6271,6 +7425,177 @@ export default function App() {
       })
     }
   }, [])
+  const openImagen = useCallback((dataURL, nombre) => {
+    if (dataURL) setVisor({ url: dataURL, nombre: nombre || 'Imagen', tipo: 'img', revocar: false })
+  }, [])
+
+  // ── Medio de pago declarado (facturas sin cargo en Clara) ──
+  // Solo escribe los campos de anotación. Se aplica a `lista` Y al
+  // pendingLista del modal abierto, para que «Aplicar coincidencias» (que
+  // reemplaza lista por pendingLista) no borre lo que el usuario clasificó.
+  const setOrigenPago = useCallback((ids, origen, nota = '') => {
+    const set = new Set(ids)
+    const anota = g => set.has(g.id)
+      ? { ...g, origenPagoDeclarado: origen || null, origenPagoNota: origen ? (nota || '') : '', origenPagoActualizadoEn: origen ? Date.now() : null }
+      : g
+    setLista(prev => prev.map(anota))
+    setConciliacion(prev => prev?.pendingLista ? { ...prev, pendingLista: prev.pendingLista.map(anota) } : prev)
+  }, [])
+  // Lista final al aplicar la conciliación: pendingLista, salvo los gastos
+  // excluidos en el asistente, que vuelven a su estado previo (baseLista)
+  // conservando la anotación de medio de pago hecha en el modal.
+  const listaConciliada = (conc, excluidos = [], confirmados = []) => {
+    if (!conc?.pendingLista) return lista
+    const fuera = new Set(excluidos)
+    const conf = new Set(confirmados)
+    const base = new Map((conc.baseLista || []).map(g => [g.id, g]))
+    return conc.pendingLista.map(g => !fuera.has(g.id) || !base.has(g.id)
+      ? (conf.has(g.id) && g.hizoMatch ? { ...g, matchConfirmado: true } : g)
+      : {
+      ...base.get(g.id),
+      origenPagoDeclarado: g.origenPagoDeclarado,
+      origenPagoNota: g.origenPagoNota,
+      origenPagoActualizadoEn: g.origenPagoActualizadoEn,
+    })
+  }
+
+  const verFacturaDe = id => {
+    const g = (conciliacion?.pendingLista || lista).find(x => x.id === id) || lista.find(x => x.id === id)
+    if (!g) return
+    if (g.pdfFile) openPDF(g.pdfFile)
+    else if (g.imageDataURL) openImagen(g.imageDataURL, g.proveedor || 'Imagen del ticket')
+  }
+
+  // Aviso NO destructivo antes de exportar (Excel o ZIP): nada se modifica.
+  const exportarConAviso = async fn => {
+    const choques = lista.filter(bancoContradiceOrigen)
+    if (choques.length) {
+      const n = choques.length
+      const seguir = await askConfirm({
+        type: 'warning',
+        title: `Revisa el campo BANCO de ${n} ${n === 1 ? 'factura' : 'facturas'}`,
+        subtitle: `${n === 1 ? 'Una factura declarada' : `${n} facturas declaradas`} como pagada fuera de Clara (efectivo, tarjeta personal u otra cuenta) todavía ${n === 1 ? 'tiene' : 'tienen'} BANCO = Clara en tu reporte. Verifica qué valor corresponde según contabilidad antes de exportar.\n\nEl medio de pago que indicaste es informativo y no aparece en el Excel contable.`,
+        primaryLabel: 'Exportar así',
+        secondaryLabel: 'Revisar antes',
+      })
+      if (!seguir) { setFiltroRapido('bancoClaraDeclarada'); setBusqueda(''); setVista('facturas'); return }
+    }
+    fn()
+  }
+
+  // ── Borrador: recuperar / descartar / borrar ──
+  const recuperarBorrador = () => {
+    const r = ofertaBorrador
+    if (!r) return
+    setLista(r.lista)
+    if (r.colaborador) {
+      setColaborador(COLABORADORES.find(c => c.nombre === r.colaborador.nombre) || r.colaborador)
+      setShowColabModal(false)
+    }
+    if (r.carpetaNombre) setCarpetaNombre(r.carpetaNombre)
+    // Lo recuperado ya está guardado: marcar al día evita reescribirlo.
+    setBorrador({ estado: 'activo', savedAt: r.savedAt, lista: r.lista })
+    setOfertaBorrador(null)
+    setToast(`✓ Borrador recuperado · ${r.count} ${r.count === 1 ? 'gasto' : 'gastos'}`)
+  }
+  const descartarBorrador = () => {
+    borrarBorrador().catch(() => {})
+    setOfertaBorrador(null)
+  }
+  const borrarBorradorManual = async () => {
+    const ok = await askConfirm({
+      type: 'warning',
+      title: '¿Borrar el borrador de este navegador?',
+      subtitle: 'Se elimina la copia guardada en este navegador y se deja de guardar en esta sesión. El reporte que ves en pantalla no cambia. Si no lo has exportado, se perderá al cerrar o recargar la página.',
+      primaryLabel: 'Borrar borrador',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!ok) return
+    try { await borrarBorrador() } catch { /* sin storage: nada que borrar */ }
+    setBorrador({ estado: 'pausado', savedAt: null, lista: null })
+    setToast('Borrador borrado de este navegador')
+  }
+  const borradorAlDia = borrador.estado === 'activo' && borrador.lista === lista && lista.length > 0
+  const horaBorrador = borrador.savedAt
+    ? new Date(borrador.savedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  // ── Vista: columnas visibles, panel de detalle y acciones masivas ──
+  // Las columnas se ocultan con CSS (nth-child) para no tocar el render de
+  // GastoRow; el índice cuenta la columna BANCO solo si se dibuja.
+  const columnasRender = COLUMNS.filter(c => !c.specialOnly || esColaboradorEspecial)
+  const presetActivo = Object.keys(COLUMN_PRESETS).find(k => {
+    const h = hiddenForPreset(k)
+    return h.length === hiddenCols.length && h.every(x => hiddenCols.includes(x))
+  })
+  const cssColumnasOcultas = columnasRender
+    .map((c, i) => hiddenCols.includes(c.key) && !COLUMNAS_FIJAS.includes(c.key) ? i + 1 : 0)
+    .filter(Boolean)
+    .map(n => `.tabla-gastos > thead > tr > th:nth-child(${n}), .tabla-gastos > tbody > tr > td:nth-child(${n}) { display: none; }`)
+    .join('\n')
+  const toggleColumna = key =>
+    setHiddenCols(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  const hayFiltros = filtroRapido !== 'todos' || !!busqueda.trim()
+
+  const drawerGasto = drawerId ? lista.find(g => g.id === drawerId) : null
+  // Con el visor abierto, navegar en el detalle (Anterior/Siguiente) cambia
+  // también el documento mostrado; si la nueva factura no tiene PDF/imagen,
+  // el visor se cierra para no dejar a la vista el documento de otra.
+  const drawerPrevRef = useRef(drawerId)
+  useEffect(() => {
+    if (drawerPrevRef.current === drawerId) return
+    drawerPrevRef.current = drawerId
+    if (!visor || !drawerGasto) return
+    if (drawerGasto.pdfFile) openPDF(drawerGasto.pdfFile)
+    else if (drawerGasto.imageDataURL) openImagen(drawerGasto.imageDataURL, drawerGasto.proveedor || 'Imagen del ticket')
+    else setVisor(null)
+  }, [drawerId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const drawerIdx = drawerGasto ? sortedLista.findIndex(g => g.id === drawerId) : -1
+  // Si el gasto abierto se elimina, se cierra el panel.
+  useEffect(() => { if (drawerId && !drawerGasto) setDrawerId(null) }, [drawerId, drawerGasto])
+  const closeDrawer = useCallback(() => setDrawerId(null), [])
+
+  // "Requiere atención" — avisos informativos derivados del estado actual.
+  // Cada uno lleva a su filtro en Facturas; ninguno bloquea ni corrige nada.
+  const avisos = [
+    { key: 'revisarMatch', filtro: 'revisarMatch', nivel: 'warn', titulo: 'coincidencias bancarias por revisar', detalle: 'Ligadas con confianza baja o declaradas como pagadas fuera de Clara: confirma que sea el cargo correcto.' },
+    { key: 'xmlFaltante', filtro: 'xmlFaltante', nivel: 'warn', titulo: 'recuperadas sin XML', detalle: 'Se leyeron por OCR porque su XML venía vacío o dañado. Pide el XML al proveedor.' },
+    { key: 'sinImporte', filtro: 'sinImporte', nivel: 'warn', titulo: 'sin importe capturado', detalle: 'Tienen total $0 y ningún monto en moneda extranjera.' },
+    { key: 'meSinConciliar', filtro: 'meSinConciliar', nivel: 'info', titulo: 'en moneda extranjera sin conciliar', detalle: 'Su equivalente en pesos llega al conciliar con el banco. No son gastos de $0.' },
+    { key: 'sinXml', filtro: 'sinXml', nivel: 'info', titulo: 'sin XML', detalle: 'Tickets, fotos o capturas manuales. Revisa si alguno sí tiene factura.' },
+    { key: 'porRevisar', filtro: 'porRevisar', nivel: 'info', titulo: 'sin revisión manual', detalle: 'Aún no tienen marcada la casilla de revisión.' },
+    { key: 'bancoClaraDeclarada', filtro: 'bancoClaraDeclarada', nivel: 'warn', titulo: 'pagadas fuera de Clara con BANCO = Clara', detalle: 'Declaraste otro medio de pago, pero el campo BANCO del reporte sigue diciendo Clara. Verifica con contabilidad.' },
+    ...(lista.some(g => g.hizoMatch) ? [{ key: 'sinClasificarPago', filtro: 'sinClasificarPago', nivel: 'info', titulo: 'sin cargo en Clara y sin medio de pago indicado', detalle: 'Indica si las pagaste en efectivo, con tu tarjeta u otra cuenta (informativo).' }] : []),
+    { key: 'cobroAntes', filtro: 'cobroAntes', nivel: 'info', titulo: 'cobradas antes de la fecha de factura', detalle: 'Suele ser normal (la factura se emitió días después del pago). Solo informativo.' },
+  ].map(a => ({ ...a, count: conteoFiltros[a.filtro] || 0 })).filter(a => a.count > 0)
+  const avisosFuertes = avisos.filter(a => a.nivel === 'warn').reduce((s, a) => s + a.count, 0)
+  const irAFiltro = key => { setFiltroRapido(key); setBusqueda(''); setVista('facturas') }
+
+  // Acciones masivas sobre las filas VISIBLES (filtro + búsqueda actuales).
+  // Solo tocan `validado` y `tipo`, que no tienen efectos colaterales en update().
+  const marcarVisiblesRevisadas = async valor => {
+    const ids = new Set(sortedLista.map(g => g.id))
+    const n = ids.size
+    if (!n) return
+    const plural = n === 1 ? 'factura' : `${n} facturas`
+    const ok = await askConfirm({
+      type: 'warning',
+      title: valor ? `¿Marcar ${plural} como revisada${n === 1 ? '' : 's'}?` : `¿Quitar la marca de revisión a ${plural}?`,
+      subtitle: `Se aplica a ${n === 1 ? 'la factura que ves' : `las ${n} facturas que ves`} ahora en la tabla (con los filtros actuales). Solo cambia la casilla de revisión manual: no concilia ni modifica importes.`,
+      primaryLabel: valor ? 'Marcar revisadas' : 'Quitar marca',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!ok) return
+    setLista(prev => prev.map(g => ids.has(g.id) ? { ...g, validado: valor } : g))
+    setToast(valor ? `✓ ${n} ${n === 1 ? 'factura marcada' : 'facturas marcadas'} como revisada${n === 1 ? '' : 's'}` : `Marca de revisión quitada a ${n} ${n === 1 ? 'factura' : 'facturas'}`)
+  }
+  const aplicarTipoMasivo = () => {
+    if (!bulkTipo?.tipo) return
+    const ids = new Set(sortedLista.map(g => g.id))
+    setLista(prev => prev.map(g => ids.has(g.id) ? { ...g, tipo: bulkTipo.tipo } : g))
+    setToast(`✓ Tipo «${bulkTipo.tipo}» aplicado a ${ids.size} ${ids.size === 1 ? 'factura' : 'facturas'}`)
+    setBulkTipo(null)
+  }
 
   /* ── RENDER ── */
   return (
@@ -6284,14 +7609,53 @@ export default function App() {
         }} />
       )}
 
+      {/* ─── RECUPERAR BORRADOR (encontrado al abrir la app) ─── */}
+      {ofertaBorrador && (
+        <div className="premium-overlay borrador-overlay">
+          <div className="premium-modal" style={{ maxWidth: 480 }} role="dialog" aria-labelledby="borrador-title">
+            <div className="premium-icon-wrap" style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.25)' }}>
+              <FileSpreadsheet size={28} color="#38BDF8" />
+            </div>
+            <h2 className="premium-title" id="borrador-title">¿Continuar donde te quedaste?</h2>
+            <p className="premium-subtitle">
+              Encontramos un reporte sin terminar guardado en este navegador
+              {ofertaBorrador.colaborador ? ` de ${ofertaBorrador.colaborador.nombre}` : ''}, del{' '}
+              {new Date(ofertaBorrador.savedAt).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(/\.$/, '')}.
+            </p>
+            <div className="premium-stats">
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: '#38BDF8' }}>{ofertaBorrador.count}</div><div className="premium-stat-label">{ofertaBorrador.count === 1 ? 'Gasto' : 'Gastos'}</div></div>
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: '#59D39B' }}>{ofertaBorrador.lista.filter(g => g.hizoMatch).length}</div><div className="premium-stat-label">Conciliados</div></div>
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: 'rgba(255,255,255,0.7)' }}>{ofertaBorrador.lista.filter(g => g.validado).length}</div><div className="premium-stat-label">Revisados</div></div>
+            </div>
+            {ofertaBorrador.avisos.length > 0 && (
+              <p className="borrador-aviso">⚠ {ofertaBorrador.avisos.join(' ')}</p>
+            )}
+            <p className="borrador-nota">
+              El borrador vive solo en este navegador. «Empezar de cero» lo borra definitivamente; hazlo si usas una computadora compartida.
+            </p>
+            <div className="premium-actions" style={{ marginTop: 18 }}>
+              <button className="premium-btn-secondary" onClick={descartarBorrador}>Empezar de cero</button>
+              <button className="premium-btn-primary" autoFocus onClick={recuperarBorrador}>Recuperar reporte</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── CABECERA ─── */}
       <div className="header">
         <div className="header-logo">
-          <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
+          <img src="/logo.png" alt="SMTO" style={{ height: '40px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.05</span></h1>
+          <h1 className="header-title">Control de gastos<span className="version-badge">v9.05</span></h1>
           <div className="header-sub">
+            {colaborador && (
+              <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
+                <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
+                <span>{colaborador.nombre}</span>
+                <span className="colab-chip-cat">{colaborador.categoria}</span>
+              </button>
+            )}
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
               {carpetaNombre}
@@ -6302,56 +7666,64 @@ export default function App() {
               {lista.length} registros
             </span>
           </div>
-          {colaborador && (
-            <button className="colab-chip" onClick={() => setShowColabModal(true)} title="Cambiar colaborador">
-              <span className="colab-chip-avatar">{colaborador.nombre.charAt(0)}</span>
-              <span>{colaborador.nombre}</span>
-              <span className="colab-chip-cat">{colaborador.categoria}</span>
-            </button>
-          )}
         </div>
-        <div className="guide-btn-group">
-          <button className="guide-btn guide-btn-clara" onClick={() => setShowClaraGuide(true)} title="Manual para descargar el estado de cuenta de Clara">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-            ¿Cómo Descargar tu estado de cuenta CLARA?
-          </button>
-          <button className="guide-btn" onClick={() => setTourStep(0)} title="Recorrido paso a paso">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            ¿Cómo utilizar la app?
-          </button>
+        <div className="header-right">
+          {lista.length > 0 && (() => {
+            // Prioridad: export hecho > borrador al día > guardando > sin respaldo.
+            const RIESGO = ' Borrar los datos del navegador o usar una ventana privada lo elimina; exportar el Excel o el ZIP sigue siendo el respaldo oficial.'
+            const p = !sinRespaldo
+              ? { cls: 'ok', ic: 'ok', largo: 'Respaldo exportado', corto: 'Respaldado', title: 'Ya exportaste este reporte tal como está.' }
+              : borradorAlDia
+              ? { cls: 'guardado', ic: 'ok', largo: `Guardado en este navegador · ${horaBorrador}`, corto: `Guardado ${horaBorrador}`, title: `Si recargas o cierras la página, al volver podrás recuperar este reporte (se conserva ${CADUCIDAD_DIAS} días).${RIESGO}` }
+              : borrador.estado === 'activo'
+              ? { cls: 'guardado', ic: 'sync', largo: 'Guardando…', corto: 'Guardando…', title: 'Guardando el borrador en este navegador.' }
+              : borrador.estado === 'lleno'
+              ? { cls: 'pendiente', ic: 'warn', largo: 'Sin espacio para el borrador · exporta antes de cerrar', corto: 'Sin espacio', title: 'El navegador no tiene espacio para guardar el borrador (muchos PDFs o imágenes). Exporta el Excel o el ZIP como respaldo.' }
+              : { cls: 'pendiente', ic: 'warn', largo: 'Sin respaldo · exporta antes de cerrar', corto: 'Sin respaldo',
+                  title: borrador.estado === 'pausado'
+                    ? 'Borraste el borrador: en esta sesión ya no se guarda. Exporta el Excel o el ZIP como respaldo.'
+                    : 'Este navegador no permite guardar el borrador (p. ej. ventana privada). Si cierras o recargas la página se pierde lo que no hayas exportado.' }
+            return (
+              <span className={`respaldo-pill ${p.cls}`} title={p.title}>
+                {p.ic === 'warn' ? <AlertTriangle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+                <span className="respaldo-txt">{p.largo}</span>
+                <span className="respaldo-txt-short">{p.corto}</span>
+              </span>
+            )
+          })()}
+          <ToolbarMenu
+            title="Ayuda"
+            variant="ghost"
+            align="right"
+            icon={<Info size={15} />}
+            items={[
+              { label: '¿Cómo utilizar la app?', hint: 'Recorrido paso a paso', icon: <Sparkles size={16} />, onClick: () => setTourStep(0) },
+              { label: '¿Cómo descargar tu estado de cuenta Clara?', hint: 'Manual con capturas', icon: <FileText size={16} />, onClick: () => setShowClaraGuide(true) },
+              { label: 'Borrar borrador de este navegador', hint: 'Recomendado en computadoras compartidas', icon: <XCircle size={16} />, onClick: borrarBorradorManual, hidden: !borrador.savedAt },
+            ]}
+          />
         </div>
       </div>
 
       <div className="divider" />
 
-      {/* ─── BARRA DE ACCIONES ─── */}
+      {/* ─── BARRA DE ACCIONES ───
+          Reorganización visual: cada item del menú llama exactamente al mismo
+          handler que tenía su botón. Las funciones especiales (Saldos, Nómina)
+          siguen como botones visibles para quien las tiene. */}
       <div className="action-bar">
         <div className="action-group">
-          <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
-          <PremiumButton
-            title={importSuccess ? 'Importado' : 'Importar reporte'}
-            variant={importSuccess ? 'success' : 'ghost'}
-            onClick={() => document.getElementById('import-xlsx-input').click()}
-            icon={importSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-            )}
+          <ToolbarMenu
+            id="tour-carpeta"
+            title={carpetaSuccess ? 'Cargado' : importSuccess ? 'Importado' : 'Agregar comprobantes'}
+            variant={carpetaSuccess || importSuccess ? 'success' : 'primary'}
+            icon={carpetaSuccess || importSuccess ? <Check size={15} strokeWidth={2.5} /> : <Plus size={15} strokeWidth={2.5} />}
+            items={[
+              { label: 'Cargar carpeta', hint: 'XML y PDF de tus facturas', icon: '📁', onClick: () => folderRef.current?.click() },
+              { label: 'Importar reporte', hint: 'Excel previo para continuar', icon: '📥', onClick: () => document.getElementById('import-xlsx-input').click() },
+              { label: 'Cargar foto / ticket', hint: 'Cámara, galería o PDF (OCR)', icon: '📸', onClick: () => setShowPhotoChoice(true) },
+              { label: 'Agregar manualmente', hint: 'Captura un gasto a mano', icon: '✍️', onClick: agregarManual },
+            ]}
           />
           <input
             id="import-xlsx-input"
@@ -6360,23 +7732,7 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleImportExcel}
           />
-          <PremiumButton
-            id="tour-carpeta"
-            title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
-            variant={carpetaSuccess ? 'success' : 'primary'}
-            onClick={() => folderRef.current?.click()}
-            icon={carpetaSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-              </svg>
-            )}
-          />
-          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
-          <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+          <PremiumButton id="tour-banco" title="Conciliar banco" icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
           {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
             <PremiumButton
               title="Cotejar con Saldos"
@@ -6408,76 +7764,129 @@ export default function App() {
             style={{ display: 'none' }}
             onChange={handleNominaFile}
           />
-          {(() => {
-            const total = lista.length
-            const validados = lista.filter(g => g.validado).length
-            const allDone = total > 0 && validados === total
-            return total > 0 ? (
-              <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <span>
-                  {allDone
-                    ? `✓ ${total} facturas validadas`
-                    : `${validados} / ${total} validadas`}
-                </span>
-              </div>
-            ) : null
-          })()}
         </div>
         <div className="action-group">
-          <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
-          <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
+          <ToolbarMenu
+            id="tour-zip"
+            title="Exportar"
+            variant="export"
+            align="right"
+            isDisabled={!lista.length}
+            icon={<Download size={15} />}
+            items={[
+              { label: 'Excel', hint: 'Reporte oficial SMTO (.xlsx)', icon: '📊', onClick: () => exportarConAviso(exportarExcel) },
+              { label: 'Excel + facturas (ZIP)', hint: 'Para enviar a contabilidad', icon: '📦', onClick: () => exportarConAviso(exportar) },
+            ]}
+          />
         </div>
       </div>
 
-      {/* ─── BARRA DE MÉTRICAS ─── */}
+      {/* ─── BARRA DE MÉTRICAS ───
+          Conciliación bancaria (hizoMatch) y revisión manual (validado) son
+          progresos independientes y se muestran por separado. */}
       <div className="metrics-bar">
-        <div className="metric-card" style={{ '--accent': '#0A84FF' }}>
-          <div className="metric-label">Total Facturado</div>
+        <div className="metric-card" title="Suma de la columna TOTAL de todas las facturas del reporte, en pesos (incluye impuestos).">
+          <div className="metric-label">Total facturado</div>
           <div className="metric-value">{fmtMoney(metrics.totalFacturado)}</div>
+          <div className="metric-hint">MXN · con impuestos</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#BF5AF2' }}>
-          <div className="metric-label">IVA Total</div>
+        <div className="metric-card" title="Suma del IVA trasladado de todas las facturas.">
+          <div className="metric-label">IVA total</div>
           <div className="metric-value">{fmtMoney(metrics.ivaTotal)}</div>
+          <div className="metric-hint">Trasladado</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#FF9500' }}>
-          <div className="metric-label">Retenciones</div>
-          <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
-        </div>
+        {metrics.retencionesTotal !== 0 && (
+          <div className="metric-card" title="Suma de retenciones (ISR / IVA) de las facturas.">
+            <div className="metric-label">Retenciones</div>
+            <div className="metric-value">{fmtMoney(metrics.retencionesTotal)}</div>
+            <div className="metric-hint">ISR / IVA retenido</div>
+          </div>
+        )}
         {/* Divisas — con UNA moneda extranjera muestra su total con su símbolo
             ("Total CNY ¥249.11"); con varias, cuántas hay (desglose en el
             tooltip) porque sumarlas entre sí no significa nada. Espejo del
-            comportamiento aprobado de la tarjeta del Excel. */}
+            comportamiento aprobado de la tarjeta del Excel. Solo aparece si
+            hay montos en moneda extranjera. */}
         {(() => {
           const divisas = Object.entries(metrics.porMoneda)
+          if (!divisas.length) return null
           const detalle = divisas.map(([c, v]) => `${c} ${fmtDivisa(c, v)}`).join('  ·  ')
           return (
-            <div className="metric-card" style={{ '--accent': '#59D39B' }} title={detalle || undefined}>
+            <div className="metric-card" title={detalle}>
               <div className="metric-label">
-                {divisas.length === 1 ? `Total ${divisas[0][0]}` : divisas.length > 1 ? 'Moneda extranjera' : 'Total USD'}
+                {divisas.length === 1 ? `Total ${divisas[0][0]}` : 'Moneda extranjera'}
               </div>
               <div className="metric-value">
-                {divisas.length === 0 ? fmtMoney(0)
-                  : divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1])
-                  : `${divisas.length} divisas`}
+                {divisas.length === 1 ? fmtDivisa(divisas[0][0], divisas[0][1]) : `${divisas.length} divisas`}
               </div>
+              <div className="metric-hint">Monto en su moneda original</div>
             </div>
           )
         })()}
-        <div className="metric-card" style={{ '--accent': '#30D158' }}>
+        <div className="metric-card" title="Número de renglones del reporte.">
           <div className="metric-label">Registros</div>
           <div className="metric-value">{metrics.count}</div>
+          <div className="metric-hint">En el reporte</div>
         </div>
-        <div className="metric-card" style={{ '--accent': '#FF453A' }}>
-          <div className="metric-label">Por Corroborar</div>
-          <div className="metric-value">{metrics.sinCobrar}</div>
-        </div>
+        {(() => {
+          const n = metrics.count, c = metrics.conciliadas
+          const pct = n ? Math.round((c / n) * 100) : 0
+          const porRevisar = conteoFiltros.revisarMatch || 0
+          return (
+            <div className="metric-card" title="Facturas que la conciliación ligó a un cargo del estado de cuenta. Que una factura no esté conciliada no es un adeudo: puede ser de otro periodo, otra tarjeta o efectivo.">
+              <div className="metric-label">Conciliadas con banco</div>
+              <div className={`metric-value${c === 0 ? ' is-empty' : ''}`}>
+                {c === 0 ? '—' : <>{c}<span className="metric-of"> de {n}</span></>}
+              </div>
+              {c === 0
+                ? <div className="metric-hint">Aún sin conciliar</div>
+                : <>
+                    <div className="metric-progress" aria-label={`${pct}% conciliado`}><span style={{ width: `${pct}%` }} /></div>
+                    {porRevisar > 0 && (
+                      <button className="metric-link" onClick={() => setFiltroRapido('revisarMatch')}>
+                        {porRevisar} por revisar →
+                      </button>
+                    )}
+                  </>}
+            </div>
+          )
+        })()}
+        {(() => {
+          const n = metrics.count, v = metrics.validadas
+          const pct = n ? Math.round((v / n) * 100) : 0
+          return (
+            <div className={`metric-card${n > 0 && v === n ? ' is-done' : ''}`} title="Facturas que marcaste como revisadas con la casilla de cada renglón. Es independiente de la conciliación bancaria.">
+              <div className="metric-label">Revisadas manualmente</div>
+              <div className={`metric-value${n === 0 ? ' is-empty' : ''}`}>
+                {n === 0 ? '—' : <>{v}<span className="metric-of"> de {n}</span></>}
+              </div>
+              {n === 0
+                ? <div className="metric-hint">Sin registros</div>
+                : <div className="metric-progress revision" aria-label={`${pct}% revisado`}><span style={{ width: `${pct}%` }} /></div>}
+            </div>
+          )
+        })()}
       </div>
 
-      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {/* ─── PESTAÑAS: vistas del mismo reporte ─── */}
       {lista.length > 0 && (
+        <div className="ws-tabs" role="tablist" aria-label="Vista">
+          <button role="tab" aria-selected={vista === 'facturas'} className={`ws-tab${vista === 'facturas' ? ' active' : ''}`} onClick={() => setVista('facturas')}>
+            Facturas <span className="ws-tab-n">{lista.length}</span>
+          </button>
+          <button role="tab" aria-selected={vista === 'resumen'} className={`ws-tab${vista === 'resumen' ? ' active' : ''}`} onClick={() => setVista('resumen')}>
+            Resumen
+            {avisos.length > 0 && (
+              <span className={`ws-tab-n ${avisosFuertes ? 'warn' : 'info'}`} title={`${avisos.length} ${avisos.length === 1 ? 'aviso' : 'avisos'} en Requiere atención`}>
+                {avisos.length} {avisos.length === 1 ? 'aviso' : 'avisos'}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {lista.length > 0 && vista === 'facturas' && (
         <div className="search-bar">
           <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -6490,7 +7899,7 @@ export default function App() {
             onChange={e => setBusqueda(e.target.value)}
             placeholder="Buscar por proveedor, factura, fecha, RFC, concepto, póliza..."
           />
-          {busqueda && (
+          {hayFiltros && (
             <span className="search-count">
               {filteredLista.length} de {lista.length}
             </span>
@@ -6505,6 +7914,76 @@ export default function App() {
             </button>
           )}
           <span className="search-kbd">⌘K</span>
+          <div className="density-toggle" role="group" aria-label="Densidad de la tabla">
+            <button className={densidad === 'comoda' ? 'active' : ''} aria-pressed={densidad === 'comoda'} onClick={() => setDensidad('comoda')}>Cómoda</button>
+            <button className={densidad === 'compacta' ? 'active' : ''} aria-pressed={densidad === 'compacta'} onClick={() => setDensidad('compacta')}>Compacta</button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── FILTROS RÁPIDOS + COLUMNAS + ACCIONES ───
+          Los filtros solo cambian la vista; Excel y ZIP siempre exportan
+          el reporte completo. */}
+      {lista.length > 0 && vista === 'facturas' && (
+        <div className="view-bar">
+          <div className="chips" role="group" aria-label="Filtros rápidos">
+            {FILTROS_RAPIDOS.filter(f => filtroRapido === f.key || (f.soloSiHay ? conteoFiltros[f.key] > 0 : !f.oculto)).map(f => (
+              <button
+                key={f.key}
+                className={`chip${filtroRapido === f.key ? ' active' : ''}${f.soloSiHay ? ' chip-warn' : ''}`}
+                aria-pressed={filtroRapido === f.key}
+                onClick={() => setFiltroRapido(f.key)}
+              >
+                {f.label}<span className="chip-n">{conteoFiltros[f.key]}</span>
+              </button>
+            ))}
+            {hayFiltros && (
+              <button className="chip-clear" onClick={() => { setFiltroRapido('todos'); setBusqueda('') }}>
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+          <div className="view-bar-right">
+            <ToolbarMenu
+              title={`Acciones (${sortedLista.length})`}
+              variant="ghost"
+              align="right"
+              isDisabled={!sortedLista.length}
+              items={[
+                { label: 'Marcar visibles como revisadas', hint: 'Casilla de revisión manual', icon: <CheckCircle2 size={16} />, onClick: () => marcarVisiblesRevisadas(true) },
+                { label: 'Quitar marca de revisión', hint: 'A las facturas visibles', icon: <XCircle size={16} />, onClick: () => marcarVisiblesRevisadas(false) },
+                { label: 'Cambiar tipo de gasto…', hint: 'A las facturas visibles', icon: <Target size={16} />, onClick: () => setBulkTipo({ tipo: '' }) },
+              ]}
+            />
+            <ToolbarMenu
+              title={`Columnas: ${presetActivo ? COLUMN_PRESETS[presetActivo].label : 'Personalizadas'}`}
+              variant="ghost"
+              align="right"
+              menuClassName="col-menu"
+              renderContent={() => (
+                <>
+                  <div className="col-presets">
+                    {Object.entries(COLUMN_PRESETS).map(([k, p]) => (
+                      <button
+                        key={k}
+                        className={`col-preset${presetActivo === k ? ' active' : ''}`}
+                        onClick={() => setHiddenCols(hiddenForPreset(k))}
+                      >{p.label}</button>
+                    ))}
+                  </div>
+                  <div className="col-list">
+                    {columnasRender.filter(c => !COLUMNAS_FIJAS.includes(c.key)).map(c => (
+                      <label key={c.key} className="col-item">
+                        <input type="checkbox" checked={!hiddenCols.includes(c.key)} onChange={() => toggleColumna(c.key)} />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="col-foot">Ocultar una columna no borra datos: el Excel y el ZIP siempre llevan todo.</div>
+                </>
+              )}
+            />
+          </div>
         </div>
       )}
 
@@ -6542,7 +8021,7 @@ export default function App() {
 
       {/* ─── TABLA ─── */}
       <div
-        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}`}
+        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}${vista === 'resumen' && lista.length > 0 ? ' is-resumen' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -6590,8 +8069,13 @@ export default function App() {
               <div className="onboarding-hint">Compatible con CFDI 3.3 y 4.0 · XML + PDF</div>
             </div>
           </div>
+        ) : vista === 'resumen' ? (
+          <ResumenPanel lista={lista} avisos={avisos} onIrAFiltro={irAFiltro} />
         ) : (
-          <table style={{
+          <>
+          {cssColumnasOcultas && <style>{cssColumnasOcultas}</style>}
+          <table className={`tabla-gastos${densidad === 'compacta' ? ' density-compact' : ''}`} style={{
+            ...(hiddenCols.length ? { minWidth: 0 } : null),
             // Sticky-column left offsets — Proveedor pins right after the
             // Estado column. Resizing Estado shifts the pinned Proveedor cell
             // correctly because we read its width from colWidths.
@@ -6622,7 +8106,7 @@ export default function App() {
                   )
                 })}
                 {/* Eliminar — sticky-right action column, no label, fixed 40px width */}
-                <th className="th-delete" style={{ width: 40 }} />
+                <th className="th-delete" style={{ width: 64 }} />
               </tr>
             </thead>
             <tbody>
@@ -6633,14 +8117,78 @@ export default function App() {
                   update={update}
                   remove={removeGasto}
                   openPDF={openPDF}
+                  openImagen={openImagen}
                   tiposList={tiposList}
                   isSpecial={esColaboradorEspecial}
+                  openDetail={setDrawerId}
+                  isActive={g.id === drawerId}
                 />
               ))}
             </tbody>
           </table>
+          {sortedLista.length === 0 && (
+            <div className="empty-filter">
+              Ninguna factura coincide con los filtros.
+              <button className="chip-clear" onClick={() => { setFiltroRapido('todos'); setBusqueda('') }}>Limpiar filtros</button>
+            </div>
+          )}
+          </>
         )}
       </div>
+
+      {/* ─── PANEL LATERAL DE DETALLE ─── */}
+      <AnimatePresence>
+        {drawerGasto && (
+          <ExpenseDrawer
+            key="drawer"
+            g={drawerGasto}
+            update={update}
+            openPDF={openPDF}
+            openImagen={openImagen}
+            tiposList={tiposList}
+            isSpecial={esColaboradorEspecial}
+            onClose={closeDrawer}
+            onPrev={drawerIdx > 0 ? () => setDrawerId(sortedLista[drawerIdx - 1].id) : null}
+            onNext={drawerIdx >= 0 && drawerIdx < sortedLista.length - 1 ? () => setDrawerId(sortedLista[drawerIdx + 1].id) : null}
+            posicion={drawerIdx >= 0 ? `${drawerIdx + 1} de ${sortedLista.length}` : 'Fuera del filtro'}
+            onSetOrigen={setOrigenPago}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {visor && (
+          <DocViewer key={visor.url} doc={visor} conDrawer={!!drawerGasto && !conciliacion} onClose={cerrarVisor} />
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL: CAMBIAR TIPO A LAS FACTURAS VISIBLES ─── */}
+      {bulkTipo && (
+        <div className="premium-overlay" onClick={() => setBulkTipo(null)}>
+          <div className="premium-modal" style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
+            <h2 className="premium-title">Cambiar tipo de gasto</h2>
+            <p className="premium-subtitle">
+              Se aplicará a {sortedLista.length === 1 ? 'la factura que ves' : `las ${sortedLista.length} facturas que ves`} ahora en la tabla. Revisa el filtro antes de aplicar.
+            </p>
+            <select
+              className="dw-in"
+              style={{ marginTop: 16 }}
+              autoFocus
+              value={bulkTipo.tipo}
+              onChange={e => setBulkTipo({ tipo: e.target.value })}
+            >
+              <option value="">— Elige un tipo —</option>
+              {tiposList.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <div className="premium-actions" style={{ marginTop: 20 }}>
+              <button className="premium-btn-secondary" onClick={() => setBulkTipo(null)}>Cancelar</button>
+              <button className="premium-btn-primary" disabled={!bulkTipo.tipo} onClick={aplicarTipoMasivo}>
+                Aplicar a {sortedLista.length}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── PREMIUM MODAL (info / warning / error / confirm) ─── */}
       {modal && (
@@ -6991,17 +8539,20 @@ export default function App() {
           <ConciliacionModal
             data={conciliacion}
             onClose={() => setConciliacion(null)}
-            onConfirm={() => {
-              const count = conciliacion.matches || 0
-              if (conciliacion.pendingLista) setLista(conciliacion.pendingLista)
+            onConfirm={(excluidos = [], confirmados = []) => {
+              const count = (conciliacion.matchedRows || []).length - excluidos.length
+              setLista(listaConciliada(conciliacion, excluidos, confirmados))
               setConciliacion(null)
-              setToast(`✓ Conciliación aplicada · ${count} ${count === 1 ? 'cargo vinculado' : 'cargos vinculados'}`)
+              setToast(`✓ Conciliación aplicada · ${count} ${count === 1 ? 'cargo vinculado' : 'cargos vinculados'}${excluidos.length ? ` · ${excluidos.length} sin aplicar` : ''}`)
             }}
             onCancel={() => setConciliacion(null)}
-            onAgregarManual={() => {
+            onSetOrigen={setOrigenPago}
+            onVerFactura={verFacturaDe}
+            esEspecial={esColaboradorEspecial}
+            onAgregarManual={(_cargo, excluidos = [], confirmados = []) => {
               // Apply pending matches first so they aren't wiped when
               // agregarManual mutates lista. Then close + add a manual row.
-              if (conciliacion.pendingLista) setLista(conciliacion.pendingLista)
+              setLista(listaConciliada(conciliacion, excluidos, confirmados))
               setConciliacion(null)
               agregarManual()
             }}
