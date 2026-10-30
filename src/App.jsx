@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
+import { guardarBorrador, leerBorrador, borrarBorrador, CADUCIDAD_DIAS } from './borrador'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -4084,6 +4085,33 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
+  // ── Borrador local (IndexedDB, solo este navegador) ──
+  // estado: 'cargando' → 'activo' | 'no-disponible' | 'error' | 'lleno' | 'pausado'.
+  // `lista` guarda la referencia que se escribió: si coincide con la actual,
+  // el borrador está al día.
+  const [borrador, setBorrador] = useState({ estado: 'cargando', savedAt: null, lista: null })
+  const [ofertaBorrador, setOfertaBorrador] = useState(null)   // borrador encontrado al abrir
+  useEffect(() => {
+    leerBorrador()
+      .then(r => { if (r) setOfertaBorrador(r); setBorrador(b => ({ ...b, estado: 'activo' })) })
+      .catch(() => setBorrador(b => ({ ...b, estado: 'no-disponible' })))
+  }, [])
+  // Guarda con espera de 0.8 s tras el último cambio. No escribe nada
+  // mientras se decide si recuperar el borrador encontrado (para no pisarlo).
+  useEffect(() => {
+    if (borrador.estado !== 'activo' && borrador.estado !== 'error' && borrador.estado !== 'lleno') return
+    if (ofertaBorrador) return
+    if (borrador.lista === lista) return
+    const t = setTimeout(() => {
+      const op = lista.length
+        ? guardarBorrador({ lista, colaborador, carpetaNombre, appVersion: 'v9.05' })
+        : borrarBorrador().then(() => null)
+      op.then(savedAt => setBorrador({ estado: 'activo', savedAt, lista }))
+        .catch(err => setBorrador(b => ({ ...b, estado: err?.name === 'QuotaExceededError' ? 'lleno' : 'error' })))
+    }, 800)
+    return () => clearTimeout(t)
+  }, [lista, colaborador, carpetaNombre, borrador.estado, borrador.lista, ofertaBorrador])
+
   // Auto-fit del ancho de la columna FACTURA (colWidths[4]) al folio más
   // largo presente en la lista, para que folios como "F103069-141757" o
   // "FAC102026491" nunca se corten con elipsis. Se recalcula cuando cambia
@@ -4242,13 +4270,15 @@ export default function App() {
   }, [lista])
 
   const sinRespaldo = lista.length > 0 && lista !== ultimoExport
+  // Con el borrador local al día no hace falta el aviso del navegador.
+  const avisarAlSalir = sinRespaldo && !(borrador.estado === 'activo' && borrador.lista === lista)
   useEffect(() => {
-    if (!sinRespaldo) return
+    if (!avisarAlSalir) return
     // El navegador muestra su propio texto genérico; solo pedimos el aviso.
     const onBeforeUnload = e => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [sinRespaldo])
+  }, [avisarAlSalir])
   const fmtMoney = n => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const fmtDivisa = (code, n) =>
     `${simboloMoneda(code) || code + ' '}${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -6981,6 +7011,43 @@ export default function App() {
     }
   }, [])
 
+  // ── Borrador: recuperar / descartar / borrar ──
+  const recuperarBorrador = () => {
+    const r = ofertaBorrador
+    if (!r) return
+    setLista(r.lista)
+    if (r.colaborador) {
+      setColaborador(COLABORADORES.find(c => c.nombre === r.colaborador.nombre) || r.colaborador)
+      setShowColabModal(false)
+    }
+    if (r.carpetaNombre) setCarpetaNombre(r.carpetaNombre)
+    // Lo recuperado ya está guardado: marcar al día evita reescribirlo.
+    setBorrador({ estado: 'activo', savedAt: r.savedAt, lista: r.lista })
+    setOfertaBorrador(null)
+    setToast(`✓ Borrador recuperado · ${r.count} ${r.count === 1 ? 'gasto' : 'gastos'}`)
+  }
+  const descartarBorrador = () => {
+    borrarBorrador().catch(() => {})
+    setOfertaBorrador(null)
+  }
+  const borrarBorradorManual = async () => {
+    const ok = await askConfirm({
+      type: 'warning',
+      title: '¿Borrar el borrador de este navegador?',
+      subtitle: 'Se elimina la copia guardada en este navegador y se deja de guardar en esta sesión. El reporte que ves en pantalla no cambia. Si no lo has exportado, se perderá al cerrar o recargar la página.',
+      primaryLabel: 'Borrar borrador',
+      secondaryLabel: 'Cancelar',
+    })
+    if (!ok) return
+    try { await borrarBorrador() } catch { /* sin storage: nada que borrar */ }
+    setBorrador({ estado: 'pausado', savedAt: null, lista: null })
+    setToast('Borrador borrado de este navegador')
+  }
+  const borradorAlDia = borrador.estado === 'activo' && borrador.lista === lista && lista.length > 0
+  const horaBorrador = borrador.savedAt
+    ? new Date(borrador.savedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+    : ''
+
   // ── Vista: columnas visibles, panel de detalle y acciones masivas ──
   // Las columnas se ocultan con CSS (nth-child) para no tocar el render de
   // GastoRow; el índice cuenta la columna BANCO solo si se dibuja.
@@ -7056,6 +7123,38 @@ export default function App() {
         }} />
       )}
 
+      {/* ─── RECUPERAR BORRADOR (encontrado al abrir la app) ─── */}
+      {ofertaBorrador && (
+        <div className="premium-overlay borrador-overlay">
+          <div className="premium-modal" style={{ maxWidth: 480 }} role="dialog" aria-labelledby="borrador-title">
+            <div className="premium-icon-wrap" style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.25)' }}>
+              <FileSpreadsheet size={28} color="#38BDF8" />
+            </div>
+            <h2 className="premium-title" id="borrador-title">¿Continuar donde te quedaste?</h2>
+            <p className="premium-subtitle">
+              Encontramos un reporte sin terminar guardado en este navegador
+              {ofertaBorrador.colaborador ? ` de ${ofertaBorrador.colaborador.nombre}` : ''}, del{' '}
+              {new Date(ofertaBorrador.savedAt).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(/\.$/, '')}.
+            </p>
+            <div className="premium-stats">
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: '#38BDF8' }}>{ofertaBorrador.count}</div><div className="premium-stat-label">{ofertaBorrador.count === 1 ? 'Gasto' : 'Gastos'}</div></div>
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: '#59D39B' }}>{ofertaBorrador.lista.filter(g => g.hizoMatch).length}</div><div className="premium-stat-label">Conciliados</div></div>
+              <div className="premium-stat"><div className="premium-stat-value" style={{ color: 'rgba(255,255,255,0.7)' }}>{ofertaBorrador.lista.filter(g => g.validado).length}</div><div className="premium-stat-label">Revisados</div></div>
+            </div>
+            {ofertaBorrador.avisos.length > 0 && (
+              <p className="borrador-aviso">⚠ {ofertaBorrador.avisos.join(' ')}</p>
+            )}
+            <p className="borrador-nota">
+              El borrador vive solo en este navegador. «Empezar de cero» lo borra definitivamente; hazlo si usas una computadora compartida.
+            </p>
+            <div className="premium-actions" style={{ marginTop: 18 }}>
+              <button className="premium-btn-secondary" onClick={descartarBorrador}>Empezar de cero</button>
+              <button className="premium-btn-primary" autoFocus onClick={recuperarBorrador}>Recuperar reporte</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── CABECERA ─── */}
       <div className="header">
         <div className="header-logo">
@@ -7083,16 +7182,29 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
-          {lista.length > 0 && (
-            <span
-              className={`respaldo-pill${sinRespaldo ? ' pendiente' : ' ok'}`}
-              title="El reporte vive solo en este navegador: si cierras o recargas la página se pierde lo que no hayas exportado. Exporta el Excel o el ZIP como respaldo; después puedes continuarlo con «Importar reporte»."
-            >
-              {sinRespaldo ? <AlertTriangle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
-              <span className="respaldo-txt">{sinRespaldo ? 'Sin respaldo · exporta antes de cerrar' : 'Respaldo exportado'}</span>
-              <span className="respaldo-txt-short">{sinRespaldo ? 'Sin respaldo' : 'Respaldado'}</span>
-            </span>
-          )}
+          {lista.length > 0 && (() => {
+            // Prioridad: export hecho > borrador al día > guardando > sin respaldo.
+            const RIESGO = ' Borrar los datos del navegador o usar una ventana privada lo elimina; exportar el Excel o el ZIP sigue siendo el respaldo oficial.'
+            const p = !sinRespaldo
+              ? { cls: 'ok', ic: 'ok', largo: 'Respaldo exportado', corto: 'Respaldado', title: 'Ya exportaste este reporte tal como está.' }
+              : borradorAlDia
+              ? { cls: 'guardado', ic: 'ok', largo: `Guardado en este navegador · ${horaBorrador}`, corto: `Guardado ${horaBorrador}`, title: `Si recargas o cierras la página, al volver podrás recuperar este reporte (se conserva ${CADUCIDAD_DIAS} días).${RIESGO}` }
+              : borrador.estado === 'activo'
+              ? { cls: 'guardado', ic: 'sync', largo: 'Guardando…', corto: 'Guardando…', title: 'Guardando el borrador en este navegador.' }
+              : borrador.estado === 'lleno'
+              ? { cls: 'pendiente', ic: 'warn', largo: 'Sin espacio para el borrador · exporta antes de cerrar', corto: 'Sin espacio', title: 'El navegador no tiene espacio para guardar el borrador (muchos PDFs o imágenes). Exporta el Excel o el ZIP como respaldo.' }
+              : { cls: 'pendiente', ic: 'warn', largo: 'Sin respaldo · exporta antes de cerrar', corto: 'Sin respaldo',
+                  title: borrador.estado === 'pausado'
+                    ? 'Borraste el borrador: en esta sesión ya no se guarda. Exporta el Excel o el ZIP como respaldo.'
+                    : 'Este navegador no permite guardar el borrador (p. ej. ventana privada). Si cierras o recargas la página se pierde lo que no hayas exportado.' }
+            return (
+              <span className={`respaldo-pill ${p.cls}`} title={p.title}>
+                {p.ic === 'warn' ? <AlertTriangle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+                <span className="respaldo-txt">{p.largo}</span>
+                <span className="respaldo-txt-short">{p.corto}</span>
+              </span>
+            )
+          })()}
           <ToolbarMenu
             title="Ayuda"
             variant="ghost"
@@ -7101,6 +7213,7 @@ export default function App() {
             items={[
               { label: '¿Cómo utilizar la app?', hint: 'Recorrido paso a paso', icon: <Sparkles size={16} />, onClick: () => setTourStep(0) },
               { label: '¿Cómo descargar tu estado de cuenta Clara?', hint: 'Manual con capturas', icon: <FileText size={16} />, onClick: () => setShowClaraGuide(true) },
+              { label: 'Borrar borrador de este navegador', hint: 'Recomendado en computadoras compartidas', icon: <XCircle size={16} />, onClick: borrarBorradorManual, hidden: !borrador.savedAt },
             ]}
           />
         </div>
