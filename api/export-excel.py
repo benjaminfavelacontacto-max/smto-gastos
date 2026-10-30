@@ -886,6 +886,21 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             cobrado = ''
             diff_num = None
             diferencia = ''
+        if es_clara:
+            # DIFERENCIA como FÓRMULA viva (no valor): si se edita COBRADO o
+            # FACTURADO en el renglón (o en su sub-renglón de propina), la
+            # diferencia, la tarjeta KPI y la banda de totales se recalculan.
+            # = (cobrado + cobrado propina) − (facturado + facturado propina).
+            # N() trata vacío/texto como 0; si COBRADO no es número ("SIN
+            # CONCILIAR") queda vacía hasta que se capture el cargo. El color
+            # por signo lo da el formato condicional de la columna W.
+            if propina_mxn > 0 or propina_ext > 0:
+                nr = row + 1
+                diferencia = (f'=IF(ISNUMBER(U{row}),'
+                              f'ROUND(U{row}+N(U{nr})-N(V{row})-N(V{nr}),2),"")')
+            else:
+                diferencia = f'=IF(ISNUMBER(U{row}),ROUND(U{row}-N(V{row}),2),"")'
+            diff_num = None
         # RFC de facturas extranjeras (sin RFC mexicano): se muestra "N/A"
         # centrado. Los RFC reales van alineados a la izquierda como siempre.
         rfc_raw = g.get('rfc', '')
@@ -1052,6 +1067,18 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
 
             row += 1
 
+    # Color por signo de la DIFERENCIA por renglón (W): formato condicional,
+    # porque ahora es fórmula y cambia al editar COBRADO/FACTURADO. ±½¢ cuenta
+    # como cuadrado (texto normal).
+    if data_last >= data_first:
+        w_rng = f'W{data_first}:W{data_last}'
+        ws.conditional_formatting.add(w_rng, CellIsRule(
+            operator='lessThan', formula=['-0.005'],
+            font=Font(name='Calibri', size=10, bold=True, color='B91C1C')))
+        ws.conditional_formatting.add(w_rng, CellIsRule(
+            operator='greaterThan', formula=['0.005'],
+            font=Font(name='Calibri', size=10, bold=True, color='15803D')))
+
     # ═══ ADAPTIVE TOTALS — placed right after the last data row ═══
     ws.row_dimensions[row].height = 14  # spacer
     row += 1
@@ -1138,7 +1165,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         diff_color = SMTO_GREEN
     else:
         diff_color = WHITE
-    dcell = ws.cell(row=row, column=23, value=f'=U{row}-V{row}')
+    dcell = ws.cell(row=row, column=23, value=f'=ROUND(U{row}-V{row},2)')
     dcell.number_format = '"$"#,##0.00'
     dcell.font = Font(name='Aptos', size=11, bold=True, color=diff_color)
     dcell.alignment = Alignment(horizontal='center', vertical='center')
