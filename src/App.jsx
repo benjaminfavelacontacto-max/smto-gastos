@@ -1599,6 +1599,9 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     })(),
     fechaFac,
     concepto:   conceptoClasif,
+    // Clave SAT del primer concepto: evidencia objetiva del giro (p. ej.
+    // combustibles 1510xxxx) para la elegibilidad de propina. No va al Excel.
+    claveProdServ,
     tipo: rfc === 'FNI970829JR9'
       ? tipoPeajeFNI(colaborador)
       : autoDetectTipo(proveedor, descripcionFirstLine, usaTiposExtendidos(colaborador) ? undefined : categoriaEfectiva(colaborador), claveProdServ, rfc),

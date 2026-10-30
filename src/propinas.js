@@ -20,35 +20,50 @@ export const TIP_ELIGIBLE_CATEGORIES = [
   'food', 'restaurants', 'restaurantes', 'comida', 'consumo', 'viaticos', 'viáticos',
 ]
 
-// Veto por evidencia de la FACTURA. Antes la categoría de Clara mandaba
-// "definitivamente": una caseta o gasolinera que Clara etiquetara como
-// "Viáticos"/"Consumo" (ambas en la lista de arriba) quedaba elegible y podía
-// ligarse con una propina inventada (p. ej. caseta $355 + "propina" $95.80 =
-// cargo $450.80). Si el TIPO del gasto o el proveedor/concepto dicen que es
-// gasolina, caseta, hotel, transporte, etc., nunca hay propina.
+// ── Veto por evidencia de la FACTURA o del cargo ──
+// Antes la categoría de Clara mandaba "definitivamente": una caseta o
+// gasolinera que Clara etiquetara como "Viáticos"/"Consumo" (ambas en la
+// lista de arriba) quedaba elegible y podía ligarse con una propina inventada
+// (caseta $355 + "propina" $95.80 = cargo $450.80; gasolina $1,030 +
+// "propina" $220.05 = cargo $1,250.05). Con evidencia de que NO es comida,
+// nunca hay propina.
+
+// 1) Tipo del gasto. OJO: "Consumo Viáticos" / "Gastos Rep" son también el
+//    FALLBACK de autoDetectTipo cuando no reconoce al proveedor, así que NO
+//    prueban que sea comida — por eso no eximen de los vetos 2–4.
 const TIPO_SIN_PROPINA = /gasolin|caseta|hotel|taxi|avi[oó]n|estacionamiento|renta auto|autom[oó]vil|manto auto|env[ií]os/i
-const FACTURA_SIN_PROPINA = [
-  'gasolina', 'gasolinera', 'combustible', 'diesel', 'diésel', 'pemex',
-  'caseta', 'peaje', 'autopista', 'carretera', 'capufe',
-  'hotel', 'hospedaje', 'uber', 'didi', 'taxi', 'estacionamiento',
-]
-// Si el tipo ya dice comida ("Consumo", "Gastos Rep"), gana el tipo: así un
-// "Restaurante La Carretera" no queda vetado por la palabra "carretera".
-const TIPO_COMIDA = /consumo|gastos rep|alimento/i
-export const facturaSinPropina = inv => {
-  const tipo = inv?.tipo || ''
-  if (TIPO_SIN_PROPINA.test(tipo)) return true
-  if (TIPO_COMIDA.test(tipo)) return false
-  const texto = ((inv?.proveedor || '') + ' ' + (inv?.concepto || '')).toLowerCase()
-  return FACTURA_SIN_PROPINA.some(kw => texto.includes(kw))
+
+// 2) Clave SAT del CFDI: 1510xxxx = combustibles (gasolina, diésel…).
+const CLAVE_SAT_COMBUSTIBLE = /^1510/
+
+// 3) Combustible: inequívoco en proveedor, concepto o descripción del banco.
+//    ("premium"/"magna" solo cuando el concepto ES el producto, para no vetar
+//    una "hamburguesa premium".)
+const COMBUSTIBLE = ['gasolin', 'combustible', 'diesel', 'diésel', 'pemex', 'oxxo gas']
+const CONCEPTO_COMBUSTIBLE = /^\s*(gasolina\s+)?(premium|magna|regular|diesel|diésel)\b/i
+
+// 4) Otros giros sin propina, en proveedor/concepto. Pueden aparecer en el
+//    nombre de un restaurante ("Restaurante La Carretera"), así que no vetan
+//    si el proveedor/concepto ya dice que es comida.
+const OTROS_SIN_PROPINA = ['caseta', 'peaje', 'autopista', 'carretera', 'capufe', 'hotel', 'hospedaje', 'uber', 'didi', 'taxi', 'estacionamiento']
+
+export const facturaSinPropina = (inv, csvRow) => {
+  if (TIPO_SIN_PROPINA.test(inv?.tipo || '')) return true
+  if (CLAVE_SAT_COMBUSTIBLE.test(String(inv?.claveProdServ || '').trim())) return true
+  const factura = ((inv?.proveedor || '') + ' ' + (inv?.concepto || '')).toLowerCase()
+  const banco = (csvRow?.descripcion || '').toLowerCase()
+  if (COMBUSTIBLE.some(kw => factura.includes(kw) || banco.includes(kw))) return true
+  if (CONCEPTO_COMBUSTIBLE.test(inv?.concepto || '')) return true
+  const pareceComida = RESTAURANT_KEYWORDS.some(kw => factura.includes(kw))
+  return !pareceComida && OTROS_SIN_PROPINA.some(kw => factura.includes(kw))
 }
 
 export const isEligibleForTip = (inv, csvRow) => {
-  if (facturaSinPropina(inv)) return false
+  if (facturaSinPropina(inv, csvRow)) return false
   const csvCat = (csvRow?.categoria || '').toLowerCase().trim()
   if (csvCat) {
     // CSV has a category column: a food category → eligible; any other
-    // category → never tip (the invoice veto above already ran).
+    // category → never tip (the vetoes above already ran).
     return TIP_ELIGIBLE_CATEGORIES.some(c => csvCat.includes(c))
   }
   // No CSV category (non-Clara source, o estado de cuenta Clara en Excel

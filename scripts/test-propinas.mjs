@@ -16,6 +16,13 @@ const casos = [
   ['Caseta sin tipo, detectada por proveedor', { tipo: '', proveedor: 'RED DE CARRETERAS DE OCCIDENTE', concepto: '' }, {}, false],
   ['Hotel Ventas', { tipo: 'Hotel Ventas', proveedor: 'FIESTA INN', concepto: 'Hospedaje' }, { categoria: 'Viáticos' }, false],
   ['Taxi / Uber', { tipo: 'Taxi', proveedor: 'UBER', concepto: 'Viaje' }, { categoria: 'Consumo' }, false],
+  // Regresión de la prueba real: gasolinera con tipo FALLBACK "Consumo
+  // Viáticos" (autoDetectTipo no la reconoció) y Clara "Viáticos".
+  ['Gasolinera con tipo fallback y clave SAT 15101514', { tipo: 'Consumo Viáticos', proveedor: 'MULTISERVICIO LOS PITS', concepto: 'PREMIUM', claveProdServ: '15101514' }, { categoria: 'Viáticos' }, false],
+  ['Gasolinera con tipo fallback, concepto "MAGNA" (sin clave SAT)', { tipo: 'Consumo Viáticos', proveedor: 'MULTISERVICIO LOS PITS', concepto: 'MAGNA' }, { categoria: 'Viáticos' }, false],
+  ['Gasolinera con tipo fallback, delatada por la descripción del banco', { tipo: 'Consumo Viáticos', proveedor: 'MULTISERVICIO LOS PITS', concepto: 'VENTA' }, { categoria: 'Viáticos', descripcion: 'GASOLINERA LOS PITS' }, false],
+  ['Restaurante con tipo fallback sigue elegible', { tipo: 'Consumo Viáticos', proveedor: 'MARIA DEL MAR CAYON GONZALEZ', concepto: 'CONSUMO DE ALIMENTOS', claveProdServ: '90101501' }, { categoria: 'Restaurantes' }, true],
+  ['"Hamburguesa premium" no se veta', { tipo: 'Consumo', proveedor: 'BURGER HOUSE', concepto: 'Hamburguesa premium' }, { categoria: 'Alimentos' }, true],
   ['Categoría Clara no alimenticia', { tipo: 'Consumo', proveedor: 'LA MESA SA', concepto: 'Consumo' }, { categoria: 'Gasolineras' }, false],
 ]
 
