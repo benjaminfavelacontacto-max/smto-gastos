@@ -419,6 +419,22 @@ export const TIPO_RULES_RFC = {
   'OOM960429832': 'Papelería',   // Operadora OMX (Office Max) → siempre Papelería
 }
 
+// Consumo de alimentos FACTURADO POR UN HOTEL (restaurante, bar o room
+// service del hotel): el emisor es el hotel, pero el gasto es comida, no
+// hospedaje. Lo delata el concepto o la clave SAT (9010xxxx = servicios de
+// restaurante, 50xxxxxx = alimentos y bebidas). Si el concepto habla de la
+// estancia (hospedaje, habitación, noche) sigue siendo Hotel.
+// También lo usa src/propinas.js para no vetar la propina de esos consumos.
+export const CONCEPTO_ALIMENTOS = /\b(alimentos?|bebidas?|restaurante?s?|restaurant|desayunos?|comidas?|cenas?|bar|cafeter[ií]a|room\s*service|servicio\s+a\s+(la\s+)?habitaci[oó]n|banquetes?|buffet)\b/i
+const CONCEPTO_ESTANCIA = /\b(hospedaje|alojamiento|habitaci[oó]n(?!\s*service)|noches?|room\s*night|estancia|tarifa\s+de\s+hotel)\b/i
+const SAT_ALIMENTOS = /^(9010|50)/
+export const esConsumoAlimentos = (descripcion, claveProdServ = '') => {
+  const d = descripcion || ''
+  if (/servicio\s+a\s+(la\s+)?habitaci[oó]n|room\s*service/i.test(d)) return true
+  if (CONCEPTO_ESTANCIA.test(d)) return false
+  return CONCEPTO_ALIMENTOS.test(d) || SAT_ALIMENTOS.test(String(claveProdServ || '').trim())
+}
+
 // Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.
 // 4321xxxx = Hardware de cómputo, 4322xxxx = Periféricos, 4323xxxx = Redes.
 const SAT_PC_PREFIXES = ['4321', '4322', '4323']
@@ -463,6 +479,14 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
   // (p.ej. "Hotel Fiesta Americana", "Servicios de hotelería"). 'HOTEL' como
   // substring cubre HOTELES/HOTELERA/HOTELERO/HOTELERIA de un solo golpe.
   const HOTEL_KEYWORDS = ['HOTEL', 'HOSPEDAJE', 'HABITACION', 'HABITACIÓN', 'NOCHE DE HOSPEDAJE', 'ROOM NIGHT']
+  // Excepción: el hotel factura un CONSUMO (restaurante/bar/room service) →
+  // es Consumo Viáticos, no Hotel. Aplica también a hoteles listados por
+  // nombre en TIPO_RULES (Fiesta Inn, City Express, Operadora de Hoteles…).
+  const pareceHotel = HOTEL_KEYWORDS.some(kw => texto.includes(kw)) ||
+    TIPO_RULES.some(([kw, t]) => t === 'Hotel' && texto.includes(kw))
+  if (pareceHotel && esConsumoAlimentos(descripcion, claveProdServ)) {
+    return isVentas ? VENTAS_VARIANT['Consumo Viáticos'] : 'Consumo Viáticos'
+  }
   if (HOTEL_KEYWORDS.some(kw => texto.includes(kw))) {
     return isVentas && VENTAS_VARIANT['Hotel'] ? VENTAS_VARIANT['Hotel'] : 'Hotel'
   }

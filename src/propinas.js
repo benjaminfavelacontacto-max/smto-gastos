@@ -6,6 +6,8 @@
    por monto directo, nunca vía una propina fantasma.
 ═══════════════════════════════════════════════════ */
 
+import { esConsumoAlimentos } from './tipoRules.js'
+
 export const RESTAURANT_KEYWORDS = [
   'restaurant', 'restaurante', 'bar', 'cafe', 'café', 'cafeteria', 'cafetería',
   'comida', 'aerocomidas', 'taqueria', 'taquería', 'pizzeria', 'pizzería',
@@ -47,14 +49,23 @@ const CONCEPTO_COMBUSTIBLE = /^\s*(gasolina\s+)?(premium|magna|regular|diesel|di
 //    si el proveedor/concepto ya dice que es comida.
 const OTROS_SIN_PROPINA = ['caseta', 'peaje', 'autopista', 'carretera', 'capufe', 'hotel', 'hospedaje', 'uber', 'didi', 'taxi', 'estacionamiento']
 
+// Categorías de Clara que SÍ son comida (no las genéricas "Viáticos"/"Consumo").
+const CATEGORIA_COMIDA = /alimentos|restaurant|bares|food/i
+
 export const facturaSinPropina = (inv, csvRow) => {
-  if (TIPO_SIN_PROPINA.test(inv?.tipo || '')) return true
+  // Combustible: veto absoluto, nada lo exime.
   if (CLAVE_SAT_COMBUSTIBLE.test(String(inv?.claveProdServ || '').trim())) return true
   const factura = ((inv?.proveedor || '') + ' ' + (inv?.concepto || '')).toLowerCase()
   const banco = (csvRow?.descripcion || '').toLowerCase()
   if (COMBUSTIBLE.some(kw => factura.includes(kw) || banco.includes(kw))) return true
   if (CONCEPTO_COMBUSTIBLE.test(inv?.concepto || '')) return true
-  const pareceComida = RESTAURANT_KEYWORDS.some(kw => factura.includes(kw))
+  // Consumo de alimentos facturado por un hotel (restaurante/bar/room
+  // service): el concepto, la clave SAT o la categoría "Alimentos" de Clara
+  // dicen que es comida aunque el emisor (o un tipo viejo) diga Hotel.
+  const esComida = esConsumoAlimentos(inv?.concepto || '', inv?.claveProdServ) ||
+    CATEGORIA_COMIDA.test(csvRow?.categoria || '')
+  if (TIPO_SIN_PROPINA.test(inv?.tipo || '') && !(/hotel/i.test(inv?.tipo || '') && esComida)) return true
+  const pareceComida = esComida || RESTAURANT_KEYWORDS.some(kw => factura.includes(kw))
   return !pareceComida && OTROS_SIN_PROPINA.some(kw => factura.includes(kw))
 }
 

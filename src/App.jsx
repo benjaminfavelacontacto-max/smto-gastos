@@ -5621,6 +5621,18 @@ export default function App() {
       if (!isClara) avisos.push('No es un archivo de Clara: se buscarán fechas y montos en cada renglón (sin códigos de autorización).')
       if (isClara && conAuth) avisos.push('Trae códigos de autorización: los tickets con OCR se pueden ligar por código.')
       if (lista.some(g => g.hizoMatch)) avisos.push('Ya hay una conciliación aplicada: esta la reemplaza (podrás revisar antes de aplicar).')
+      // ¿El estado de cuenta corresponde a estas facturas? Si ninguna factura
+      // cae dentro del periodo de los cargos (±3 días) casi seguro es otro
+      // estado de cuenta, y los "matches" por monto/propina serían de otro viaje.
+      if (fechas.length) {
+        const DIA = 86400000
+        const ini = fechas[0] - 3 * DIA, fin = fechas[fechas.length - 1] + 3 * DIA
+        const fFac = lista.map(g => parseDateRobusto(g.fechaFac)).filter(Boolean)
+        if (fFac.length && !fFac.some(d => d >= ini && d <= fin)) {
+          fFac.sort((a, b) => a - b)
+          avisos.push(`⚠ Ninguna factura cae en el periodo de este estado de cuenta: las facturas son del ${formatDateDisplay(formatCobro(fFac[0]))} al ${formatDateDisplay(formatCobro(fFac[fFac.length - 1]))}. ¿Es el estado de cuenta correcto?`)
+        }
+      }
       const continuar = await askConfirm({
         type: bancoRows ? 'confirm' : 'warning',
         title: 'Revisa el estado de cuenta',
