@@ -469,6 +469,12 @@ const FILTROS_RAPIDOS = [
   // la pestaña "Revisar" del modal de conciliación).
   { key: 'revisarMatch', label: 'Revisar coincidencia', test: g => necesitaRevisarMatch(g), soloSiHay: true },
   { key: 'revisados',   label: 'Revisados',    test: g => !!g.validado },
+  // Ocultos: solo se llega desde "Requiere atención" (Resumen); como chip
+  // aparecen únicamente mientras están activos.
+  { key: 'xmlFaltante',    label: 'Recuperadas sin XML',    test: g => !!g.xmlFaltante, oculto: true },
+  { key: 'sinImporte',     label: 'Sin importe',            test: g => !(Number(g.totalCFDI) || 0) && !(Number(g.montoExtranjero) || Number(g.montoUSD) || 0), oculto: true },
+  { key: 'meSinConciliar', label: 'M.E. sin conciliar',     test: g => normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !g.hizoMatch, oculto: true },
+  { key: 'cobroAntes',     label: 'Cobro antes de factura', test: g => !!g.hizoMatch && !!g.fechaFac && !!cobroToIso(g.fechaCobro) && cobroToIso(g.fechaCobro) < g.fechaFac, oculto: true },
 ]
 
 /* fechaCobro → YYYY-MM-DD para <input type="date">. Datos viejos en memoria
@@ -2696,6 +2702,241 @@ function ExpenseDrawer({ g, update, openPDF, tiposList, isSpecial, onClose, onPr
 }
 
 /* ═══════════════════════════════════════════════════
+   COMPONENTE: PESTAÑA RESUMEN
+   Solo lectura, derivado de `lista`. Nada aquí toca la exportación. Los
+   montos son el TOTAL facturado en pesos (misma base que el KPI); los gastos
+   en moneda extranjera aún sin convertir NO se suman (se reportan aparte),
+   para no mezclar divisas.
+═══════════════════════════════════════════════════ */
+
+const fmtMXN = n => `$${(Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+function BarList({ rows, emptyText }) {
+  if (!rows.length) return <div className="rs-empty">{emptyText}</div>
+  const max = Math.max(...rows.map(r => r.value), 0) || 1
+  return (
+    <div className="rs-bars" role="table">
+      {rows.map(r => (
+        <div key={r.label} className="rs-bar-row" role="row" title={`${r.label}: ${fmtMXN(r.value)} · ${r.count} ${r.count === 1 ? 'registro' : 'registros'}`}>
+          <span className="rs-bar-label" role="cell">{r.label}</span>
+          <span className="rs-bar-track" role="cell" aria-hidden="true">
+            <span className="rs-bar-fill" style={{ width: `${Math.max(1.5, (r.value / max) * 100)}%` }} />
+          </span>
+          <span className="rs-bar-val" role="cell">{fmtMXN(r.value)}</span>
+          <span className="rs-bar-n" role="cell">{r.count}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ResumenPanel({ lista, avisos, onIrAFiltro }) {
+  const [criterioFecha, setCriterioFecha] = useState('fechaFac')
+
+  const datos = useMemo(() => {
+    const enPesos = lista.filter(g => (Number(g.totalCFDI) || 0) !== 0)
+    const sinConvertir = lista.filter(g =>
+      normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN') !== 'MXN' && !(Number(g.totalCFDI) || 0))
+    const agrupa = (arr, keyFn) => {
+      const m = new Map()
+      for (const g of arr) {
+        const k = keyFn(g)
+        const cur = m.get(k) || { label: k, value: 0, count: 0 }
+        cur.value += Number(g.totalCFDI) || 0
+        cur.count++
+        m.set(k, cur)
+      }
+      return [...m.values()]
+    }
+    const porTipo = agrupa(enPesos, g => g.tipo || 'Sin tipo').sort((a, b) => b.value - a.value)
+    const provs = agrupa(enPesos, g => (g.proveedor || 'Sin proveedor').trim()).sort((a, b) => b.value - a.value)
+    const TOP = 8
+    const porProveedor = provs.length > TOP + 1
+      ? [...provs.slice(0, TOP), provs.slice(TOP).reduce((acc, r) => ({ label: `Otros (${provs.length - TOP})`, value: acc.value + r.value, count: acc.count + r.count }), { value: 0, count: 0 })]
+      : provs
+
+    const conciliadas = lista.filter(g => g.hizoMatch)
+    const facturado = enPesos.reduce((s, g) => s + (Number(g.totalCFDI) || 0), 0)
+    const cobrado = conciliadas.reduce((s, g) => s + (Number(g.montoCobrado) || 0), 0)
+
+    const monedas = new Map()
+    for (const g of lista) {
+      const c = normalizaMoneda(g.monedaCodigo || g.moneda || 'MXN')
+      if (c === 'MXN') continue
+      const cur = monedas.get(c) || { code: c, count: 0, nativo: 0, convertidas: 0 }
+      cur.count++
+      cur.nativo += (Number(g.montoExtranjero) || Number(g.montoUSD) || 0) + (Number(g.propinaExtranjero) || 0)
+      if ((Number(g.totalCFDI) || 0) > 0) cur.convertidas++
+      monedas.set(c, cur)
+    }
+
+    const docs = { xmlPdf: 0, soloXml: 0, ticket: 0, manual: 0 }
+    for (const g of lista) {
+      if (tieneXML(g) && g.tienePDF) docs.xmlPdf++
+      else if (tieneXML(g)) docs.soloXml++
+      else if (g.uuid === 'MANUAL' && !g.tienePDF && !g.imageDataURL) docs.manual++
+      else docs.ticket++
+    }
+
+    return { porTipo, porProveedor, sinConvertir, facturado, cobrado, conciliadas: conciliadas.length, monedas: [...monedas.values()], docs }
+  }, [lista])
+
+  // Serie por día — fecha de factura o de cobro, elegida explícitamente.
+  // fechaCobro = fechaFac hasta conciliar, por eso se aclara en el subtítulo.
+  const porDia = useMemo(() => {
+    const m = new Map()
+    for (const g of lista) {
+      const iso = criterioFecha === 'fechaCobro' ? cobroToIso(g.fechaCobro) : (g.fechaFac || '')
+      const v = Number(g.totalCFDI) || 0
+      if (!iso || !v) continue
+      const cur = m.get(iso) || { iso, value: 0, count: 0 }
+      cur.value += v
+      cur.count++
+      m.set(iso, cur)
+    }
+    return [...m.values()].sort((a, b) => a.iso.localeCompare(b.iso))
+  }, [lista, criterioFecha])
+  const maxDia = Math.max(...porDia.map(d => d.value), 0) || 1
+
+  const n = lista.length
+  const pctBanco = n ? Math.round((datos.conciliadas / n) * 100) : 0
+  const revisadas = lista.filter(g => g.validado).length
+  const pctRev = n ? Math.round((revisadas / n) * 100) : 0
+
+  return (
+    <div className="rs-wrap">
+      {/* Requiere atención — informativo; cada aviso lleva a su filtro. */}
+      <section className="rs-card rs-atencion">
+        <div className="rs-card-head">
+          <h3>Requiere atención</h3>
+          <span className="rs-card-sub">Avisos informativos: nada se bloquea ni se cambia solo</span>
+        </div>
+        {avisos.length === 0 ? (
+          <div className="rs-ok"><CheckCircle2 size={16} /> Todo en orden: no hay avisos pendientes.</div>
+        ) : (
+          <ul className="rs-avisos">
+            {avisos.map(a => (
+              <li key={a.key}>
+                <button className={`rs-aviso ${a.nivel}`} onClick={() => onIrAFiltro(a.filtro)}>
+                  <span className="rs-aviso-ic" aria-hidden="true">
+                    {a.nivel === 'warn' ? <AlertTriangle size={15} /> : <Info size={15} />}
+                  </span>
+                  <span className="rs-aviso-txt">
+                    <span className="rs-aviso-t"><strong>{a.count}</strong> {a.titulo}</span>
+                    <span className="rs-aviso-d">{a.detalle}</span>
+                  </span>
+                  <span className="rs-aviso-go">Ver <ArrowRight size={13} /></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Progresos independientes */}
+      <section className="rs-card">
+        <div className="rs-card-head"><h3>Avance del reporte</h3></div>
+        <div className="rs-progress-grid">
+          <div className="rs-progress">
+            <div className="rs-progress-top"><span>Conciliación bancaria</span><strong>{datos.conciliadas} de {n}</strong></div>
+            <div className="metric-progress"><span style={{ width: `${pctBanco}%` }} /></div>
+            <span className="rs-progress-hint">Facturas ligadas a un cargo del estado de cuenta</span>
+          </div>
+          <div className="rs-progress">
+            <div className="rs-progress-top"><span>Revisión manual</span><strong>{revisadas} de {n}</strong></div>
+            <div className="metric-progress revision"><span style={{ width: `${pctRev}%` }} /></div>
+            <span className="rs-progress-hint">Facturas marcadas con la casilla de revisión</span>
+          </div>
+        </div>
+        <div className="rs-stats">
+          <div className="rs-stat"><span>Facturado (MXN)</span><strong>{fmtMXN(datos.facturado)}</strong></div>
+          <div className="rs-stat" title="Suma de lo que el estado de cuenta cobró en las facturas conciliadas. Solo existe después de conciliar.">
+            <span>Cobrado en banco</span>
+            <strong className={datos.conciliadas ? '' : 'is-empty'}>{datos.conciliadas ? fmtMXN(datos.cobrado) : 'Sin conciliar'}</strong>
+          </div>
+          <div className="rs-stat"><span>XML + PDF</span><strong>{datos.docs.xmlPdf}</strong></div>
+          <div className="rs-stat"><span>Solo XML</span><strong>{datos.docs.soloXml}</strong></div>
+          <div className="rs-stat"><span>Ticket / OCR</span><strong>{datos.docs.ticket}</strong></div>
+          <div className="rs-stat"><span>Captura manual</span><strong>{datos.docs.manual}</strong></div>
+        </div>
+      </section>
+
+      <div className="rs-grid-2">
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Gasto por tipo</h3>
+            <span className="rs-card-sub">Total facturado en pesos · registros</span>
+          </div>
+          <BarList rows={datos.porTipo} emptyText="Sin importes en pesos todavía." />
+        </section>
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Principales proveedores</h3>
+            <span className="rs-card-sub">Total facturado en pesos · registros</span>
+          </div>
+          <BarList rows={datos.porProveedor} emptyText="Sin importes en pesos todavía." />
+        </section>
+      </div>
+
+      <section className="rs-card">
+        <div className="rs-card-head">
+          <h3>Gasto por día</h3>
+          <div className="density-toggle" role="group" aria-label="Fecha a usar">
+            <button className={criterioFecha === 'fechaFac' ? 'active' : ''} aria-pressed={criterioFecha === 'fechaFac'} onClick={() => setCriterioFecha('fechaFac')}>Fecha de factura</button>
+            <button className={criterioFecha === 'fechaCobro' ? 'active' : ''} aria-pressed={criterioFecha === 'fechaCobro'} onClick={() => setCriterioFecha('fechaCobro')}>Fecha de cobro</button>
+          </div>
+        </div>
+        {criterioFecha === 'fechaCobro' && (
+          <p className="rs-note">Hasta conciliar, la fecha de cobro es igual a la de factura; solo las conciliadas traen la fecha real del banco.</p>
+        )}
+        {porDia.length === 0 ? <div className="rs-empty">Sin importes con fecha.</div> : (
+          <div className="rs-cols" role="table">
+            {porDia.map(d => (
+              <div key={d.iso} className="rs-col" role="row" title={`${formatDateDisplay(d.iso)}: ${fmtMXN(d.value)} · ${d.count} ${d.count === 1 ? 'registro' : 'registros'}`}>
+                <span className="rs-col-track" aria-hidden="true">
+                  <span className="rs-col-fill" style={{ height: `${Math.max(2, (d.value / maxDia) * 100)}%` }} />
+                </span>
+                <span className="rs-col-label" role="cell">{formatDateDisplay(d.iso).slice(0, 5)}</span>
+                <span className="sr-only" role="cell">{fmtMXN(d.value)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {(datos.monedas.length > 0) && (
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h3>Moneda extranjera</h3>
+            <span className="rs-card-sub">Cada divisa por separado: no se suman entre sí</span>
+          </div>
+          <table className="rs-table">
+            <thead><tr><th>Divisa</th><th>Registros</th><th>Total en su moneda</th><th>Con monto en pesos</th></tr></thead>
+            <tbody>
+              {datos.monedas.map(m => (
+                <tr key={m.code}>
+                  <td>{m.code}</td>
+                  <td>{m.count}</td>
+                  <td>{simboloMoneda(m.code) || ''}{m.nativo.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td>
+                    <span className={`st-badge ${m.convertidas === m.count ? 'ok' : 'warn'}`}>
+                      {m.convertidas} de {m.count}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {datos.sinConvertir.length > 0 && (
+            <p className="rs-note">{datos.sinConvertir.length} {datos.sinConvertir.length === 1 ? 'gasto' : 'gastos'} en moneda extranjera aún sin monto en pesos: no entran en las gráficas de arriba hasta conciliar (no son gastos de $0).</p>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════
    COMPONENTE: MODAL DE CONCILIACIÓN (glass + framer-motion)
 ═══════════════════════════════════════════════════ */
 
@@ -3919,6 +4160,7 @@ export default function App() {
   const [filtroRapido, setFiltroRapido] = useState('todos')
   const [drawerId,     setDrawerId]     = useState(null)   // gasto abierto en el panel lateral
   const [bulkTipo,     setBulkTipo]     = useState(null)   // { tipo } mientras el modal de tipo masivo está abierto
+  const [vista,        setVista]        = useState('facturas') // 'facturas' | 'resumen' — vistas del mismo `lista`
 
   const folderRef = useRef(null)
   const bancoRef  = useRef(null)
@@ -6762,6 +7004,20 @@ export default function App() {
   useEffect(() => { if (drawerId && !drawerGasto) setDrawerId(null) }, [drawerId, drawerGasto])
   const closeDrawer = useCallback(() => setDrawerId(null), [])
 
+  // "Requiere atención" — avisos informativos derivados del estado actual.
+  // Cada uno lleva a su filtro en Facturas; ninguno bloquea ni corrige nada.
+  const avisos = [
+    { key: 'revisarMatch', filtro: 'revisarMatch', nivel: 'warn', titulo: 'coincidencias bancarias por revisar', detalle: 'La conciliación las ligó con confianza baja: confirma que sea el cargo correcto.' },
+    { key: 'xmlFaltante', filtro: 'xmlFaltante', nivel: 'warn', titulo: 'recuperadas sin XML', detalle: 'Se leyeron por OCR porque su XML venía vacío o dañado. Pide el XML al proveedor.' },
+    { key: 'sinImporte', filtro: 'sinImporte', nivel: 'warn', titulo: 'sin importe capturado', detalle: 'Tienen total $0 y ningún monto en moneda extranjera.' },
+    { key: 'meSinConciliar', filtro: 'meSinConciliar', nivel: 'info', titulo: 'en moneda extranjera sin conciliar', detalle: 'Su equivalente en pesos llega al conciliar con el banco. No son gastos de $0.' },
+    { key: 'sinXml', filtro: 'sinXml', nivel: 'info', titulo: 'sin XML', detalle: 'Tickets, fotos o capturas manuales. Revisa si alguno sí tiene factura.' },
+    { key: 'porRevisar', filtro: 'porRevisar', nivel: 'info', titulo: 'sin revisión manual', detalle: 'Aún no tienen marcada la casilla de revisión.' },
+    { key: 'cobroAntes', filtro: 'cobroAntes', nivel: 'info', titulo: 'cobradas antes de la fecha de factura', detalle: 'Suele ser normal (la factura se emitió días después del pago). Solo informativo.' },
+  ].map(a => ({ ...a, count: conteoFiltros[a.filtro] || 0 })).filter(a => a.count > 0)
+  const avisosFuertes = avisos.filter(a => a.nivel === 'warn').reduce((s, a) => s + a.count, 0)
+  const irAFiltro = key => { setFiltroRapido(key); setBusqueda(''); setVista('facturas') }
+
   // Acciones masivas sobre las filas VISIBLES (filtro + búsqueda actuales).
   // Solo tocan `validado` y `tipo`, que no tienen efectos colaterales en update().
   const marcarVisiblesRevisadas = async valor => {
@@ -7013,8 +7269,25 @@ export default function App() {
         })()}
       </div>
 
-      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {/* ─── PESTAÑAS: vistas del mismo reporte ─── */}
       {lista.length > 0 && (
+        <div className="ws-tabs" role="tablist" aria-label="Vista">
+          <button role="tab" aria-selected={vista === 'facturas'} className={`ws-tab${vista === 'facturas' ? ' active' : ''}`} onClick={() => setVista('facturas')}>
+            Facturas <span className="ws-tab-n">{lista.length}</span>
+          </button>
+          <button role="tab" aria-selected={vista === 'resumen'} className={`ws-tab${vista === 'resumen' ? ' active' : ''}`} onClick={() => setVista('resumen')}>
+            Resumen
+            {avisos.length > 0 && (
+              <span className={`ws-tab-n ${avisosFuertes ? 'warn' : 'info'}`} title={`${avisos.length} ${avisos.length === 1 ? 'aviso' : 'avisos'} en Requiere atención`}>
+                {avisos.length} {avisos.length === 1 ? 'aviso' : 'avisos'}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* ─── BUSCADOR UNIVERSAL ─── */}
+      {lista.length > 0 && vista === 'facturas' && (
         <div className="search-bar">
           <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -7052,10 +7325,10 @@ export default function App() {
       {/* ─── FILTROS RÁPIDOS + COLUMNAS + ACCIONES ───
           Los filtros solo cambian la vista; Excel y ZIP siempre exportan
           el reporte completo. */}
-      {lista.length > 0 && (
+      {lista.length > 0 && vista === 'facturas' && (
         <div className="view-bar">
           <div className="chips" role="group" aria-label="Filtros rápidos">
-            {FILTROS_RAPIDOS.filter(f => !f.soloSiHay || conteoFiltros[f.key] > 0 || filtroRapido === f.key).map(f => (
+            {FILTROS_RAPIDOS.filter(f => filtroRapido === f.key || (f.soloSiHay ? conteoFiltros[f.key] > 0 : !f.oculto)).map(f => (
               <button
                 key={f.key}
                 className={`chip${filtroRapido === f.key ? ' active' : ''}${f.soloSiHay ? ' chip-warn' : ''}`}
@@ -7149,7 +7422,7 @@ export default function App() {
 
       {/* ─── TABLA ─── */}
       <div
-        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}`}
+        className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}${vista === 'resumen' && lista.length > 0 ? ' is-resumen' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -7197,6 +7470,8 @@ export default function App() {
               <div className="onboarding-hint">Compatible con CFDI 3.3 y 4.0 · XML + PDF</div>
             </div>
           </div>
+        ) : vista === 'resumen' ? (
+          <ResumenPanel lista={lista} avisos={avisos} onIrAFiltro={irAFiltro} />
         ) : (
           <>
           {cssColumnasOcultas && <style>{cssColumnasOcultas}</style>}
