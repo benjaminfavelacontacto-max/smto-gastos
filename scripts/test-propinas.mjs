@@ -42,6 +42,7 @@ const casosTipo = [
   ['Hotel factura hospedaje', ['HOTEL FIESTA INN', 'Hospedaje', 'Servicio'], 'Hotel'],
   ['Hotel factura habitación + alimentos', ['HOTEL FIESTA INN', 'Habitación con desayuno', 'Servicio'], 'Hotel'],
   ['Hotel por nombre sin concepto de comida', ['CITY EXPRESS', 'Noche', 'Servicio'], 'Hotel'],
+  ['Gasolinera desconocida por clave SAT', ['MULTISERVICIO LOS PITS', 'Premium', 'Servicio', '15101514'], 'Gasolina Viáticos'],
 ]
 
 let fallas = 0

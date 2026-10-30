@@ -505,6 +505,11 @@ export function autoDetectTipo(proveedor, descripcion, categoria, claveProdServ 
   if (cp && SAT_PC_PREFIXES.some(prefix => cp.startsWith(prefix))) {
     return 'PC (Equipo)'
   }
+  //    1510xxxx = combustibles (gasolina, diésel): gasolineras que no están
+  //    en TIPO_RULES (p. ej. "MULTISERVICIO LOS PITS", concepto "Premium").
+  if (cp.startsWith('1510')) {
+    return isVentas ? VENTAS_VARIANT['Gasolina'] : NORMAL_VARIANT['Gasolina']
+  }
 
   // 3. Si ninguna regla matcheó y el concepto es exactamente "TARIFA":
   //    proveedor sin palabras corporativas = persona física (taxista/chofer) → Taxi

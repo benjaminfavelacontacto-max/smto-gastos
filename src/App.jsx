@@ -5626,9 +5626,9 @@ export default function App() {
       // estado de cuenta, y los "matches" por monto/propina serían de otro viaje.
       if (fechas.length) {
         const DIA = 86400000
-        const ini = fechas[0] - 3 * DIA, fin = fechas[fechas.length - 1] + 3 * DIA
+        const ini = fechas[0].getTime() - 3 * DIA, fin = fechas[fechas.length - 1].getTime() + 3 * DIA
         const fFac = lista.map(g => parseDateRobusto(g.fechaFac)).filter(Boolean)
-        if (fFac.length && !fFac.some(d => d >= ini && d <= fin)) {
+        if (fFac.length && !fFac.some(d => d.getTime() >= ini && d.getTime() <= fin)) {
           fFac.sort((a, b) => a - b)
           avisos.push(`⚠ Ninguna factura cae en el periodo de este estado de cuenta: las facturas son del ${formatDateDisplay(formatCobro(fFac[0]))} al ${formatDateDisplay(formatCobro(fFac[fFac.length - 1]))}. ¿Es el estado de cuenta correcto?`)
         }
