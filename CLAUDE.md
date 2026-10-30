@@ -141,18 +141,51 @@ rate limits.
 - client-side pacing (`OCR_PACING_MS`, ~5s between requests) to avoid firing the batch as one burst;
 - the server's `Retry-After`-aware 429 retry in `ocr-ticket.py` (up to 5×), which is the precise rate-limit backoff — pacing is only a smoother. Failed files are reported to the user, not dropped silently. For real throughput, Groq's paid Dev Tier is the fix.
 
+## ⚠️ Producción vs entorno de prueba — REGLA OBLIGATORIA
+
+Hay un entorno de pruebas (rediseño, ramas tipo `persistencia-local`, PR #7)
+que vive en ramas separadas y **NUNCA se debe mezclar con producción** hasta
+que Benjamín lo apruebe explícitamente. Incidente del 2026-10-30: una rama de
+producción se creó desde el checkout local, que estaba en la rama de prueba,
+y el PR #8 subió el rediseño completo a producción (se revirtió en #10).
+
+**Cada cambio a producción sigue estos pasos, sin excepción:**
+
+1. **Nunca partir del checkout local.** La carpeta del proyecto puede estar en
+   una rama de prueba o tener cambios de prueba sin commitear (CLAUDE.md,
+   CONVENTIONS.md, CONTEXTO_SMTO_GASTOS.md, etc.). Hacer `git fetch` y crear
+   un worktree aparte desde `origin/main`:
+   `git worktree add -b <rama> <carpeta-temporal> origin/main`
+2. Editar y commitear **sólo dentro de ese worktree**. Nunca `git add` de
+   archivos del checkout local que no hiciste tú en esta tarea.
+3. **Antes de push/PR, verificar el contenido:**
+   - `git log --oneline origin/main..HEAD` → sólo tus commits.
+   - `git diff --stat origin/main...HEAD` → sólo los archivos que pretendías
+     tocar. Si aparece cualquier otro archivo (p. ej. `src/borrador.js`,
+     cambios masivos en `App.jsx`/`App.css`), DETENERSE y avisar.
+4. PR a `main`, squash merge.
+5. Verificar producción: https://smto-app.vercel.app debe decir
+   "Reporte de Gastos SMTO" + la versión nueva (no el título del rediseño).
+6. Borrar el worktree temporal. No tocar ni stashear los cambios de prueba
+   del checkout local.
+
+Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
+
 ## Deploy workflow
 
-1. Claude Code edits files
-2. `git commit -m "describe change"`
-3. `git push`
-4. Vercel auto-deploys (~30s)
-5. Verify at production URL
+1. Crear worktree limpio desde `origin/main` (ver regla de arriba)
+2. Claude Code edits files there
+3. `git commit -m "describe change"`
+4. `git push` + PR a `main` + squash merge
+5. Vercel auto-deploys (~30s)
+6. Verify at production URL
 
 ## Versioning
 
 - Increment minor version on every meaningful change
 - Update the version badge in the UI header
+- El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
+  ni sube versiones de producción.
 - Current: v9.05
 
 ## Things to be careful about
