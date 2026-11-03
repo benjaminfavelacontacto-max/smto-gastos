@@ -1,5 +1,5 @@
 from http.server import BaseHTTPRequestHandler
-import json, os, sys, tempfile, traceback, re
+import json, os, sys, tempfile, traceback, re, unicodedata
 from datetime import datetime
 
 IMPORT_ERROR = None
@@ -328,7 +328,35 @@ def style_data_cell(cell, style_type, tipo='', diff_num=None, moneda='MXN'):
     else:  # 'normal'
         cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
 
+def _clave_texto(v):
+    '''Texto para ordenar como Excel A→Z: sin acentos ni mayúsculas, y las
+    celdas vacías al final.'''
+    t = unicodedata.normalize('NFD', str(v or '').strip())
+    t = ''.join(ch for ch in t if not unicodedata.combining(ch)).casefold()
+    return (t == '', t)
+
+
+def ordenar_como_contabilidad(gastos, poliza_numero='N/A'):
+    '''Orden del reporte de Alejandro Olivar, el mismo que contabilidad aplica a
+    mano en Excel (Ordenar: F. COBRO de más antigua a más reciente, luego TIPO,
+    PÓLIZA, PROVEEDOR y FACTURA de la A a la Z). Se ordenan los GASTOS, así la
+    propina sigue pegada debajo de su factura. sorted() es estable: empates
+    totales conservan el orden en que llegaron.'''
+    def clave(g):
+        f = parse_date_obj(g.get('fechaCobro')) or parse_date_obj(g.get('fechaFac'))
+        return (
+            f is None, f or datetime.max,
+            _clave_texto(g.get('tipo')),
+            _clave_texto(g.get('polizaNumero') or poliza_numero),
+            _clave_texto(g.get('proveedor')),
+            _clave_texto(g.get('noFactura')),
+        )
+    return sorted(gastos, key=clave)
+
+
 def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None, tc_usd_saldos=0):
+    if (colaborador or '').strip() == 'Alejandro Olivar':
+        gastos = ordenar_como_contabilidad(gastos, poliza_numero)
     # Invierte POLIZAS_CLARA (nombre → folio) a (folio → nombre) para que la
     # columna USUARIO pueda resolver cada póliza al colaborador dueño.
     polizas_map = polizas_map or {}
@@ -1213,7 +1241,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v9.06'
+    ft.value = 'SMTO Engineering · v9.07'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
