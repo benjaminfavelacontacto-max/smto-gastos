@@ -293,9 +293,15 @@ def _extract_ict(raw_pdf_bytes):
     except Exception:
         return None
     up = text.upper()
-    if 'ICT HOLDING' not in up:
+    # ETA HOLDING CO., LIMITED factura con la MISMA plantilla de ICT ("PI No.:
+    # ICT20260929E", "PO: P00777"). Sin esto la visión tomaba el PO como folio
+    # y el cotejo con Saldos no la encontraba.
+    if 'ETA HOLDING' in up:
+        out = {'proveedor': 'ETA HOLDING CO., LIMITED'}
+    elif 'ICT HOLDING' in up:
+        out = {'proveedor': 'ICT Holding'}
+    else:
         return None
-    out = {'proveedor': 'ICT Holding'}
     m = re.search(r'PI\s*No\.?\s*[:：]?\s*([A-Za-z0-9\-]+)', text, re.I)
     if m:
         out['folio'] = m.group(1).strip()
@@ -335,6 +341,34 @@ def _extract_essemtec(raw_pdf_bytes):
     except StopIteration:
         pass
     return out if ('folio' in out or 'concepto' in out) else None
+
+
+def _extract_pedimento(raw_pdf_bytes):
+    '''Pedimento con capa de texto: número y fecha de pago se leen del TEXTO del
+    PDF (deterministas). La visión leía "26 48 3600 6065722" como "6065/22" y la
+    fecha de pago 02/10/2026 al revés, y con ese folio el cotejo con Saldos no lo
+    encontraba. PyMuPDF devuelve las etiquetas y sus valores desordenados, así
+    que el número se busca por su patrón (AA AA PPPP NNNNNNN) y la fecha es la
+    primera DD/MM/AAAA poco después de "FECHA DE PAGO". El importe NO se toma
+    de aquí: con varias partidas el "IMPORTE PAGADO" del PDF no siempre es lo
+    que se pagó en el banco.
+    Devuelve {"folio", "fecha"} (lo que encuentre) o None.'''
+    try:
+        doc = fitz.open(stream=raw_pdf_bytes, filetype='pdf')
+        text = doc.load_page(0).get_text()
+        doc.close()
+    except Exception:
+        return None
+    if 'PEDIMENTO' not in text.upper():
+        return None
+    out = {}
+    m = re.search(r'\b(\d{2})[ \t]+(\d{2})[ \t]+(\d{4})[ \t]+(\d{7})\b', text)
+    if m:
+        out['folio'] = ' '.join(m.groups())
+    m = re.search(r'FECHA\s+DE\s+PAGO\s*:?[\s\S]{0,80}?\b(\d{1,2})/(\d{1,2})/(\d{4})\b', text, re.I)
+    if m:
+        out['fecha'] = f'{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}'
+    return out or None
 
 
 def _extract_sat(raw_pdf_bytes):
@@ -619,6 +653,18 @@ class handler(BaseHTTPRequestHandler):
                         result['proveedor'] = 'Fondo Nacional de Infraestructura'
                 except Exception:
                     pass
+                # Pedimento: número y fecha de pago desde el texto del PDF (la
+                # visión invertía la fecha y leía mal el número).
+                if str(result.get('tipoDocumento', '')).lower() == 'pedimento':
+                    try:
+                        ped = _extract_pedimento(base64.b64decode(base64_data))
+                        if ped:
+                            if ped.get('folio'):
+                                result['folio'] = ped['folio']
+                            if ped.get('fecha'):
+                                result['fecha'] = ped['fecha']
+                    except Exception:
+                        pass
                 # Vanstron (proforma invoice sin XML): folio y proveedor
                 # deterministas desde el texto del PDF.
                 for _extract in (_extract_vanstron, _extract_ict, _extract_essemtec, _extract_sat):
