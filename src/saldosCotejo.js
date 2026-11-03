@@ -574,3 +574,197 @@ export function aplicarCobroSaldos(g, m) {
   out.montosOriginales = snapshot
   return out
 }
+
+// ── Movimientos del banco sin factura ──────────────────────────────────────
+// Renglones del Saldos que contabilidad captura a mano en el reporte de
+// Alejandro Olivar porque no traen CFDI: comisiones bancarias, pagos de
+// crédito, fondo de ahorro, regalías, préstamos de nómina, no comprobados,
+// ISR, Telcel. Cada tipo del Saldos se convierte como lo hace contabilidad.
+//   marcado: entra seleccionado en el modal; iva: el egreso incluye IVA 16 %.
+const MOVIMIENTOS_POR_TIPO = {
+  'COMISIONES':      { tipo: 'Comisiones Banco', iva: true,  marcado: true, formaPago: '99' },
+  'COMISION':        { tipo: 'Comisiones Banco', iva: true,  marcado: true, formaPago: '99' },
+  'PAGO PRESTAMO':   { tipo: 'Pago Crédito',     iva: false, marcado: true },
+  'PAGO CREDITO':    { tipo: 'Pago Crédito',     iva: false, marcado: true },
+  'FONDO DE AHORRO': { tipo: 'Fondo de Ahorro',  iva: false, marcado: true },
+  'REGALIAS':        { tipo: 'Regalías',         iva: false, marcado: true },
+  'REGALIA':         { tipo: 'Regalías',         iva: false, marcado: true },
+  'PRESTAMO NOMINA': { tipo: 'Préstamo Nómina',  iva: false, marcado: true },
+  'NO COMPROBADO':   { tipo: 'No Comprobado',    iva: false, marcado: true },
+  'ISR':             { tipo: 'ISR',              iva: false, marcado: true },
+  'CELULAR':         { tipo: 'Celular',          iva: true,  marcado: true },
+}
+// Nunca se proponen: la nómina la agrega "Agregar Nómina"; traspasos entre
+// cuentas propias, bonos y devoluciones no son gasto del reporte.
+const TIPOS_EXCLUIDOS = /^(N[OÓ]MINA|TRASPASO|BONOS?|DEVOLUCI[OÓ]N|PAGO)$|^N[OÓ]MINA\b/i
+
+const sinAcentos = (s) => String(s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toUpperCase().trim()
+
+// Proveedor fijo por tipo / cuenta, como lo captura contabilidad.
+const BANCO_DE_CUENTA = [
+  [/^BBVA/i,  { proveedor: 'BBVA BANCOMER', rfc: 'BBA830831LJ2' }],
+  [/^MONEX/i, { proveedor: 'BANCO MONEX',   rfc: 'BMI9704113PA' }],
+]
+const ACREEDORES = [
+  [/KONFIO/i, { proveedor: 'RED AMIGO DAL', rfc: 'RAD130627IH2' }],
+  [/BBVA/i,   { proveedor: 'BBVA BANCOMER', rfc: 'BBA830831LJ2' }],
+  [/MONEX/i,  { proveedor: 'BANCO MONEX',   rfc: 'BMI9704113PA' }],
+]
+const SMTO     = { proveedor: 'SMTO ENGINEERING', rfc: 'SEN1504132C9' }
+const SAT      = { proveedor: 'SERVICIO DE ADMINISTRACIÓN TRIBUTARIA', rfc: 'SAT970701NN3' }
+const TELCEL   = { proveedor: 'RADIOMOVIL DIPSA', rfc: 'RDI841003QJ4' }
+
+/* Quién recibió el pago. Para comisiones y créditos es el banco; para el
+   resto se busca el nombre del concepto ("David Eliseo, Préstamo de Nómina",
+   "IBG International, Depósito Duplicado…", "Mediación Alejandro Olivar")
+   primero en el roster de empleados y luego entre los proveedores del reporte
+   (para tomar su RFC y razón social). */
+function beneficiario(sRow, regla, lista, buscarEmpleado) {
+  const sheet = String(sRow.sheet || '')
+  const conc = String(sRow.concepto || '')
+  const banco = BANCO_DE_CUENTA.find(([re]) => re.test(sheet))?.[1]
+  if (regla?.tipo === 'Comisiones Banco') return banco || { proveedor: sheet.split(/\s+/)[0].toUpperCase(), rfc: '' }
+  if (regla?.tipo === 'Pago Crédito') return ACREEDORES.find(([re]) => re.test(conc))?.[1] || banco || { proveedor: conc.toUpperCase(), rfc: '' }
+  if (regla?.tipo === 'Fondo de Ahorro') return SMTO
+  if (regla?.tipo === 'ISR' || /\bSAT\b/i.test(conc)) return SAT
+  if (regla?.tipo === 'Celular' || /RADIOMOVIL|TELCEL/i.test(conc)) return TELCEL
+
+  const antesDeComa = conc.split(',')[0].trim()
+  const sinPrimera = conc.replace(/^\S+\s+/, '').split(',')[0].trim()
+  for (const nombre of [antesDeComa, sinPrimera]) {
+    const emp = nombre && buscarEmpleado ? buscarEmpleado(nombre) : null
+    if (emp) return { proveedor: emp.nombre, rfc: emp.rfc }
+  }
+  const clave = normProv(antesDeComa)
+  if (clave.length >= 4) {
+    const g = lista.find(x => normProv(x.proveedor).startsWith(clave))
+    if (g) return { proveedor: String(g.proveedor).toUpperCase(), rfc: g.rfc || '' }
+  }
+  return { proveedor: antesDeComa.toUpperCase(), rfc: '' }
+}
+
+const claveMovimiento = (r) =>
+  `MOV|${r.sheet}|${saldosFechaToIso(r.fecha)}|${String(r.folio || '').trim()}|${r.egreso}|${String(r.concepto || '').trim()}`
+
+// El "Folio" del Saldos a veces es una referencia contable interna
+// ("FACTU/2026/10/0068", "BNK1/2026/00059"), no una póliza bancaria.
+const esPolizaBancaria = (f) => !!f && f.toUpperCase() !== 'NA' && !/^[A-Z]+\d*\/\d{4}\//i.test(f)
+
+/* Propone los movimientos del mes `mes` (AAAA-MM) de las cuentas de cheques
+   que NO están vinculados a ningún gasto del reporte. Devuelve
+   [{ key, marcado, grupo, origen, gasto }] — `gasto` ya con la forma de un
+   renglón de la app (sin id). Los que ya se agregaron antes (misma clave)
+   regresan con `yaAgregado: true` para no duplicarlos. */
+export function movimientosSinFactura(saldosRows, lista, { mes, tcUSD = 0, buscarEmpleado } = {}) {
+  const { sinMatchSaldos } = cotejarConSaldos(saldosRows, lista)
+  const libres = new Set(sinMatchSaldos)
+  const delMes = saldosRows.filter(r =>
+    libres.has(r) &&
+    (Number(r.egreso) || 0) > 0 &&
+    /CHEQUES/i.test(String(r.sheet || '')) &&
+    (saldosFechaToIso(r.fecha) || '').slice(0, 7) === mes &&
+    !TIPOS_EXCLUIDOS.test(String(r.tipo || '').trim()))
+
+  // Fondo de ahorro: el Saldos lo registra dos veces el mismo día — los USD que
+  // salen de Monex USD y el traspaso en pesos de Monex MXN. Contabilidad lo
+  // captura UNA vez: banco/póliza de la cuenta USD, importe en pesos exacto.
+  const esFondo = (r) => sinAcentos(r.tipo) === 'FONDO DE AHORRO'
+  const fondosMXN = delMes.filter(r => esFondo(r) && r.moneda !== 'USD')
+  const usadosMXN = new Set()
+  const pesosDelFondo = new Map()
+  for (const r of delMes) {
+    if (!esFondo(r) || r.moneda !== 'USD') continue
+    const par = fondosMXN.find(x => !usadosMXN.has(x) &&
+      saldosFechaToIso(x.fecha) === saldosFechaToIso(r.fecha))
+    if (par) { usadosMXN.add(par); pesosDelFondo.set(r, Number(par.egreso) || 0) }
+  }
+
+  // Un mismo documento pagado en varias transferencias el mismo día (Regalías
+  // 13-oct: 20,000 + 180,000 con la misma factura) va en un solo renglón.
+  // Movimientos idénticos (dos comisiones de 34.80 USD el mismo día) son
+  // renglones distintos: la clave lleva su número de aparición (#1, #2…), que
+  // es estable entre corridas y evita duplicarlos al volver a agregar.
+  const grupos = new Map()
+  const vistas = new Map()
+  for (const r of delMes) {
+    if (usadosMXN.has(r)) continue
+    const base = claveMovimiento(r)
+    const n = (vistas.get(base) || 0) + 1
+    vistas.set(base, n)
+    r._movKey = `${base}#${n}`
+    const fac = normFactura(r.factura)
+    const k = fac && fac !== 'NA'
+      ? `${r.sheet}|${saldosFechaToIso(r.fecha)}|${sinAcentos(r.tipo)}|${fac}`
+      : r._movKey
+    if (!grupos.has(k)) grupos.set(k, [])
+    grupos.get(k).push(r)
+  }
+
+  const yaEnReporte = new Set(lista.map(g => g.movKey).filter(Boolean))
+  const out = []
+  for (const rows of grupos.values()) {
+    const r = rows[0]
+    const key = rows.map(x => x._movKey).join('+')
+    const regla = MOVIMIENTOS_POR_TIPO[sinAcentos(r.tipo)]
+    const egreso = r2(rows.reduce((s, x) => s + (Number(x.egreso) || 0), 0))
+    const fecha = saldosFechaToIso(r.fecha)
+    const folios = [...new Set(rows.map(x => String(x.folio || '').trim()).filter(esPolizaBancaria))]
+    const { proveedor, rfc } = beneficiario(r, regla, lista, buscarEmpleado)
+    const usd = r.moneda === 'USD'
+    const pesos = pesosDelFondo.get(r) || 0
+    const conIva = !!regla?.iva
+    const base = conIva ? r2(egreso / 1.16) : egreso
+    const iva = r2(egreso - base)
+    const concepto = regla?.tipo === 'Comisiones Banco' && usd ? 'Comisiones pago en USD'
+      : regla?.tipo === 'Préstamo Nómina' ? 'Préstamo Nómina'
+      : String(r.concepto || '').trim()
+
+    const gasto = {
+      rfc, proveedor,
+      tipo: regla?.tipo || String(r.tipo || '').trim(),
+      noFactura: 'N/A',
+      fechaFac: fecha, fechaCobro: fecha,
+      concepto,
+      isrTrasladado: 0, ishIeps: 0, retencionISR: 0, retencionIVA: 0, retenciones: 0,
+      propinaPorcentaje: 0, montoPropina: 0, montoPropinaOriginal: 0,
+      formaPago: regla?.formaPago || '03',
+      tienePDF: false, pdfFile: null, xmlFile: null,
+      hizoMatch: false, validado: false, esTicket: false,
+      esMovimientoBanco: true, movKey: key,
+      polizaNumero: folios.join(', ') || 'N/A',
+      banco: String(r.sheet || '').trim().replace(/\s+/g, ' '),
+    }
+    if (usd && pesos > 0) {
+      // Fondo de ahorro con su traspaso en pesos: MXN exacto + USD informativo.
+      Object.assign(gasto, {
+        importe: pesos, iva: 0, totalCFDI: pesos, montoFacturado: pesos,
+        montoUSD: egreso, montoExtranjero: 0, importeUSD: 0, ivaUSD: 0, retencionesUSD: 0,
+        tipoCambio: Math.round((pesos / egreso) * 10000) / 10000,
+        moneda: 'MXN', monedaCodigo: 'MXN', esMonedaExtranjera: false,
+      })
+    } else if (usd) {
+      // En dólares: el Excel lo convierte con la celda de T/C (como un CFDI USD).
+      Object.assign(gasto, {
+        importe: 0, iva: 0, totalCFDI: 0, montoFacturado: egreso,
+        montoUSD: egreso, montoExtranjero: egreso, importeUSD: base, ivaUSD: iva, retencionesUSD: 0,
+        tipoCambio: tcUSD || 0, moneda: 'USD', monedaCodigo: 'USD', esMonedaExtranjera: true,
+      })
+    } else {
+      Object.assign(gasto, {
+        importe: base, iva, totalCFDI: egreso, montoFacturado: egreso,
+        montoUSD: 0, montoExtranjero: 0, importeUSD: 0, ivaUSD: 0, retencionesUSD: 0,
+        tipoCambio: 0, moneda: 'MXN', monedaCodigo: 'MXN', esMonedaExtranjera: false,
+      })
+    }
+    out.push({
+      key,
+      marcado: !!regla,
+      yaAgregado: yaEnReporte.has(key),
+      grupo: gasto.tipo,
+      origen: { sheet: r.sheet, fecha, concepto: rows.map(x => x.concepto).join(' + '), egreso, moneda: usd ? 'USD' : 'MXN', partes: rows.length },
+      gasto,
+    })
+  }
+  // Primero los que contabilidad agrega siempre, luego los opcionales; por fecha.
+  return out.sort((a, b) => (b.marcado - a.marcado) || a.grupo.localeCompare(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
+}

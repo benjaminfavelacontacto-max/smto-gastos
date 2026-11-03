@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.06
+Current version: v9.07
 
 ## Stack
 
@@ -86,6 +86,12 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 12. Validation counter per checkbox
 13. fechaCobro editable with date picker
 14. Sortable, resizable columns; sticky PROVEEDOR
+15. "Movimientos del banco" (solo Alejandro Olivar): propone desde el Saldos
+    los egresos del mes de las cuentas de cheques que no tienen factura en el
+    reporte (comisiones, pagos de crédito, fondo de ahorro, regalías,
+    préstamos de nómina, no comprobados, ISR, Telcel) con el proveedor, RFC,
+    IVA y T/C como los captura contabilidad (`movimientosSinFactura` en
+    src/saldosCotejo.js). El resto de egresos sin factura sale como opcional.
 
 ## Cómo agregar un colaborador
 
@@ -187,7 +193,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.06
+- Current: v9.07
 
 ## Things to be careful about
 

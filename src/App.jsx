@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
-import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos } from './saldosCotejo'
+import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura } from './saldosCotejo'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -3286,6 +3286,7 @@ export default function App() {
   const cameraRef = useRef(null)       // tomar foto (capture="environment")
   const saldosRef = useRef(null)
   const nominaRef = useRef(null)
+  const movBancoRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
   // T/C USD del mes del reporte, leído de la tabla "Tipo Cambio" del Saldos
   // al cotejar ({ mes: '2026-10', tc: 18.4 }). Va al Excel como celda R7.
@@ -3293,6 +3294,9 @@ export default function App() {
   const [duplicadosModal, setDuplicadosModal] = useState(null)
   const [ocrSelectionModal, setOcrSelectionModal] = useState(null)
   const [nominaPickerModal, setNominaPickerModal] = useState(null)
+  // Movimientos del banco sin factura propuestos desde el Saldos:
+  // { mes, label, items: [{ key, marcado, grupo, origen, gasto }], sel: { key: bool } }
+  const [movBancoModal, setMovBancoModal] = useState(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -5911,6 +5915,95 @@ export default function App() {
     }
   }
 
+  // ── MOVIMIENTOS DEL BANCO (solo Alejandro Olivar) ──
+  // Sube el Saldos y propone los egresos del mes que no tienen factura en el
+  // reporte (comisiones bancarias, pagos de crédito, fondo de ahorro,
+  // regalías, préstamos de nómina, no comprobados, ISR, Telcel), convertidos
+  // como los captura contabilidad (ver movimientosSinFactura). El usuario
+  // elige cuáles agregar.
+  const MESES_NOMBRE = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+  const etiquetaMes = (ym) => ym ? `${MESES_NOMBRE[parseInt(ym.slice(5, 7), 10) - 1]} ${ym.slice(0, 4)}` : ''
+  // Calcula (o recalcula al cambiar de mes) los movimientos propuestos.
+  const abrirMovimientosBanco = ({ saldosRows, tcPorMes, meses, mes }) => {
+    const tcMes = tcPorMes[mes.slice(5, 7)]
+    if (tcMes && !tcSaldos) setTcSaldos({ mes, tc: tcMes })
+    const items = movimientosSinFactura(saldosRows, lista, {
+      mes, tcUSD: tcMes || tcSaldos?.tc || 0, buscarEmpleado: matchEmpleadoByShortName,
+    }).filter(m => !m.yaAgregado)
+    setMovBancoModal({
+      saldosRows, tcPorMes, meses, mes, label: etiquetaMes(mes), items,
+      sel: Object.fromEntries(items.map(m => [m.key, m.marcado])),
+    })
+  }
+
+  const handleMovimientosBancoFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const wbSaldos = leerSaldosWorkbook(await file.arrayBuffer())
+      const saldosRows = parseSaldosXLSX(wbSaldos)
+      const tcPorMes = parseTipoCambioSaldos(wbSaldos)
+      // Meses con egresos en cuentas de cheques hasta el actual (el Saldos ya
+      // trae pagos programados a futuro). Por default el mes del reporte; sin
+      // gastos cargados, el último mes YA CERRADO (se reporta mes vencido).
+      const hoyYM = new Date().toISOString().slice(0, 7)
+      const meses = [...new Set(saldosRows
+        .filter(r => /cheques/i.test(r.sheet) && (Number(r.egreso) || 0) > 0)
+        .map(r => (saldosFechaToIso(r.fecha) || '').slice(0, 7))
+        .filter(ym => /^\d{4}-\d{2}$/.test(ym) && ym <= hoyYM))].sort().reverse()
+      const mes = mesDelReporte(lista) || meses.find(ym => ym < hoyYM) || meses[0] || ''
+      if (!mes) {
+        showModal({
+          type: 'error',
+          title: 'Saldos sin movimientos',
+          subtitle: 'No se encontraron egresos en las cuentas de cheques del archivo.',
+          primaryLabel: 'Entendido',
+          onPrimary: closeModal,
+        })
+        return
+      }
+      abrirMovimientosBanco({ saldosRows, tcPorMes, meses: meses.includes(mes) ? meses : [mes, ...meses], mes })
+    } catch (err) {
+      console.warn('handleMovimientosBancoFile:', err)
+      showModal({
+        type: 'error',
+        title: 'Error leyendo Saldos',
+        subtitle: err.message || 'No se pudo leer el archivo de Saldos.',
+        primaryLabel: 'Entendido',
+        onPrimary: closeModal,
+      })
+    } finally {
+      e.target.value = ''
+    }
+  }
+
+  const agregarMovimientosBanco = () => {
+    if (!movBancoModal) return
+    const elegidos = movBancoModal.items.filter(m => movBancoModal.sel[m.key])
+    setMovBancoModal(null)
+    if (elegidos.length === 0) return
+    const nuevos = elegidos.map(m => ({
+      ...m.gasto, id: genId(), uuid: crypto.randomUUID(), isNew: true,
+    }))
+    setLista(prev => [...prev, ...nuevos])
+    const total = elegidos.reduce((s, m) => s + (m.gasto.totalCFDI || 0), 0)
+    const enUsd = elegidos.filter(m => m.gasto.esMonedaExtranjera).length
+    showModal({
+      type: 'success',
+      title: `Movimientos de ${movBancoModal.label} agregados`,
+      subtitle: `${nuevos.length} movimiento${nuevos.length === 1 ? '' : 's'} del banco agregado${nuevos.length === 1 ? '' : 's'} al reporte.`
+        + (enUsd ? ` ${enUsd} en dólares se convierten con el T/C del Excel.` : ''),
+      stats: [
+        { value: `+${nuevos.length}`, label: 'Movimientos', color: '#59D39B' },
+        { value: `$${total.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, label: 'Total MXN', color: 'rgba(255,255,255,0.85)' },
+      ],
+      primaryLabel: 'Continuar',
+    })
+    setTimeout(() => {
+      setLista(l => l.map(g => g.isNew ? { ...g, isNew: false } : g))
+    }, 1500)
+  }
+
   // Aplica las decisiones de tipo del modal al state y lo cierra.
   const aplicarDecisionesCotejo = () => {
     if (!cotejoModal) return
@@ -6078,7 +6171,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.06</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.07</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6182,6 +6275,14 @@ export default function App() {
               onClick={() => nominaRef.current?.click()}
             />
           )}
+          {colaborador?.nombre === 'Alejandro Olivar' && (
+            <PremiumButton
+              title="Movimientos del banco"
+              icon="🧾"
+              variant="secondary"
+              onClick={() => movBancoRef.current?.click()}
+            />
+          )}
           <input
             ref={saldosRef}
             type="file"
@@ -6195,6 +6296,13 @@ export default function App() {
             accept=".xlsx,.xls"
             style={{ display: 'none' }}
             onChange={handleNominaFile}
+          />
+          <input
+            ref={movBancoRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleMovimientosBancoFile}
           />
           {(() => {
             const total = lista.length
@@ -6798,6 +6906,103 @@ export default function App() {
                 <button className="premium-btn-secondary" onClick={onCancel}>Cancelar</button>
                 <button className="premium-btn-primary" disabled={!selectedYM} onClick={() => onConfirm(selectedYM)}>
                   Agregar nóminas
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {movBancoModal && (() => {
+        const { label, items, sel, meses, mes, saldosRows, tcPorMes } = movBancoModal
+        const fmt = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const fmtF = (iso) => iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : ''
+        const setSel = (patch) => setMovBancoModal(prev => ({ ...prev, sel: { ...prev.sel, ...patch } }))
+        const marcarTodos = (v, soloRecomendados = false) =>
+          setSel(Object.fromEntries(items.map(m => [m.key, soloRecomendados ? m.marcado : v])))
+        const elegidos = items.filter(m => sel[m.key])
+        const recomendados = items.filter(m => m.marcado)
+        const opcionales = items.filter(m => !m.marcado)
+        const grupos = (lst) => {
+          const g = new Map()
+          for (const m of lst) { if (!g.has(m.grupo)) g.set(m.grupo, []); g.get(m.grupo).push(m) }
+          return [...g.entries()]
+        }
+        const renglon = (m) => (
+          <label key={m.key} style={{
+            display: 'flex', gap: 10, alignItems: 'flex-start', padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
+            background: sel[m.key] ? 'rgba(89,211,155,0.08)' : 'rgba(148,163,184,0.04)',
+            border: `1px solid ${sel[m.key] ? 'rgba(89,211,155,0.35)' : 'rgba(148,163,184,0.15)'}`,
+          }}>
+            <input type="checkbox" checked={!!sel[m.key]} onChange={e => setSel({ [m.key]: e.target.checked })} style={{ marginTop: 3 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
+                {m.gasto.proveedor} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {m.origen.concepto}</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                {fmtF(m.origen.fecha)} · {m.origen.sheet} · póliza {m.gasto.polizaNumero}
+                {m.origen.partes > 1 ? ` · ${m.origen.partes} transferencias juntas` : ''}
+              </div>
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
+              {m.origen.moneda === 'USD' ? 'US$' : '$'}{fmt(m.origen.egreso)}
+            </div>
+          </label>
+        )
+        const seccion = (titulo, nota, lst, color) => lst.length > 0 && (
+          <section style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{titulo}</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>{nota}</div>
+            {grupos(lst).map(([grupo, ms]) => (
+              <div key={grupo} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', margin: '6px 0 4px' }}>
+                  {grupo} <span style={{ color: '#64748b', fontWeight: 500 }}>({ms.length})</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{ms.map(renglon)}</div>
+              </div>
+            ))}
+          </section>
+        )
+        const btn = (texto, onClick) => (
+          <button onClick={onClick} style={{
+            flex: 1, minWidth: 150, padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
+            border: '1px solid rgba(89,211,155,0.45)', background: 'rgba(89,211,155,0.05)',
+            color: '#59D39B', fontSize: 12, fontWeight: 700,
+          }}>{texto}</button>
+        )
+        return (
+          <div className="premium-overlay" onClick={() => setMovBancoModal(null)}>
+            <div className="premium-modal" onClick={e => e.stopPropagation()}
+              style={{ maxWidth: 880, width: '92vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
+              <div className="premium-title">Movimientos del banco · {label}</div>
+              <div className="premium-subtitle">
+                Egresos de las cuentas de cheques del Saldos que no tienen factura en el reporte. {elegidos.length} de {items.length} elegidos.
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: '#94a3b8' }}>
+                Mes:
+                <select value={mes} onChange={e => abrirMovimientosBanco({ saldosRows, tcPorMes, meses, mes: e.target.value })}
+                  style={{ background: 'rgba(15,23,42,0.6)', color: '#e2e8f0', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}>
+                  {meses.map(ym => <option key={ym} value={ym}>{etiquetaMes(ym)}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 8, margin: '14px 0 4px', flexWrap: 'wrap' }}>
+                {btn('Marcar todo', () => marcarTodos(true))}
+                {btn('Solo los recomendados', () => marcarTodos(true, true))}
+                {btn('Desmarcar todo', () => marcarTodos(false))}
+              </div>
+              <div style={{ overflowY: 'auto', flex: 1, marginTop: 12, padding: '0 4px', textAlign: 'left' }}>
+                {items.length === 0 && (
+                  <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: 13, padding: 24 }}>
+                    Todos los egresos de {label} en las cuentas de cheques ya están en el reporte.
+                  </div>
+                )}
+                {seccion('Recomendados', 'Los que contabilidad agrega a mano cada mes: comisiones, créditos, fondo de ahorro, regalías, préstamos, no comprobados, impuestos y Telcel.', recomendados, '#59D39B')}
+                {seccion('Otros egresos sin factura', 'No se agregan normalmente (reembolsos de cuentas de gastos, pagos cuya factura falta en el reporte…). Márcalos sólo si van en este reporte.', opcionales, '#94a3b8')}
+              </div>
+              <div className="premium-actions" style={{ marginTop: 16 }}>
+                <button className="premium-btn-secondary" onClick={() => setMovBancoModal(null)}>Cancelar</button>
+                <button className="premium-btn-primary" disabled={!elegidos.length} onClick={agregarMovimientosBanco}>
+                  Agregar {elegidos.length} movimiento{elegidos.length === 1 ? '' : 's'}
                 </button>
               </div>
             </div>
