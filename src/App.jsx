@@ -6914,7 +6914,7 @@ export default function App() {
       })()}
 
       {movBancoModal && (() => {
-        const { label, items, sel, meses, mes, saldosRows, tcPorMes } = movBancoModal
+        const { label, items = [], sel = {}, meses = [], mes = '', saldosRows = [], tcPorMes = {} } = movBancoModal
         const fmt = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const fmtF = (iso) => iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : ''
         const setSel = (patch) => setMovBancoModal(prev => ({ ...prev, sel: { ...prev.sel, ...patch } }))
