@@ -3,7 +3,7 @@ import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
-import { autoDetectTipo } from './tipoRules'
+import { autoDetectTipo, TIPO_RULES_RFC } from './tipoRules'
 import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura } from './saldosCotejo'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
@@ -6573,15 +6573,21 @@ export default function App() {
         }
         // Elección masiva: aplica la misma opción a TODAS las discrepancias de
         // tipo de un golpe; después se puede seguir cambiando una por una.
+        // Proveedores con tipo fijo por RFC (convenio SMTO, TIPO_RULES_RFC): el
+        // Saldos a veces los registra con otro tipo (E-ngenium = "Curso") y
+        // "Elegir todo de Saldos" los cambiaba. En bloque se respetan; uno por
+        // uno se puede seguir eligiendo el del Saldos.
+        const tipoFijo = (m) => !!TIPO_RULES_RFC[String(m.gasto.rfc || '').trim().toUpperCase()]
+        const elegirEnBloque = (m, choice) => (choice === 'saldos' && tipoFijo(m) ? 'mantener' : choice)
         const setDecisionTodas = (choice) => {
           setCotejoModal(prev => {
             const next = { ...prev.decisions }
-            for (const m of prev.result.matched) if (m.tipoDiffers) next[m.gastoId] = choice
+            for (const m of prev.result.matched) if (m.tipoDiffers) next[m.gastoId] = elegirEnBloque(m, choice)
             return { ...prev, decisions: next }
           })
         }
         const elegidas = discrepancias.filter(m => decisions[m.gastoId]).length
-        const todasEn = (choice) => discrepancias.length > 0 && discrepancias.every(m => decisions[m.gastoId] === choice)
+        const todasEn = (choice) => discrepancias.length > 0 && discrepancias.every(m => decisions[m.gastoId] === elegirEnBloque(m, choice))
         const fmtMoney = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const fmtFecha = (d) => {
           if (!d) return ''
@@ -6643,6 +6649,11 @@ export default function App() {
                             </div>
                             <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
                               {fmtFecha(m.gasto.fechaFac)} · ${fmtMoney(m.gasto.totalCFDI)}
+                              {tipoFijo(m) && (
+                                <span style={{ marginLeft: 8, color: '#59D39B', fontWeight: 600 }}>
+                                  · Tipo fijo del proveedor ("Elegir todo de Saldos" no lo cambia)
+                                </span>
+                              )}
                             </div>
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                               <button

@@ -432,6 +432,7 @@ export const TIPO_RULES_RFC = {
   'ITM240517II2': 'COGS',        // Ingeniería y Tecnología en Mecanizados y Automatización (maquinados)
   'EIPJ871111EH0': 'Marketing',  // Juan René Espinosa Pablo (artículos promocionales con logo)
   'TOZK890902HB8': 'Marketing',  // Karina Guadalupe Tovar Zepeda (flyers / tarjetas impresas)
+  'EIN091008U81': 'IT & SW',     // E-ngenium Infraestructura (Google Workspace); el Saldos lo registra como "Curso"
 }
 
 // Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.

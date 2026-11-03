@@ -501,9 +501,16 @@ export function cotejarConSaldos(saldosRows, lista) {
       // Si se encontró por el concepto, el folio que leyó el OCR no era el de
       // la factura (era el PO o un provisional TKT-): se usa el del Saldos.
       // (Por alias no: el ISN conserva su folio; el Saldos lo trae con otro.)
-      facturaSaldos: modoElegido === 'concepto' && !elegidoPorAlias &&
-        !/^[A-Z]+\d*\/\d{4}\//i.test(facturasPorRenglon[elegido.idx][0].raw)
-        ? facturasPorRenglon[elegido.idx][0].raw : null,
+      // Por dígitos, sólo si el Saldos trae el folio MÁS completo que el gasto
+      // ("INV108378" vs el "108378" que leyó el OCR). Si lo trae más corto
+      // ("1127" vs la factura "I-1127") se conserva el del CFDI.
+      facturaSaldos: (() => {
+        const fac = facturasPorRenglon[elegido.idx][elegido.f]
+        if (!fac || /^[A-Z]+\d*\/\d{4}\//i.test(fac.raw)) return null
+        if (modoElegido === 'concepto') return elegidoPorAlias ? null : fac.raw
+        if (modoElegido === 'digitos' && fac.keys[0].length > k.length && fac.keys[0].endsWith(k)) return fac.raw
+        return null
+      })(),
       polizasExtra,
     })
   })
