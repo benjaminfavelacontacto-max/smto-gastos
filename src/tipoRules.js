@@ -16,7 +16,7 @@ export const TIPO_RULES = [
   ['JUAN MANUEL ROB',          'Consultoría'],
   ['JUAN MIGUEL ROB',          'Consultoría'],
   ['ROBLES VARGAS',            'Consultoría'],
-  ['KLS ',                     'Consultoría'],    // KLS Consultoría Aduanal
+  ['KLS ',                     'Comercio Exterior'], // KLS Consultoría Aduanal (contabilidad, 2026-11-03)
   ['CORREDURIA PUBLICA',       'Consultoría'],    // Corporativo Jurídico y Correduría
   ['DIOCELINE',                'Curso'],
   ['MARIANA MORALES',          'Marketing'],
@@ -433,6 +433,7 @@ export const TIPO_RULES_RFC = {
   'EIPJ871111EH0': 'Marketing',  // Juan René Espinosa Pablo (artículos promocionales con logo)
   'TOZK890902HB8': 'Marketing',  // Karina Guadalupe Tovar Zepeda (flyers / tarjetas impresas)
   'EIN091008U81': 'IT & SW',     // E-ngenium Infraestructura (Google Workspace); el Saldos lo registra como "Curso"
+  'KCA0509281VA': 'Comercio Exterior', // KLS Consultoría Aduanal Integral; el Saldos a veces dice "Consultoría"
 }
 
 // Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.
