@@ -5677,7 +5677,8 @@ export default function App() {
         return {
           ...aplicarCobroSaldos(g, m),
           ...(m.facturaSaldos ? { noFactura: m.facturaSaldos } : {}),
-          polizaNumero: m.saldosRow.folio || 'N/A',
+          // Aduana pagada en varios movimientos: todas las pólizas, separadas por coma.
+          polizaNumero: [m.saldosRow.folio || 'N/A', ...(m.polizasExtra || [])].join(', '),
           fechaCobro,
           banco,
         }

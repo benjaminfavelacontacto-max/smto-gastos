@@ -446,6 +446,28 @@ export function cotejarConSaldos(saldosRows, lista) {
     usados.add(`${elegido.idx}#${elegido.f}`)
     renglonUsado.add(elegido.idx)
     const sRow = filteredSaldos[elegido.idx]
+    // Aduana: una factura (pedimento, honorarios del agente) a menudo se paga
+    // en más de un movimiento — p.ej. el pedimento 26 48 3450 6002791 va en
+    // 0063230059 junto con ISSA 53460 y su diferencia de $16 en 0090831011.
+    // Contabilidad pone TODAS las pólizas separadas por coma, así que se
+    // suman los demás pagos de esta factura en el mismo mes, y esos renglones
+    // quedan vinculados (ya no salen como sobrantes ni como movimientos).
+    const polizasExtra = []
+    const esAduana = (t) => sinAcentos(t) === 'ADUANA'
+    if (esAduana(g.tipo) || esAduana(sRow.tipo)) {
+      const ym = (saldosFechaToIso(sRow.fecha) || '').slice(0, 7)
+      const vistos = new Set([elegido.idx])
+      for (const c of candidatosUsados) {
+        if (vistos.has(c.idx) || usados.has(`${c.idx}#${c.f}`)) continue
+        vistos.add(c.idx)
+        const otro = filteredSaldos[c.idx]
+        if (!esAduana(otro.tipo) || (saldosFechaToIso(otro.fecha) || '').slice(0, 7) !== ym) continue
+        usados.add(`${c.idx}#${c.f}`)
+        renglonUsado.add(c.idx)
+        const pol = String(otro.folio || '').trim()
+        if (esPolizaBancaria(pol) && pol !== String(sRow.folio || '').trim() && !polizasExtra.includes(pol)) polizasExtra.push(pol)
+      }
+    }
     const tipoDiffers = !!sRow.tipo && !!g.tipo &&
       sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
     // Colisión = había más de un renglón del Saldos con este mismo número de
@@ -467,6 +489,7 @@ export function cotejarConSaldos(saldosRows, lista) {
       // Si se encontró por el concepto, el folio que leyó el OCR no era el de
       // la factura (era el PO o un provisional TKT-): se usa el del Saldos.
       facturaSaldos: modoElegido === 'concepto' ? facturasPorRenglon[elegido.idx][0].raw : null,
+      polizasExtra,
     })
   })
 
