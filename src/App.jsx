@@ -6462,6 +6462,17 @@ export default function App() {
         const setDecision = (gastoId, choice) => {
           setCotejoModal(prev => ({ ...prev, decisions: { ...prev.decisions, [gastoId]: choice } }))
         }
+        // Elección masiva: aplica la misma opción a TODAS las discrepancias de
+        // tipo de un golpe; después se puede seguir cambiando una por una.
+        const setDecisionTodas = (choice) => {
+          setCotejoModal(prev => {
+            const next = { ...prev.decisions }
+            for (const m of prev.result.matched) if (m.tipoDiffers) next[m.gastoId] = choice
+            return { ...prev, decisions: next }
+          })
+        }
+        const elegidas = discrepancias.filter(m => decisions[m.gastoId]).length
+        const todasEn = (choice) => discrepancias.length > 0 && discrepancias.every(m => decisions[m.gastoId] === choice)
         const fmtMoney = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const fmtFecha = (d) => {
           if (!d) return ''
@@ -6491,6 +6502,27 @@ export default function App() {
                   <section style={{ marginBottom: 24 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       Discrepancias de tipo
+                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>
+                        {elegidas} de {discrepancias.length} elegidas
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                      {[
+                        { choice: 'mantener', label: 'Elegir todo del reporte' },
+                        { choice: 'saldos',   label: 'Elegir todo de Saldos' },
+                      ].map(({ choice, label }) => (
+                        <button
+                          key={choice}
+                          onClick={() => setDecisionTodas(choice)}
+                          style={{
+                            flex: 1, minWidth: 200, padding: '8px 12px', borderRadius: 8,
+                            border: todasEn(choice) ? '2px solid #59D39B' : '1px solid rgba(89,211,155,0.45)',
+                            background: todasEn(choice) ? 'rgba(89,211,155,0.15)' : 'rgba(89,211,155,0.05)',
+                            color: '#59D39B', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                          }}>
+                          {todasEn(choice) ? '✓ ' : ''}{label}
+                        </button>
+                      ))}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       {discrepancias.map(m => {
