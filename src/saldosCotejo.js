@@ -218,7 +218,12 @@ const digitosFinales = (k) => (String(k).match(/(\d{3,})$/) || [])[1] || ''
 // viene escrito (el SAT se registra como "SAT ISR Sep", "SAT ISR Ret IVA Sep").
 const ALIAS_POR_RFC = {
   'SAT970701NN3': ['SAT'],
+  // Secretaría de la Hacienda Pública (Jalisco): el 3% de Impuesto Sobre
+  // Nómina se registra "3% ISN Sep", a veces con otro número de factura.
+  'SPC130227L99': ['ISN'],
 }
+const aliasEnConcepto = (g, sRow) => (ALIAS_POR_RFC[String(g.rfc || '').toUpperCase()] || [])
+  .some(a => new RegExp(`\\b${a}\\b`, 'i').test(`${sRow.concepto || ''} ${sRow.tipo || ''}`))
 
 // Palabras que no identifican a un proveedor por sí solas.
 const PALABRAS_GENERICAS = new Set([
@@ -389,7 +394,7 @@ export function cotejarConSaldos(saldosRows, lista) {
     const truncados = k.length >= 10
       ? largas.filter(x => x.key.length < k.length && k.startsWith(x.key)) : []
 
-    let elegido, best = null, candidatosUsados = [], modoElegido = ''
+    let elegido, best = null, candidatosUsados = [], modoElegido = '', elegidoPorAlias = false
     const evaluar = (cands, modo) => {
       const vistos = new Set()
       for (const c of cands) {
@@ -410,7 +415,10 @@ export function cotejarConSaldos(saldosRows, lista) {
           const sRow = filteredSaldos[c.idx]
           const folioEnConcepto = k.length >= 5 && !esFolioProvisional(k) && normProv(sRow.concepto).includes(k)
           const mismaMoneda = (sRow.moneda || 'MXN') === (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
-          if (!folioEnConcepto && !(cand.amountMatch && mismaMoneda && marcaEnConcepto(g.proveedor, sRow.concepto))) continue
+          const porMarca = cand.amountMatch && mismaMoneda && marcaEnConcepto(g.proveedor, sRow.concepto)
+          const porAlias = cand.amountMatch && mismaMoneda && aliasEnConcepto(g, sRow)
+          if (!folioEnConcepto && !porMarca && !porAlias) continue
+          if (!best || cand.score > best.score) elegidoPorAlias = porAlias && !folioEnConcepto && !porMarca
         }
         // Un renglón que agrupa varias facturas puede traer el MISMO folio de
         // otro emisor (los folios son por emisor): A6467 de IBG aparecía en un
@@ -425,7 +433,11 @@ export function cotejarConSaldos(saldosRows, lista) {
     evaluar(exactos, 'exacto')
     if (!elegido) evaluar(porDigitos, 'digitos')
     if (!elegido) evaluar(truncados, 'truncado')
-    if (!elegido) {
+    // Nóminas, movimientos del banco y renglones sin factura ("N/A") no
+    // entran a este último intento: se vincularían por monto + nombre y
+    // tomarían como factura una referencia interna del Saldos.
+    const sinFacturaPropia = g.esNomina || g.esMovimientoBanco || !k || k === 'NA'
+    if (!elegido && !sinFacturaPropia) {
       // Último intento: renglones de UNA factura cuyo concepto delata al gasto.
       const porConcepto = []
       facturasPorRenglon.forEach((facturas, idx) => {
@@ -488,7 +500,10 @@ export function cotejarConSaldos(saldosRows, lista) {
       exhibiciones: [...renglonesCandidatos].filter(i => facturasPorRenglon[i].length === 1).length,
       // Si se encontró por el concepto, el folio que leyó el OCR no era el de
       // la factura (era el PO o un provisional TKT-): se usa el del Saldos.
-      facturaSaldos: modoElegido === 'concepto' ? facturasPorRenglon[elegido.idx][0].raw : null,
+      // (Por alias no: el ISN conserva su folio; el Saldos lo trae con otro.)
+      facturaSaldos: modoElegido === 'concepto' && !elegidoPorAlias &&
+        !/^[A-Z]+\d*\/\d{4}\//i.test(facturasPorRenglon[elegido.idx][0].raw)
+        ? facturasPorRenglon[elegido.idx][0].raw : null,
       polizasExtra,
     })
   })
