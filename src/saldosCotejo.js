@@ -226,7 +226,27 @@ const PALABRAS_GENERICAS = new Set([
   'DISTRIBUIDORA', 'INMOBILIARIA', 'CONSTRUCTORA', 'TRANSPORTES', 'PROMOTORA',
   'ADMINISTRADORA', 'ARRENDADORA', 'INGENIERIA', 'INDUSTRIAL', 'INTEGRADORA',
   'SECRETARIA', 'COORDINADORA', 'CONSULTORIA', 'SOLUCIONES', 'EMPRESA',
+  'LIMITED', 'HOLDING', 'HOLDINGS', 'INTERNATIONAL', 'PRODUCTS', 'TECHNOLOGY',
+  'TECHNOLOGIES', 'ELECTRONICS', 'ELECTRONIC', 'CORPORATION', 'COMPANY',
+  'MEXICO', 'INDUSTRIES', 'SOLUTIONS', 'SYSTEMS', 'TRADING',
 ])
+
+/* ¿Alguna palabra distintiva del proveedor aparece en el concepto? Para las
+   facturas extranjeras la razón social casi nunca coincide con como la
+   escribe el Saldos: "SCIENTIFIC TECHNOLOGY … DBA SCIENSCOPE INTERNATIONAL" es
+   "ScienScope, …"; "ANA TRADING CORP., U.S.A." es "ANA Trading, …" (la
+   primera palabra es corta, así que vale junto con la segunda). */
+function marcaEnConcepto(proveedor, concepto) {
+  const conc = normProv(concepto)
+  const palabras = String(proveedor || '')
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean)
+  if (palabras.length >= 2 && palabras[0].length < 5 && conc.includes(palabras[0] + palabras[1])) return true
+  return palabras.some(w => w.length >= 5 && !PALABRAS_GENERICAS.has(w) && conc.includes(w))
+}
+
+// Folios que la app inventa cuando el documento no trae uno legible.
+const esFolioProvisional = (k) => /^(TKT|SN|PED)/.test(k)
 
 /* ¿El proveedor del gasto aparece en el concepto del Saldos? El Saldos casi
    nunca trae la razón social completa ("Aerovías, Envíos", "Despachos Cano,
@@ -362,12 +382,14 @@ export function cotejarConSaldos(saldosRows, lista) {
   lista.forEach((g) => {
     const k = normFactura(g.noFactura)
     const exactos = k ? (byFactura.get(k) || []) : []
-    const porDigitos = !exactos.length && digitosFinales(k)
-      ? (byDigitos.get(digitosFinales(k)) || []) : []
-    const truncados = !exactos.length && k.length >= 10
+    // Estos sólo se evalúan si la factura exacta no dio (o sus candidatos se
+    // descartaron: A6467 exacto estaba en un pago de agosto de otro emisor y
+    // el pago real viene como "6467-1").
+    const porDigitos = digitosFinales(k) ? (byDigitos.get(digitosFinales(k)) || []) : []
+    const truncados = k.length >= 10
       ? largas.filter(x => x.key.length < k.length && k.startsWith(x.key)) : []
 
-    let elegido, best = null, candidatosUsados = []
+    let elegido, best = null, candidatosUsados = [], modoElegido = ''
     const evaluar = (cands, modo) => {
       const vistos = new Set()
       for (const c of cands) {
@@ -381,6 +403,15 @@ export function cotejarConSaldos(saldosRows, lista) {
         const fuerte = cand.amountMatch || cand.provMatch
         if (modo === 'digitos' && !fuerte) continue
         if (modo === 'truncado' && !fuerte && !companeras) continue
+        if (modo === 'concepto') {
+          // El folio del gasto (a menudo el PO que leyó el OCR) viene escrito
+          // en el concepto del pago ("ICT, P00761 Stencil Inspection…"), o el
+          // monto es exacto en la misma moneda y el concepto nombra al proveedor.
+          const sRow = filteredSaldos[c.idx]
+          const folioEnConcepto = k.length >= 5 && !esFolioProvisional(k) && normProv(sRow.concepto).includes(k)
+          const mismaMoneda = (sRow.moneda || 'MXN') === (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
+          if (!folioEnConcepto && !(cand.amountMatch && mismaMoneda && marcaEnConcepto(g.proveedor, sRow.concepto))) continue
+        }
         // Un renglón que agrupa varias facturas puede traer el MISMO folio de
         // otro emisor (los folios son por emisor): A6467 de IBG aparecía en un
         // pago de agosto a otro agente aduanal, dos meses antes de la factura.
@@ -389,11 +420,24 @@ export function cotejarConSaldos(saldosRows, lista) {
         if (facturas.length > 1 && !fuerte && !cand.enMes && !(cand.dias <= 45)) continue
         if (!best || cand.score > best.score) { best = cand; elegido = c }
       }
-      if (elegido) candidatosUsados = cands
+      if (elegido && !modoElegido) { candidatosUsados = cands; modoElegido = modo }
     }
     evaluar(exactos, 'exacto')
     if (!elegido) evaluar(porDigitos, 'digitos')
     if (!elegido) evaluar(truncados, 'truncado')
+    if (!elegido) {
+      // Último intento: renglones de UNA factura cuyo concepto delata al gasto.
+      const porConcepto = []
+      facturasPorRenglon.forEach((facturas, idx) => {
+        if (facturas.length === 1) porConcepto.push({ idx, f: 0 })
+      })
+      evaluar(porConcepto, 'concepto')
+      // Para exhibiciones sólo cuentan los renglones que pasaron el filtro.
+      if (elegido) {
+        const fac = facturasPorRenglon[elegido.idx][0].keys[0]
+        candidatosUsados = porConcepto.filter(c => facturasPorRenglon[c.idx][0].keys[0] === fac)
+      }
+    }
 
     if (!elegido) {
       sinMatchGastos.push(g)
@@ -420,6 +464,9 @@ export function cotejarConSaldos(saldosRows, lista) {
       // reporte lleva la parte de este pago; con uno solo, una diferencia de
       // monto es sólo eso (descuento, redondeo) y no se prorratea.
       exhibiciones: [...renglonesCandidatos].filter(i => facturasPorRenglon[i].length === 1).length,
+      // Si se encontró por el concepto, el folio que leyó el OCR no era el de
+      // la factura (era el PO o un provisional TKT-): se usa el del Saldos.
+      facturaSaldos: modoElegido === 'concepto' ? facturasPorRenglon[elegido.idx][0].raw : null,
     })
   })
 

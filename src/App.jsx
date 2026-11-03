@@ -5672,6 +5672,7 @@ export default function App() {
         // y guarda cobrado vs facturado para el Excel (ver aplicarCobroSaldos).
         return {
           ...aplicarCobroSaldos(g, m),
+          ...(m.facturaSaldos ? { noFactura: m.facturaSaldos } : {}),
           polizaNumero: m.saldosRow.folio || 'N/A',
           fechaCobro,
           banco,

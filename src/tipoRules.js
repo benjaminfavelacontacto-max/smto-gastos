@@ -72,6 +72,9 @@ export const TIPO_RULES = [
   ['MINIBODEGA',               'Renta Oficina'],
   ['RENTA DE BODEGA',          'Renta Oficina'],
   ['REN THANG',                'COGS'],             // Cortadoras de componentes (proforma en USD, sin RFC)
+  ['ETA HOLDING',              'COGS'],             // Mismo proveedor que ICT (proformas en USD)
+  ['ANA TRADING',              'COGS'],             // Soldadura (facturas en USD)
+  ['SCIENSCOPE',               'COGS'],             // Rayos X / microscopios (facturas en USD)
   // ── Fin proveedores SMTO ────────────────────────────────────────────────
 
   // ── Equipo de cómputo / PC ──────────────────────────────────────────────
