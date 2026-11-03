@@ -458,15 +458,18 @@ export function cotejarConSaldos(saldosRows, lista) {
     usados.add(`${elegido.idx}#${elegido.f}`)
     renglonUsado.add(elegido.idx)
     const sRow = filteredSaldos[elegido.idx]
-    // Aduana: una factura (pedimento, honorarios del agente) a menudo se paga
-    // en más de un movimiento — p.ej. el pedimento 26 48 3450 6002791 va en
-    // 0063230059 junto con ISSA 53460 y su diferencia de $16 en 0090831011.
-    // Contabilidad pone TODAS las pólizas separadas por coma, así que se
-    // suman los demás pagos de esta factura en el mismo mes, y esos renglones
-    // quedan vinculados (ya no salen como sobrantes ni como movimientos).
+    // Pedimentos: a menudo se pagan en más de un movimiento — el pedimento
+    // 26 48 3450 6002791 va en 0063230059 junto con ISSA 53460 y su diferencia
+    // de $16 en 0090831011. Contabilidad pone TODAS las pólizas separadas por
+    // coma, así que se suman los demás pagos del pedimento en el mismo mes, y
+    // esos renglones quedan vinculados (ya no salen como sobrantes ni como
+    // movimientos). Sólo pedimentos (AA AA PPPP NNNNNNN): las facturas del
+    // agente aduanal llevan una sola póliza (Benjamín, 2026-11-03: Despachos
+    // Cano A8472 → sólo 0028484670, aunque hubo otro pago de 2,320 ese día).
     const polizasExtra = []
     const esAduana = (t) => sinAcentos(t) === 'ADUANA'
-    if (esAduana(g.tipo) || esAduana(sRow.tipo)) {
+    const esPedimento = g.esPedimento || /^\d{15}$/.test(k)
+    if (esPedimento && (esAduana(g.tipo) || esAduana(sRow.tipo))) {
       const ym = (saldosFechaToIso(sRow.fecha) || '').slice(0, 7)
       const vistos = new Set([elegido.idx])
       for (const c of candidatosUsados) {
