@@ -328,7 +328,7 @@ def style_data_cell(cell, style_type, tipo='', diff_num=None, moneda='MXN'):
     else:  # 'normal'
         cell.font = Font(name='Calibri', size=10, color=TEXT_PRIMARY)
 
-def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None):
+def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None, tc_usd_saldos=0):
     # Invierte POLIZAS_CLARA (nombre → folio) a (folio → nombre) para que la
     # columna USUARIO pueda resolver cada póliza al colaborador dueño.
     polizas_map = polizas_map or {}
@@ -595,6 +595,12 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             rate = g.get('tipoCambio') or 0
             if m in lista_tc and m not in seed_tc and rate > 0:
                 seed_tc[m] = round(float(rate), 4)
+        # El T/C del mes que contabilidad captura en el Saldos (lo manda el
+        # frontend al cotejar) gana sobre el de cualquier factura: antes la
+        # celda tomaba el T/C del PRIMER CFDI en dólares (17.8413 de IBG en
+        # oct-2026) y convertía todo el reporte con él.
+        if 'USD' in lista_tc and tc_usd_saldos > 0:
+            seed_tc['USD'] = round(tc_usd_saldos, 4)
         if 'USD' in lista_tc:
             seed_tc.setdefault('USD', 17.50)
 
@@ -792,19 +798,20 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
         tc_ref = tc_refs.get(moneda_code) if moneda_code not in ('MXN', 'XXX') else None
         is_usd_row = (
             tc_ref is not None
-            and (importe_usd_raw > 0 or iva_usd_raw > 0 or ret_usd_raw > 0
-                 or monto_usd_raw > 0 or monto_ext > 0)
+            # != 0 (no > 0): una nota de crédito en USD trae montos negativos.
+            and (importe_usd_raw != 0 or iva_usd_raw != 0 or ret_usd_raw != 0
+                 or monto_usd_raw != 0 or monto_ext != 0)
         )
         if is_usd_row:
             # Fallback: si por alguna razón no llegaron los desgloses nativos,
             # asumimos que el total nativo ES el subtotal (IVA/Ret = 0) — el
             # importe en MXN siempre coincidirá con el MONTO M.E. visible.
-            usd_imp = importe_usd_raw if importe_usd_raw > 0 else (monto_usd_raw or monto_ext)
+            usd_imp = importe_usd_raw if importe_usd_raw != 0 else (monto_usd_raw or monto_ext)
             usd_iva = iva_usd_raw
             usd_ret = ret_usd_raw
             importe_val = f'={usd_imp}*{tc_ref}'
-            iva_val     = f'={usd_iva}*{tc_ref}' if usd_iva > 0 else 0
-            ret_val     = f'={usd_ret}*{tc_ref}' if usd_ret > 0 else 0
+            iva_val     = f'={usd_iva}*{tc_ref}' if usd_iva != 0 else 0
+            ret_val     = f'={usd_ret}*{tc_ref}' if usd_ret != 0 else 0
             tc_val      = f'={tc_ref}'
         else:
             importe_val = importe
@@ -881,6 +888,20 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             total_facturado_band += facturado + propina_actual
             if isinstance(cobrado, (int, float)):
                 total_cobrado_band += cobrado
+        elif is_especial and isinstance(g.get('cobroSaldos'), dict):
+            # Colaboradores especiales: el cotejo con Saldos encontró que el
+            # banco pagó distinto a la factura (anticipo, liquidación, 1 de 12
+            # domiciliaciones, cargo de más). COBRADO = egreso del Saldos,
+            # FACTURADO = total de la factura, ambos en la divisa del renglón
+            # (como los captura contabilidad), DIFERENCIA = cobrado − facturado.
+            cs = g['cobroSaldos']
+            cobrado = round(float(cs.get('cobrado') or 0), 2)
+            facturado = round(float(cs.get('facturado') or 0), 2)
+            diff_num = round(cobrado - facturado, 2)
+            diferencia = diff_num
+            if normaliza_moneda(cs.get('moneda')) in ('MXN', 'XXX'):
+                total_facturado_band += facturado
+                total_cobrado_band += cobrado
         else:
             facturado = ''
             cobrado = ''
@@ -903,6 +924,11 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             diff_num = None
         # RFC de facturas extranjeras (sin RFC mexicano): se muestra "N/A"
         # centrado. Los RFC reales van alineados a la izquierda como siempre.
+        # COBRADO/FACTURADO de un pago en divisa (cotejo Saldos) llevan el
+        # símbolo de su moneda, igual que MONTO M.E.
+        cobro_style = 'currency_ext' if (
+            not es_clara and isinstance(g.get('cobroSaldos'), dict)
+            and moneda_code not in ('MXN', 'XXX')) else 'currency'
         rfc_raw = g.get('rfc', '')
         rfc_is_na = str(rfc_raw).strip().upper() in ('NA', 'N/A')
         rfc_disp = 'N/A' if rfc_is_na else rfc_raw
@@ -939,8 +965,8 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
             (18, monto_usd or monto_ext, 'center', 'currency_ext'),
             (19, tc_val,                 'center', 'tipocambio'),
             (20, usuario,                'center', 'normal'),
-            (21, cobrado,                'center', 'currency'),
-            (22, facturado,              'center', 'currency'),
+            (21, cobrado,                'center', cobro_style),
+            (22, facturado,              'center', cobro_style),
             (23, diferencia,             'center', 'diff'),
         ]
 
@@ -1187,7 +1213,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v9.05'
+    ft.value = 'SMTO Engineering · v9.06'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
@@ -1251,16 +1277,21 @@ class handler(BaseHTTPRequestHandler):
                 colaborador = data.get('colaborador', '')
                 poliza_numero = data.get('polizaNumero', 'N/A')
                 polizas_map = data.get('polizasMap', {}) or {}
+                try:
+                    tc_usd_saldos = float(data.get('tipoCambioUSD') or 0)
+                except (TypeError, ValueError):
+                    tc_usd_saldos = 0
             else:
                 gastos = data
                 colaborador = ''
                 poliza_numero = 'N/A'
                 polizas_map = {}
+                tc_usd_saldos = 0
             gastos = sanitize(gastos)
             colaborador = sanitize(colaborador)
             poliza_numero = sanitize(poliza_numero)
             polizas_map = sanitize(polizas_map) if isinstance(polizas_map, dict) else {}
-            wb = build_workbook(gastos, colaborador, poliza_numero, polizas_map)
+            wb = build_workbook(gastos, colaborador, poliza_numero, polizas_map, tc_usd_saldos)
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)

@@ -66,6 +66,12 @@ export const TIPO_RULES = [
   ['CERVECERIA REGIOMONTANA',              'Consumo Viáticos'],  // Sierra Madre MTY (cargo banco: VELPAY *SIERRA MADRE). CFDI concepto = "CONSUMO ALIMENTOS".
   ['OPERADORA INDUSTRIAL Y COMERCIAL APODACA', 'Consumo Viáticos'],  // Restaurante aeropuerto MTY (cargo banco: THUNDER*PAPALOTE AEROP APODACA). CFDI concepto = "CONSUMO DE ALIMENTOS".
   ['LAS NUEVAS DELICIAS GASTRONOMICAS', 'Consumo Viáticos'],  // DEBE ir antes de 'GAS'→Gasolina: "GASTRONOMICAS" contiene "GAS" como substring y el genérico la atrapaba mal.
+  // Bodegas de almacenaje: "MINIBODEGAS" termina en "GAS" y el genérico
+  // 'GAS'→Gasolina la mandaba a 'Gasolina Viáticos' (Sun Storage, oct-2026).
+  ['SUN STORAGE',              'Renta Oficina'],
+  ['MINIBODEGA',               'Renta Oficina'],
+  ['RENTA DE BODEGA',          'Renta Oficina'],
+  ['REN THANG',                'COGS'],             // Cortadoras de componentes (proforma en USD, sin RFC)
   // ── Fin proveedores SMTO ────────────────────────────────────────────────
 
   // ── Equipo de cómputo / PC ──────────────────────────────────────────────
@@ -417,6 +423,12 @@ const NORMAL_VARIANT = {
 // el tipo es fijo por convenio SMTO, pase lo que pase en nombre/concepto.
 export const TIPO_RULES_RFC = {
   'OOM960429832': 'Papelería',   // Operadora OMX (Office Max) → siempre Papelería
+  // Proveedores sin keyword reconocible que caían al fallback 'Consumo
+  // Viáticos'; tipo según la hoja de contabilidad de oct-2026.
+  'CDS041216MS3': 'Aduana',      // Coordinadora y Diseño en Soluciones de Comercio Exterior (agente aduanal / Codex)
+  'ITM240517II2': 'COGS',        // Ingeniería y Tecnología en Mecanizados y Automatización (maquinados)
+  'EIPJ871111EH0': 'Marketing',  // Juan René Espinosa Pablo (artículos promocionales con logo)
+  'TOZK890902HB8': 'Marketing',  // Karina Guadalupe Tovar Zepeda (flyers / tarjetas impresas)
 }
 
 // Prefijos de ClaveProdServ SAT que corresponden a equipo de cómputo / IT.

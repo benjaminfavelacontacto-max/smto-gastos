@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo } from './tipoRules'
+import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos } from './saldosCotejo'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -80,6 +81,7 @@ const TIPOS_ESPECIALES = [
   'Celular',
   'Comercio Exterior',
   'Comisión Banco',
+  'Comisiones Banco',
   'Consultoría',
   'Contador',
   'Consumo',
@@ -108,13 +110,17 @@ const TIPOS_ESPECIALES = [
   'Nómina Ven',
   'PC',
   'Papelería',
+  'Pago Crédito',
   'Pasaporte o Visa',
   'Permiso',
   'Préstamo',
+  'Préstamo Nómina',
   'Regalía',
+  'Regalías',
   'Renta Auto',
   'Renta Oficina',
   'Seguro',
+  'Seguros',
   'Taxi',
   'Transporte',
   'Uniforme',
@@ -294,6 +300,11 @@ const EMPLEADOS_RFC = [
   { rfc: 'CAGL9208034V7', nombre: 'LUIS ENRIQUE CASTILLO GOMEZ' },
   { rfc: 'PEMJ99071253A', nombre: 'JORGE ANDRES PERALES MARTINEZ' },
   { rfc: 'AEPM820425FH9', nombre: 'MARCOS ASCENCIO PEREZ' },
+  // Agregados 2026-11 (hoja de contabilidad oct-2026): salían sin RFC.
+  { rfc: 'LUMN031014N64', nombre: 'NOE OMAR LUA MANZO' },
+  { rfc: 'RAHA830503AT2', nombre: 'ALBERTH CRUZ RAMOS HERNANDEZ' },
+  { rfc: 'SOMF990525919', nombre: 'FERNANDO SOSA MORALES' },
+  { rfc: 'COTA870614KH1', nombre: 'ADRIAN CORONADO TAFOYA' },
 ]
 
 // Matchea un nombre corto (extraído del concepto de Saldos, ej. "Rosalba
@@ -549,10 +560,22 @@ const fmtUsd = (n) => (n < 0.10 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`)
 // agregamos el nombre de archivo (único por documento): recibos distintos ya no
 // se fusionan, pero re-subir el MISMO archivo sí deduplica. Los pedimentos
 // (esTicket=false) conservan su folio único real y no se ven afectados.
+// En vez del nombre se usa la HUELLA del contenido cuando la hay: el mismo PDF
+// bajado dos veces llega como "Factura.pdf" y "Factura (1).pdf", y por nombre
+// entraba dos veces (Vanstron oct-2026: 4 renglones en vez de 2). Muestreo +
+// longitud del data URL: distingue documentos distintos y es barato.
+const huellaDocumento = (dataURL) => {
+  if (!dataURL) return ''
+  const paso = Math.max(1, Math.floor(dataURL.length / 4096))
+  let h = 5381
+  for (let i = 0; i < dataURL.length; i += paso) h = ((h << 5) + h + dataURL.charCodeAt(i)) | 0
+  return `${h}:${dataURL.length}`
+}
 const gastoDedupKey = (g) => {
   const base = `${g.rfc || ''}|${g.noFactura || ''}`
   if (!g.esTicket) return base
-  const src = g.pdfFile?.name || g.originalFileName || g.uuid || ''
+  const src = huellaDocumento(g.pdfDataURL || g.imageDataURL)
+    || g.pdfFile?.name || g.originalFileName || g.uuid || ''
   const monto = g.montoExtranjero || g.totalCFDI || g.total || 0
   return `${base}|${src}|${monto}`
 }
@@ -902,273 +925,6 @@ function parseCSVLine(line, sep) {
   return result
 }
 
-/* Parser del Excel "Saldos AAAA" usado por los colaboradores especiales.
-   Cada pestaña suele traer headers Fecha|Tipo|Folio|Factura|Concepto|
-   Ingreso|Egreso en alguna fila (varía por hoja: r3 a r177). Algunas
-   pestañas legacy (Banamex, Intercam) tienen columna 'Desc' en vez de
-   'Tipo' y sin 'Folio'; las parseamos igual aunque su folio quede
-   vacío.
-
-   Devuelve [{ sheet, fecha, tipo, folio, factura, concepto, egreso }]. */
-/* Convierte la fecha cruda del Saldos (Date | número serial | string) al
-   formato interno YYYY-MM-DD que usa la app para fechaCobro. */
-function saldosFechaToIso(d) {
-  if (!d && d !== 0) return ''
-  let dt
-  if (d instanceof Date) dt = d
-  else if (typeof d === 'number') dt = new Date(Date.UTC(1899, 11, 30) + d * 86400000)
-  else {
-    const s = String(d).trim()
-    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
-    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/)
-    if (dmy) {
-      let [, dd, mm, yy] = dmy
-      if (yy.length === 2) yy = '20' + yy
-      return `${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
-    }
-    return ''
-  }
-  if (isNaN(dt)) return ''
-  const yyyy = dt.getUTCFullYear()
-  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(dt.getUTCDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
-}
-
-function parseSaldosXLSX(arrayBuffer) {
-  const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true })
-  const rows = []
-  for (const sheetName of wb.SheetNames) {
-    const ws = wb.Sheets[sheetName]
-    if (!ws || !ws['!ref']) continue
-    const range = XLSX.utils.decode_range(ws['!ref'])
-    const getCell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })]?.v
-    // Texto FORMATEADO de la celda (.w), con fallback al valor crudo (.v). Se
-    // usa para el folio de la póliza: Excel guarda "0036234032" como número
-    // 36234032 pero lo MUESTRA con ceros a la izquierda vía formato; .v los
-    // perdería, .w los conserva tal como se ven.
-    const getCellText = (r, c) => {
-      const cell = ws[XLSX.utils.encode_cell({ r, c })]
-      if (!cell) return ''
-      return String(cell.w ?? cell.v ?? '')
-    }
-
-    // Encuentra TODAS las filas de header en la pestaña. Algunos archivos
-    // de Saldos apilan varias cuentas verticalmente en una sola pestaña
-    // (ej. "BBVA MXN Cheques" trae Concentradora, Cheques SMTO Pesos, etc.).
-    // Cada header inicia un bloque de datos que corre hasta el siguiente
-    // header (o hasta el final de la pestaña).
-    const headers = []
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      const v = (c) => String(getCell(r, c) || '').trim()
-      if (v(0) === 'Fecha' && v(1) === 'Tipo' && v(2) === 'Folio' && v(3) === 'Factura') {
-        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
-      } else if (v(0) === 'Fecha' && (v(1) === 'Desc' || v(1) === 'Descripción') && v(3) === 'Factura') {
-        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
-      }
-    }
-    if (headers.length === 0) continue
-
-    for (let h = 0; h < headers.length; h++) {
-      const { row: hRow, cols } = headers[h]
-      const endRow = h + 1 < headers.length ? headers[h + 1].row - 1 : range.e.r
-      for (let r = hRow + 1; r <= endRow; r++) {
-        const factura = String(getCell(r, cols.factura) || '').trim()
-        const tipo    = String(getCell(r, cols.tipo) || '').trim()
-        const concepto = String(getCell(r, cols.concepto) || '').trim()
-        // Skip filas completamente vacías (sin tipo, factura, ni concepto)
-        if (!factura && !tipo && !concepto) continue
-        // Las filas con factura 'NA' SI se conservan — el cotejo principal
-        // (por factura) las ignora, pero el fallback de cotejo (por
-        // proveedor + monto + año-mes) las usa para asignar banco a gastos
-        // cuyo registro en Saldos no trae folio explícito.
-        const folio = cols.folio !== null ? getCellText(r, cols.folio).trim() : ''
-        // Detección de USD: barre TODAS las columnas del renglón en busca del
-        // acrónimo USD o "dólar/dolar". Algunas pestañas marcan moneda en una
-        // columna fuera del set principal (Tipo / Concepto / Factura).
-        let moneda = 'MXN'
-        const colMax = Math.min(range.e.c, 20)
-        for (let c = range.s.c; c <= colMax; c++) {
-          const v = String(getCell(r, c) || '').toUpperCase()
-          if (/\bUSD\b|\bD[ÓO]LAR/.test(v)) { moneda = 'USD'; break }
-        }
-        rows.push({
-          sheet:    sheetName,
-          fecha:    getCell(r, cols.fecha) || '',
-          tipo,
-          folio,
-          factura,
-          concepto,
-          egreso:   Number(getCell(r, cols.egreso)) || 0,
-          moneda,
-        })
-      }
-    }
-  }
-  return rows
-}
-
-/* Normaliza una factura para comparación: sin espacios, guiones, slashes,
-   puntos; uppercase. "48 3993 64000" y "48399364000" matchearán. */
-const normFactura = (s) => String(s || '').replace(/[\s\-/.]/g, '').toUpperCase()
-
-/* Normaliza un proveedor/concepto para comparación laxa: sin acentos, sólo
-   A-Z0-9, uppercase. Permite buscar el proveedor del gasto dentro del
-   concepto del Saldos (que suele traer el nombre embebido en texto libre). */
-const normProv = (s) => String(s || '')
-  .normalize('NFD').replace(/\p{Diacritic}/gu, '')
-  .toUpperCase().replace(/[^A-Z0-9]/g, '')
-
-/* Puntúa un renglón del Saldos como candidato para un gasto. Se usa SÓLO
-   para DESEMPATAR cuando varios renglones comparten el MISMO número de
-   factura (folios repetidos entre proveedores o cuentas — el folio CFDI es
-   por emisor, así que dos proveedores distintos pueden traer el mismo
-   número). Señales de más a menos decisiva:
-     1. monto exacto del egreso ≈ total del CFDI (±$0.01)  → la más fuerte
-     2. proveedor del gasto presente en el concepto del Saldos
-     3. misma moneda (USD↔USD, MXN↔MXN)
-     4. cercanía de fecha factura↔cobro (desempate suave)
-   Devuelve { score, amountMatch, provMatch } para poder marcar después si la
-   colisión se resolvió por una señal fuerte (monto/proveedor) o sólo débil. */
-function scoreSaldosCandidate(g, sRow) {
-  const gMoneda = (g.monedaCodigo || g.moneda || 'MXN').toString().toUpperCase()
-  const sMoneda = (sRow.moneda || 'MXN').toString().toUpperCase()
-  const gTotal  = Number(g.totalCFDI) || 0
-  const sEgreso = Number(sRow.egreso) || 0
-  const amountMatch = gTotal > 0 && sEgreso > 0 && Math.abs(sEgreso - gTotal) <= 0.01
-  const gProv = normProv(g.proveedor)
-  const provMatch = gProv.length >= 4 && normProv(sRow.concepto).includes(gProv)
-
-  let score = 0
-  if (amountMatch)         score += 10000
-  if (provMatch)           score += 4000
-  if (sMoneda === gMoneda) score += 1000
-  const gIso = String(g.fechaFac || '').slice(0, 10)
-  const sIso = saldosFechaToIso(sRow.fecha) || ''
-  if (/^\d{4}-\d{2}-\d{2}$/.test(gIso) && /^\d{4}-\d{2}-\d{2}$/.test(sIso)) {
-    const days = Math.abs(new Date(gIso + 'T00:00:00Z') - new Date(sIso + 'T00:00:00Z')) / 86400000
-    if (!Number.isNaN(days)) score += Math.max(0, 200 - days)
-  }
-  return { score, amountMatch, provMatch }
-}
-
-/* Cotejo: por cada gasto busca la fila del Saldos con la misma factura
-   normalizada, MISMO AÑO y MISMA MONEDA. Esto evita matchear una factura
-   2026 contra un renglón Saldos 2025, y evita matchear USD contra MXN.
-   Devuelve los matched, sin-match por ambos lados, y marca las
-   discrepancias de tipo para que el usuario decida. */
-function cotejarConSaldos(saldosRows, lista) {
-  // 1) Conjunto de años presentes en los gastos
-  const gastoYears = new Set()
-  lista.forEach(g => {
-    const y = String(g.fechaFac || '').slice(0, 4)
-    if (/^\d{4}$/.test(y)) gastoYears.add(y)
-  })
-
-  // 2) Filtrar Saldos: solo renglones cuyo año esté en el set de gastos.
-  //    Si los gastos no tienen año detectable, cae al comportamiento previo.
-  const filterByYear = gastoYears.size > 0
-  const filteredSaldos = filterByYear
-    ? saldosRows.filter(row => {
-        const yearStr = (saldosFechaToIso(row.fecha) || '').slice(0, 4)
-        return /^\d{4}$/.test(yearStr) && gastoYears.has(yearStr)
-      })
-    : saldosRows
-
-  // 3) Índice por factura normalizada → posiciones dentro de filteredSaldos.
-  //    Skip filas con factura 'NA' (típicamente nóminas/comisiones) — no son
-  //    matchables contra los gastos y meterlas crearía falsos positivos si
-  //    algún gasto manual tuviera noFactura='NA'.
-  const byFactura = new Map()
-  filteredSaldos.forEach((row, idx) => {
-    const k = normFactura(row.factura)
-    if (!k || k === 'NA') return
-    if (!byFactura.has(k)) byFactura.set(k, [])
-    byFactura.get(k).push(idx)
-  })
-
-  const matched = []
-  const sinMatchGastos = []
-  const usedSaldos = new Set()
-
-  // 4) Match eligiendo el MEJOR candidato entre los renglones libres con esa
-  //    factura. Con un solo candidato es ese renglón (el folio basta). Con
-  //    VARIOS (mismo número de factura repetido entre proveedores/cuentas),
-  //    scoreSaldosCandidate desempata por monto/proveedor/moneda/fecha para
-  //    no vincular el gasto con la factura equivocada y mezclar póliza,
-  //    banco, fecha de cobro o tipo de otra factura que no es.
-  //    Greedy de un paso (igual que el resto del cotejo vía usedSaldos): cada
-  //    gasto toma su mejor renglón libre. En la colisión real (proveedores
-  //    distintos con el mismo folio) cada gasto prefiere fuertemente SU propio
-  //    renglón por monto+proveedor, así que el orden no importa.
-  lista.forEach((g) => {
-    const k = normFactura(g.noFactura)
-    const candidates = k ? (byFactura.get(k) || []) : []
-
-    let saldosIdx, best = null
-    for (const idx of candidates) {
-      if (usedSaldos.has(idx)) continue
-      const cand = scoreSaldosCandidate(g, filteredSaldos[idx])
-      if (!best || cand.score > best.score) { best = cand; saldosIdx = idx }
-    }
-
-    if (saldosIdx === undefined) {
-      sinMatchGastos.push(g)
-      return
-    }
-    usedSaldos.add(saldosIdx)
-    const sRow = filteredSaldos[saldosIdx]
-    const tipoDiffers = !!sRow.tipo && !!g.tipo &&
-      sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
-    // Colisión = había más de un renglón del Saldos con este mismo número de
-    // factura. La marcamos (y si se ancló por una señal fuerte) para que el
-    // usuario pueda verificar en el modal que se vinculó la correcta.
-    const facturaColision = candidates.length > 1
-    const colisionResuelta = best.amountMatch || best.provMatch
-    matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers, facturaColision, colisionResuelta })
-  })
-
-  // 5) FALLBACK match: para gastos que no encontraron factura en el Saldos,
-  //    intenta matchear contra los renglones con factura='NA' (o vacía) por
-  //    PROVEEDOR + MONTO + AÑO-MES. Cubre el caso donde el Saldos no tiene
-  //    el folio de la factura pero sí registra el movimiento del banco.
-  const stillSinMatch = []
-  for (const g of sinMatchGastos) {
-    const gProv = normProv(g.proveedor)
-    if (gProv.length < 8) { stillSinMatch.push(g); continue }
-    const gTotal = Number(g.totalCFDI) || 0
-    const gYM = String(g.fechaFac || '').slice(0, 7)
-
-    let foundIdx = -1
-    for (let i = 0; i < filteredSaldos.length; i++) {
-      if (usedSaldos.has(i)) continue
-      const row = filteredSaldos[i]
-      const facNorm = normFactura(row.factura)
-      if (facNorm && facNorm !== 'NA') continue  // solo filas sin factura clara
-      const rowYM = (saldosFechaToIso(row.fecha) || '').slice(0, 7)
-      if (rowYM && gYM && rowYM !== gYM) continue
-      const concNorm = normProv(row.concepto)
-      if (!concNorm.includes(gProv)) continue
-      // Tolera diferencia de ±$0.01 para evitar problemas de redondeo.
-      if (gTotal > 0 && Math.abs((Number(row.egreso) || 0) - gTotal) > 0.01) continue
-      foundIdx = i
-      break
-    }
-
-    if (foundIdx === -1) { stillSinMatch.push(g); continue }
-    usedSaldos.add(foundIdx)
-    const sRow = filteredSaldos[foundIdx]
-    const tipoDiffers = !!sRow.tipo && !!g.tipo &&
-      sRow.tipo.toLowerCase() !== g.tipo.toLowerCase()
-    matched.push({ gastoId: g.id, gasto: g, saldosRow: sRow, tipoDiffers })
-  }
-  sinMatchGastos.length = 0
-  sinMatchGastos.push(...stillSinMatch)
-
-  const sinMatchSaldos = filteredSaldos.filter((_, idx) => !usedSaldos.has(idx))
-  return { matched, sinMatchGastos, sinMatchSaldos }
-}
 
 function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
   let doc
@@ -1447,6 +1203,17 @@ function parseCFDI(xmlText, xmlFile, pdfFiles, colaborador) {
     if (uuid && stripDiacritics(f.name.toUpperCase()).includes(uuid.toUpperCase())) return true
     return false
   }) || null
+
+  // Nota de crédito (TipoDeComprobante="E", egreso): el CFDI trae montos
+  // positivos pero en el reporte RESTAN — cancelan o descuentan una factura
+  // previa (p.ej. JBC DV42839 cancela DV42646). Se invierten todos los montos
+  // y el concepto lo dice, como lo captura contabilidad.
+  const esNotaCredito = (ga(comp, 'TipoDeComprobante', 'tipoDeComprobante', 'tipodecomprobante') || '').toUpperCase() === 'E'
+  if (esNotaCredito) {
+    importe = -importe; iva = -iva; ishIeps = -ishIeps; totalCFDI = -totalCFDI
+    retencionISR = -retencionISR; retencionIVA = -retencionIVA; retenciones = -retenciones
+    conceptoClasif = `Nota Crédito, ${conceptoClasif || ''}`.replace(/,\s*$/, '')
+  }
 
   const fechaFac = (ga(comp, 'Fecha', 'fecha') || '').slice(0, 10)
   // Moneda + tipo de cambio del CFDI. Para CFDIs en USD / otra divisa:
@@ -3520,6 +3287,9 @@ export default function App() {
   const saldosRef = useRef(null)
   const nominaRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
+  // T/C USD del mes del reporte, leído de la tabla "Tipo Cambio" del Saldos
+  // al cotejar ({ mes: '2026-10', tc: 18.4 }). Va al Excel como celda R7.
+  const [tcSaldos, setTcSaldos] = useState(null)
   const [duplicadosModal, setDuplicadosModal] = useState(null)
   const [ocrSelectionModal, setOcrSelectionModal] = useState(null)
   const [nominaPickerModal, setNominaPickerModal] = useState(null)
@@ -4307,6 +4077,13 @@ export default function App() {
       rfcFinal = 'FNI970829JR9'
       tipoFinal = tipoPeajeFNI(colaborador)
     }
+    // Pagos que SMTO hace a su nombre (cuotas IMSS-Infonavit por línea de
+    // captura): el comprobante trae a SMTO como contribuyente y el OCR no
+    // siempre lee el RFC.
+    if (!rfcFinal && /^SMTO\s+ENGINEERING\b/i.test(proveedorFinal || '')) rfcFinal = 'SEN1504132C9'
+    // Impuestos y cuotas (SAT, IMSS) se pagan siempre por transferencia /
+    // línea de captura, nunca con tarjeta, aunque el OCR diga otra cosa.
+    const formaPagoFinal = (esSAT || rfcFinal === 'SEN1504132C9') ? '03' : (parsed.formaPago || '04')
 
     return {
       id: genId(),
@@ -4334,7 +4111,7 @@ export default function App() {
       propinaPorcentaje: 0,
       montoPropina:   isExtranjera ? 0 : propina,
       fechaCobro: fechaFinal,
-      formaPago: parsed.formaPago || '04',
+      formaPago: formaPagoFinal,
       uuid,
       tienePDF: false,
       pdfFile: null,
@@ -5496,6 +5273,7 @@ export default function App() {
       montoFacturado:   Number(g.montoFacturado) || 0,
       montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
       montoCobrado:     Number(g.montoCobrado) || 0,
+      cobroSaldos:      g.cobroSaldos || null,
       hizoMatch:        !!g.hizoMatch,
       polizaNumero:     g.polizaNumero || '',
       xmlFaltante:      !!g.xmlFaltante,
@@ -5504,7 +5282,7 @@ export default function App() {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA, tipoCambioUSD: tcSaldos?.tc || 0 }),
       })
       if (response.ok) {
         const excelBlob = await response.blob()
@@ -5860,7 +5638,8 @@ export default function App() {
     if (!file) return
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const saldosRows = parseSaldosXLSX(arrayBuffer)
+      const wbSaldos = leerSaldosWorkbook(arrayBuffer)
+      const saldosRows = parseSaldosXLSX(wbSaldos)
       if (saldosRows.length === 0) {
         showModal({
           type: 'error',
@@ -5872,6 +5651,9 @@ export default function App() {
         return
       }
       const result = cotejarConSaldos(saldosRows, lista)
+      const mesReporte = mesDelReporte(lista)
+      const tcMes = parseTipoCambioSaldos(wbSaldos)[mesReporte.slice(5, 7)]
+      setTcSaldos(tcMes ? { mes: mesReporte, tc: tcMes } : null)
       // Aplica las pólizas y la fecha de cobro de TODOS los matches (la
       // fecha del Saldos es la fecha real de pago del banco, equivalente
       // a dCSV en validarBanco). Tipo NO se cambia aquí; el modal lo
@@ -5886,8 +5668,10 @@ export default function App() {
         // BBVA Cheques de BBVA Concentradora, MXN de USD, etc. Se muestra
         // en la columna BANCO del Excel exportado.
         const banco = String(m.saldosRow.sheet || '').trim().replace(/\s+/g, ' ')
+        // Pago parcial / en exhibiciones: ajusta los montos a lo que se pagó
+        // y guarda cobrado vs facturado para el Excel (ver aplicarCobroSaldos).
         return {
-          ...g,
+          ...aplicarCobroSaldos(g, m),
           polizaNumero: m.saldosRow.folio || 'N/A',
           fechaCobro,
           banco,
@@ -6002,8 +5786,9 @@ export default function App() {
           //   "Nómina Rosalba Olivar 1a Ene 26" → "Rosalba Olivar"
           //   "PTU Rosalba Olivar 25"           → "Rosalba Olivar"
           //   "Aguinaldo Edie Haro 25"          → "Edie Haro"
+          //   "Comisiones Adrian Coronado"      → "Adrian Coronado"
           const shortName = conceptoStr
-            .replace(/^(?:n[óo]mina|ptu|aguinaldo|prima\s+vacacional)\s+/i, '')
+            .replace(/^(?:n[óo]mina|ptu|aguinaldo|prima\s+vacacional|comisi[óo]n(?:es)?)\s+/i, '')
             .replace(/\s+\d+a?\s+\w+\s+\d+\s*$/i, '')
             .replace(/\s+\d{2,4}\s*$/, '')
             .trim() || conceptoStr
@@ -6198,13 +5983,15 @@ export default function App() {
         montoFacturado:   Number(g.montoFacturado) || 0,
         montoPropinaOriginal: Number(g.montoPropinaOriginal) || 0,
         montoCobrado:     Number(g.montoCobrado) || 0,
+        cobroSaldos:      g.cobroSaldos || null,
         hizoMatch:        !!g.hizoMatch,
+        polizaNumero:     g.polizaNumero || '',
         xmlFaltante:      !!g.xmlFaltante,
       }))
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA, tipoCambioUSD: tcSaldos?.tc || 0 }),
       })
       if (!response.ok) {
         try {
@@ -6290,7 +6077,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.05</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.06</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

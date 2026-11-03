@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.05
+Current version: v9.06
 
 ## Stack
 
@@ -33,6 +33,7 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 ## File layout
 
 - `src/App.jsx` — main frontend logic (CFDI parser, matching, UI)
+- `src/saldosCotejo.js` — cotejo de colaboradores especiales contra "Saldos AAAA": parser, T/C mensual del Saldos, match por factura (renglones con varias facturas, sufijo "-1", folios sin serie o truncados) y pagos en exhibiciones (prorrateo + COBRADO/FACTURADO)
 - `src/components/` — PremiumModal, PremiumButton, and other small UI pieces
 - `src/App.css` — full stylesheet
 - `api/export-excel.py` — generates the premium .xlsx via openpyxl
@@ -186,7 +187,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.05
+- Current: v9.06
 
 ## Things to be careful about
 
