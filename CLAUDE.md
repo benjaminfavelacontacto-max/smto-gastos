@@ -126,6 +126,14 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     ya trae la cuenta. Oct-2026: USD 18.68 y MXN 4,489.51 + 2,895.77 =
     7,385.28, igual que contabilidad.
 
+18. Barra de acciones de los perfiles especiales (COLABORADORES_ESPECIALES):
+    arriba la "Secuencia del reporte" numerada — 1 Cargar Carpeta, 2 Cotejar
+    con Saldos y, sólo Alejandro, 3 Agregar Nómina y 4 Cuentas por Cobrar —
+    cada paso en verde con ✓ al terminarlo y el siguiente pendiente
+    resaltado; abajo "Herramientas" (Manual, Importar reporte, Cargar Foto,
+    Validar Banco, Movimientos del banco) y Exportar. Los demás perfiles
+    conservan la barra de siempre.
+
 ## Cómo agregar un colaborador
 
 Todo en `src/App.jsx`, en DOS lugares (ejemplo: Alberth Cruz, Servicio, terminación Clara 2900):

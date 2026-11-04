@@ -3347,6 +3347,9 @@ export default function App() {
   // "Cuentas por Cobrar 2026.xlsx" ya leído: { index, total, nombre }. Con él
   // los ingresos toman cliente, RFC, tipo, IVA y el monto de la factura.
   const [cxc, setCxc] = useState(null)
+  // Paso 2 de la secuencia (Cotejar con Saldos) ya aplicado a este reporte.
+  const [cotejoHecho, setCotejoHecho] = useState(false)
+  useEffect(() => { if (!lista.length) setCotejoHecho(false) }, [lista.length])
   const ingresosParaExcel = () => ingresos.map(i => ({
     rfc: i.rfc || '', cliente: i.cliente || '', tipo: i.tipo || '', factura: i.factura || 'NA',
     fecha: i.fecha || '', concepto: i.concepto || '', banco: i.banco || '',
@@ -5785,6 +5788,7 @@ export default function App() {
         }
       }))
       setCotejoModal({ result, decisions: {} })
+      setCotejoHecho(true)
       if (colaborador?.nombre === 'Alejandro Olivar') {
         const meses = mesesConEgresos(saldosRows)
         const mes = mesReporte || meses[0] || ''
@@ -6487,18 +6491,21 @@ export default function App() {
       <div className="divider" />
 
       {/* ─── BARRA DE ACCIONES ─── */}
-      <div className="action-bar">
-        <div className="action-group">
-          <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
+      {(() => {
+        const esAlejandro = colaborador?.nombre === 'Alejandro Olivar'
+        const esEspecial = COLABORADORES_ESPECIALES.includes(colaborador?.nombre)
+        const iconoCheck = (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        )
+        const btnManual = <PremiumButton title="Manual" icon="＋" variant="ghost" onClick={agregarManual} />
+        const btnImportar = (
           <PremiumButton
             title={importSuccess ? 'Importado' : 'Importar reporte'}
             variant={importSuccess ? 'success' : 'ghost'}
             onClick={() => document.getElementById('import-xlsx-input').click()}
-            icon={importSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
+            icon={importSuccess ? iconoCheck : (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                 <polyline points="17 8 12 3 7 8"/>
@@ -6506,114 +6513,128 @@ export default function App() {
               </svg>
             )}
           />
-          <input
-            id="import-xlsx-input"
-            type="file"
-            accept=".xlsx"
-            style={{ display: 'none' }}
-            onChange={handleImportExcel}
-          />
-          <PremiumButton
-            id="tour-carpeta"
-            title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
-            variant={carpetaSuccess ? 'success' : 'primary'}
-            onClick={() => folderRef.current?.click()}
-            icon={carpetaSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+        )
+        const btnFoto = <PremiumButton title="Cargar Foto" icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
+        const btnBanco = <PremiumButton id="tour-banco" title="Validar Banco" icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+        const contador = (() => {
+          const total = lista.length
+          const validados = lista.filter(g => g.validado).length
+          const allDone = total > 0 && validados === total
+          return total > 0 ? (
+            <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-              </svg>
-            )}
-          />
-          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
-          <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
-          {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
-            <PremiumButton
-              title="Cotejar con Saldos"
-              icon="🔍"
-              variant="secondary"
-              isDisabled={!lista.length}
-              onClick={() => saldosRef.current?.click()}
-            />
-          )}
-          {colaborador?.nombre === 'Alejandro Olivar' && (
-            <PremiumButton
-              title="Agregar Nómina"
-              icon="👥"
-              variant="secondary"
-              onClick={() => nominaRef.current?.click()}
-            />
-          )}
-          {colaborador?.nombre === 'Alejandro Olivar' && (
-            <PremiumButton
-              title="Movimientos del banco"
-              icon="🧾"
-              variant="secondary"
-              onClick={() => movBancoRef.current?.click()}
-            />
-          )}
-          {colaborador?.nombre === 'Alejandro Olivar' && (
-            <PremiumButton
-              title={cxc ? 'Cuentas por Cobrar ✓' : 'Cuentas por Cobrar'}
-              icon="📒"
-              variant="secondary"
-              onClick={() => cxcRef.current?.click()}
-            />
-          )}
-          <input
-            ref={cxcRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleCxcFile}
-          />
-          <input
-            ref={saldosRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleSaldosFile}
-          />
-          <input
-            ref={nominaRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleNominaFile}
-          />
-          <input
-            ref={movBancoRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleMovimientosBancoFile}
-          />
-          {(() => {
-            const total = lista.length
-            const validados = lista.filter(g => g.validado).length
-            const allDone = total > 0 && validados === total
-            return total > 0 ? (
-              <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <span>
-                  {allDone
-                    ? `✓ ${total} facturas validadas`
-                    : `${validados} / ${total} validadas`}
-                </span>
+              <span>{allDone ? `✓ ${total} facturas validadas` : `${validados} / ${total} validadas`}</span>
+            </div>
+          ) : null
+        })()
+        const exportar2 = (
+          <div className="action-group">
+            <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
+            <PremiumButton id="tour-zip" title="Exportar a ZIP" icon="📦" variant="export" isDisabled={!lista.length} onClick={exportar} />
+          </div>
+        )
+        const inputs = (
+          <>
+            <input id="import-xlsx-input" type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleImportExcel} />
+            <input ref={cxcRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleCxcFile} />
+            <input ref={saldosRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleSaldosFile} />
+            <input ref={nominaRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleNominaFile} />
+            <input ref={movBancoRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleMovimientosBancoFile} />
+          </>
+        )
+
+        // Perfiles normales: la barra de siempre.
+        if (!esEspecial) {
+          return (
+            <div className="action-bar">
+              <div className="action-group">
+                {btnManual}
+                {btnImportar}
+                <PremiumButton
+                  id="tour-carpeta"
+                  title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
+                  variant={carpetaSuccess ? 'success' : 'primary'}
+                  onClick={() => folderRef.current?.click()}
+                  icon={carpetaSuccess ? iconoCheck : (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                    </svg>
+                  )}
+                />
+                {btnFoto}
+                {btnBanco}
+                {inputs}
+                {contador}
               </div>
-            ) : null
-          })()}
-        </div>
-        <div className="action-group">
-          <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
-          <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
-        </div>
-      </div>
+              {exportar2}
+            </div>
+          )
+        }
+
+        // Perfiles especiales: la secuencia numerada del reporte arriba y las
+        // herramientas sueltas abajo. Cada paso se pone en verde al terminarlo
+        // y el siguiente pendiente se resalta.
+        const pasos = [
+          { id: 'tour-carpeta', icono: '📁', titulo: 'Cargar Carpeta', hint: 'XML y PDF de las facturas',
+            hecho: lista.some(g => !g.esNomina && !g.esMovimientoBanco), onClick: () => folderRef.current?.click() },
+          { icono: '🔍', titulo: 'Cotejar con Saldos', hint: 'Pólizas, banco y movimientos sin factura',
+            hecho: cotejoHecho, bloqueado: !lista.length, onClick: () => saldosRef.current?.click() },
+          ...(esAlejandro ? [
+            { icono: '👥', titulo: 'Agregar Nómina', hint: 'Nóminas del mes desde el Saldos',
+              hecho: lista.some(g => g.esNomina), onClick: () => nominaRef.current?.click() },
+            { icono: '📒', titulo: 'Cuentas por Cobrar', hint: 'Cliente, RFC, tipo e IVA de los ingresos',
+              hecho: !!cxc, onClick: () => cxcRef.current?.click() },
+          ] : []),
+        ]
+        const siguiente = pasos.findIndex(x => !x.hecho)
+        return (
+          <div className="action-bar action-bar-flujo">
+            <div className="flujo">
+              <div className="flujo-titulo">
+                Secuencia del reporte
+                <span>{pasos.filter(x => x.hecho).length} de {pasos.length} pasos</span>
+              </div>
+              <div className="flujo-pasos">
+                {pasos.map((x, i) => (
+                  <div key={x.titulo} className="flujo-item">
+                    {i > 0 && <div className={`flujo-linea${pasos[i - 1].hecho ? ' hecha' : ''}`} />}
+                    <button
+                      id={x.id}
+                      className={`flujo-paso${x.hecho ? ' hecho' : ''}${i === siguiente ? ' actual' : ''}${x.bloqueado ? ' bloqueado' : ''}`}
+                      onClick={x.bloqueado ? undefined : x.onClick}
+                      disabled={x.bloqueado}
+                      title={x.bloqueado ? 'Primero carga la carpeta' : x.hint}
+                    >
+                      <span className="flujo-num">{x.hecho ? '✓' : i + 1}</span>
+                      <span className="flujo-texto">
+                        <span className="flujo-nombre"><span className="flujo-icono">{x.icono}</span>{x.titulo}</span>
+                        <span className="flujo-hint">{x.hint}</span>
+                      </span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="herramientas-fila">
+              <div className="action-group">
+                <span className="herramientas-titulo">Herramientas</span>
+                {btnManual}
+                {btnImportar}
+                {btnFoto}
+                {btnBanco}
+                {esAlejandro && (
+                  <PremiumButton title="Movimientos del banco" icon="🧾" variant="ghost" onClick={() => movBancoRef.current?.click()} />
+                )}
+                {inputs}
+                {contador}
+              </div>
+              {exportar2}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ─── BARRA DE MÉTRICAS ─── */}
       <div className="metrics-bar">
