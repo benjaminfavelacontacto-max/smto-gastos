@@ -312,6 +312,36 @@ const EMPLEADOS_RFC = [
 // palabras del nombre corto aparecen en el nombre completo del empleado
 // O en alguno de sus aliases registrados. Sin acentos, mayúsculas,
 // puntuación strippeada, en cualquier orden.
+// Aplica lo que el usuario corrigió en el modal de Movimientos del banco
+// (proveedor, RFC, tipo, concepto, fecha, póliza, monto, IVA) al gasto
+// propuesto. Al cambiar monto o IVA recalcula importe/IVA/total en la moneda
+// del movimiento (en USD el Excel convierte con la celda de T/C).
+const aplicarEdicionMovimiento = (g, ed) => {
+  if (!ed) return g
+  const r2m = (n) => Math.round((Number(n) || 0) * 100) / 100
+  const out = { ...g }
+  for (const k of ['proveedor', 'rfc', 'tipo', 'concepto']) {
+    if (ed[k] !== undefined && String(ed[k]).trim()) out[k] = String(ed[k]).trim()
+  }
+  if (ed.polizaNumero !== undefined) out.polizaNumero = String(ed.polizaNumero).trim() || 'N/A'
+  if (ed.fecha) { out.fechaFac = ed.fecha; out.fechaCobro = ed.fecha }
+  if (ed.monto !== undefined || ed.conIva !== undefined) {
+    const usd = !!g.esMonedaExtranjera
+    const monto = r2m(ed.monto ?? (usd ? g.montoExtranjero : g.totalCFDI))
+    const conIva = ed.conIva ?? ((usd ? g.ivaUSD : g.iva) > 0)
+    const base = conIva ? r2m(monto / 1.16) : monto
+    const iva = r2m(monto - base)
+    if (usd) {
+      Object.assign(out, { montoFacturado: monto, montoUSD: monto, montoExtranjero: monto, importeUSD: base, ivaUSD: iva })
+    } else {
+      Object.assign(out, { importe: base, iva, totalCFDI: monto, montoFacturado: monto })
+      // Fondo de ahorro (pesos con su equivalente en USD informativo).
+      if (g.montoUSD > 0) out.tipoCambio = Math.round((monto / g.montoUSD) * 10000) / 10000
+    }
+  }
+  return out
+}
+
 const matchEmpleadoByShortName = (shortName) => {
   if (!shortName) return null
   const norm = s => String(s || '')
@@ -3297,6 +3327,10 @@ export default function App() {
   // Movimientos del banco sin factura propuestos desde el Saldos:
   // { mes, label, items: [{ key, marcado, grupo, origen, gasto }], sel: { key: bool } }
   const [movBancoModal, setMovBancoModal] = useState(null)
+  // Saldos ya leído en "Cotejar con Saldos": al aplicar el cotejo se abre
+  // solo el modal de Movimientos del banco (pagos IMSS, préstamos,
+  // comisiones… que no tienen factura ni comprobante en el reporte).
+  const [movBancoTrasCotejo, setMovBancoTrasCotejo] = useState(null)
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -5689,6 +5723,14 @@ export default function App() {
         }
       }))
       setCotejoModal({ result, decisions: {} })
+      if (colaborador?.nombre === 'Alejandro Olivar') {
+        const meses = mesesConEgresos(saldosRows)
+        const mes = mesReporte || meses[0] || ''
+        setMovBancoTrasCotejo(mes ? {
+          saldosRows, tcPorMes: parseTipoCambioSaldos(wbSaldos),
+          meses: meses.includes(mes) ? meses : [mes, ...meses], mes, abrir: false,
+        } : null)
+      }
     } catch (err) {
       console.warn('parseSaldosXLSX:', err)
       showModal({
@@ -5956,17 +5998,30 @@ export default function App() {
       </div>
     )
   }
+  // Meses con egresos en cuentas de cheques hasta el actual (el Saldos ya
+  // trae pagos programados a futuro), del más reciente al más antiguo.
+  const mesesConEgresos = (saldosRows) => {
+    const hoyYM = new Date().toISOString().slice(0, 7)
+    return [...new Set(saldosRows
+      .filter(r => /cheques/i.test(r.sheet) && (Number(r.egreso) || 0) > 0)
+      .map(r => (saldosFechaToIso(r.fecha) || '').slice(0, 7))
+      .filter(ym => /^\d{4}-\d{2}$/.test(ym) && ym <= hoyYM))].sort().reverse()
+  }
+
   // Calcula (o recalcula al cambiar de mes) los movimientos propuestos.
-  const abrirMovimientosBanco = ({ saldosRows, tcPorMes, meses, mes }) => {
+  const abrirMovimientosBanco = ({ saldosRows, tcPorMes, meses, mes, trasCotejo = false }) => {
     const tcMes = tcPorMes[mes.slice(5, 7)]
     if (tcMes && !tcSaldos?.tc) setTcSaldos({ mes, tc: tcMes, fuente: 'saldos' })
     const items = movimientosSinFactura(saldosRows, lista, {
       mes, tcUSD: tcMes || tcSaldos?.tc || 0, buscarEmpleado: matchEmpleadoByShortName,
     }).filter(m => !m.yaAgregado)
-    setMovBancoModal({
+    setMovBancoModal(prev => ({
       saldosRows, tcPorMes, meses, mes, label: etiquetaMes(mes), items,
       sel: Object.fromEntries(items.map(m => [m.key, m.marcado])),
-    })
+      // Las correcciones se guardan por movimiento: sobreviven al cambio de mes.
+      edits: prev?.edits || {}, editando: null,
+      trasCotejo: trasCotejo || !!prev?.trasCotejo,
+    }))
   }
 
   const handleMovimientosBancoFile = async (e) => {
@@ -5980,10 +6035,7 @@ export default function App() {
       // trae pagos programados a futuro). Por default el mes del reporte; sin
       // gastos cargados, el último mes YA CERRADO (se reporta mes vencido).
       const hoyYM = new Date().toISOString().slice(0, 7)
-      const meses = [...new Set(saldosRows
-        .filter(r => /cheques/i.test(r.sheet) && (Number(r.egreso) || 0) > 0)
-        .map(r => (saldosFechaToIso(r.fecha) || '').slice(0, 7))
-        .filter(ym => /^\d{4}-\d{2}$/.test(ym) && ym <= hoyYM))].sort().reverse()
+      const meses = mesesConEgresos(saldosRows)
       const mes = mesDelReporte(lista) || meses.find(ym => ym < hoyYM) || meses[0] || ''
       if (!mes) {
         showModal({
@@ -6015,16 +6067,19 @@ export default function App() {
     const elegidos = movBancoModal.items.filter(m => movBancoModal.sel[m.key])
     setMovBancoModal(null)
     if (elegidos.length === 0) return
+    const editados = elegidos.filter(m => movBancoModal.edits?.[m.key]).length
     const nuevos = elegidos.map(m => ({
-      ...m.gasto, id: genId(), uuid: crypto.randomUUID(), isNew: true,
+      ...aplicarEdicionMovimiento(m.gasto, movBancoModal.edits?.[m.key]),
+      id: genId(), uuid: crypto.randomUUID(), isNew: true,
     }))
     setLista(prev => [...prev, ...nuevos])
-    const total = elegidos.reduce((s, m) => s + (m.gasto.totalCFDI || 0), 0)
-    const enUsd = elegidos.filter(m => m.gasto.esMonedaExtranjera).length
+    const total = nuevos.reduce((s, g) => s + (g.totalCFDI || 0), 0)
+    const enUsd = nuevos.filter(g => g.esMonedaExtranjera).length
     showModal({
       type: 'success',
       title: `Movimientos de ${movBancoModal.label} agregados`,
       subtitle: `${nuevos.length} movimiento${nuevos.length === 1 ? '' : 's'} del banco agregado${nuevos.length === 1 ? '' : 's'} al reporte.`
+        + (editados ? ` ${editados} con tus correcciones.` : '')
         + (enUsd ? ` ${enUsd} en dólares se convierten con el T/C del Excel.` : ''),
       stats: [
         { value: `+${nuevos.length}`, label: 'Movimientos', color: '#59D39B' },
@@ -6068,9 +6123,21 @@ export default function App() {
         ...(sinMatchG > 0 ? [{ value: sinMatchG, label: 'Gastos sin match', color: '#FF9F0A' }] : []),
         ...(sinMatchS > 0 ? [{ value: sinMatchS, label: 'Saldos sin match', color: 'rgba(255,255,255,0.65)' }] : []),
       ],
-      primaryLabel: 'Continuar',
+      primaryLabel: movBancoTrasCotejo ? 'Ver movimientos sin factura' : 'Continuar',
+      ...(movBancoTrasCotejo ? {
+        onPrimary: () => { closeModal(); setMovBancoTrasCotejo(prev => prev && { ...prev, abrir: true }) },
+      } : {}),
     })
   }
+
+  // Se abre en un efecto (no en el click) para calcular los movimientos con la
+  // lista YA actualizada por el cotejo.
+  useEffect(() => {
+    if (!movBancoTrasCotejo?.abrir) return
+    const { saldosRows, tcPorMes, meses, mes } = movBancoTrasCotejo
+    setMovBancoTrasCotejo(null)
+    abrirMovimientosBanco({ saldosRows, tcPorMes, meses, mes, trasCotejo: true })
+  }, [movBancoTrasCotejo])
 
   const exportarExcel = async () => {
     if (!lista.length) return
@@ -6204,7 +6271,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.08</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.09</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6959,7 +7026,7 @@ export default function App() {
       })()}
 
       {movBancoModal && (() => {
-        const { label, items = [], sel = {}, meses = [], mes = '', saldosRows = [], tcPorMes = {} } = movBancoModal
+        const { label, items = [], sel = {}, meses = [], mes = '', saldosRows = [], tcPorMes = {}, edits = {}, editando = null, trasCotejo = false } = movBancoModal
         const fmt = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const fmtF = (iso) => iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : ''
         const setSel = (patch) => setMovBancoModal(prev => ({ ...prev, sel: { ...prev.sel, ...patch } }))
@@ -6973,27 +7040,103 @@ export default function App() {
           for (const m of lst) { if (!g.has(m.grupo)) g.set(m.grupo, []); g.get(m.grupo).push(m) }
           return [...g.entries()]
         }
-        const renglon = (m) => (
-          <label key={m.key} style={{
-            display: 'flex', gap: 10, alignItems: 'flex-start', padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
-            background: sel[m.key] ? 'rgba(89,211,155,0.08)' : 'rgba(148,163,184,0.04)',
-            border: `1px solid ${sel[m.key] ? 'rgba(89,211,155,0.35)' : 'rgba(148,163,184,0.15)'}`,
-          }}>
-            <input type="checkbox" checked={!!sel[m.key]} onChange={e => setSel({ [m.key]: e.target.checked })} style={{ marginTop: 3 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
-                {m.gasto.proveedor} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {m.origen.concepto}</span>
-              </div>
-              <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                {fmtF(m.origen.fecha)} · {m.origen.sheet} · póliza {m.gasto.polizaNumero}
-                {m.origen.partes > 1 ? ` · ${m.origen.partes} transferencias juntas` : ''}
-              </div>
-            </div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
-              {m.origen.moneda === 'USD' ? 'US$' : '$'}{fmt(m.origen.egreso)}
-            </div>
+        const setEdit = (key, patch) => setMovBancoModal(prev => ({
+          ...prev, edits: { ...prev.edits, [key]: { ...(prev.edits?.[key] || {}), ...patch } },
+        }))
+        const descartarEdit = (key) => setMovBancoModal(prev => {
+          const { [key]: _, ...resto } = prev.edits || {}
+          return { ...prev, edits: resto, editando: null }
+        })
+        const tiposSugeridos = [...new Set([...TIPOS_NORMALES, ...items.map(m => m.gasto.tipo)].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'))
+        const inputSt = { width: '100%', boxSizing: 'border-box', background: 'rgba(15,23,42,0.6)', color: '#e2e8f0', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: '5px 8px', fontSize: 12 }
+        const campo = (texto, control, ancho = 1) => (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, gridColumn: `span ${ancho}` }}>
+            {texto}{control}
           </label>
         )
+        const editor = (m, g) => {
+          const usd = !!m.gasto.esMonedaExtranjera
+          const ed = edits[m.key] || {}
+          const monto = ed.monto ?? (usd ? m.gasto.montoExtranjero : m.gasto.totalCFDI)
+          const conIva = ed.conIva ?? ((usd ? m.gasto.ivaUSD : m.gasto.iva) > 0)
+          return (
+            <div onClick={e => e.stopPropagation()} style={{
+              display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8,
+              marginTop: 8, padding: 10, borderRadius: 8, background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.2)',
+            }}>
+              {campo('Proveedor', <input style={inputSt} value={ed.proveedor ?? m.gasto.proveedor ?? ''} onChange={e => setEdit(m.key, { proveedor: e.target.value })} />, 2)}
+              {campo('RFC', <input style={inputSt} value={ed.rfc ?? m.gasto.rfc ?? ''} onChange={e => setEdit(m.key, { rfc: e.target.value.toUpperCase() })} />)}
+              {campo('Tipo', <input style={inputSt} list="mov-banco-tipos" value={ed.tipo ?? m.gasto.tipo ?? ''} onChange={e => setEdit(m.key, { tipo: e.target.value })} />)}
+              {campo('Concepto', <input style={inputSt} value={ed.concepto ?? m.gasto.concepto ?? ''} onChange={e => setEdit(m.key, { concepto: e.target.value })} />, 2)}
+              {campo('Fecha', <input type="date" style={inputSt} value={ed.fecha ?? m.gasto.fechaFac ?? ''} onChange={e => setEdit(m.key, { fecha: e.target.value })} />)}
+              {campo('Póliza', <input style={inputSt} value={ed.polizaNumero ?? m.gasto.polizaNumero ?? ''} onChange={e => setEdit(m.key, { polizaNumero: e.target.value })} />)}
+              {campo(`Monto ${usd ? '(USD)' : '(MXN)'}`, <input type="number" step="0.01" style={inputSt} value={monto ?? ''} onChange={e => setEdit(m.key, { monto: e.target.value === '' ? 0 : Number(e.target.value) })} />)}
+              {campo('IVA', (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, textTransform: 'none', color: '#e2e8f0', fontSize: 12, paddingTop: 4 }}>
+                  <input type="checkbox" checked={conIva} onChange={e => setEdit(m.key, { conIva: e.target.checked })} />
+                  Incluye IVA 16%
+                </span>
+              ))}
+              <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#94a3b8' }}>
+                <span>
+                  Queda: importe {usd ? 'US$' : '$'}{fmt(usd ? g.importeUSD : g.importe)} + IVA {usd ? 'US$' : '$'}{fmt(usd ? g.ivaUSD : g.iva)} = {usd ? 'US$' : '$'}{fmt(usd ? g.montoExtranjero : g.totalCFDI)}
+                </span>
+                <span style={{ display: 'flex', gap: 8 }}>
+                  {edits[m.key] && (
+                    <button onClick={() => descartarEdit(m.key)} style={{ background: 'transparent', border: '1px solid rgba(148,163,184,0.35)', color: '#cbd5e1', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>
+                      Deshacer cambios
+                    </button>
+                  )}
+                  <button onClick={() => setMovBancoModal(prev => ({ ...prev, editando: null, sel: { ...prev.sel, [m.key]: true } }))}
+                    style={{ background: '#59D39B', border: 'none', color: '#050505', borderRadius: 6, padding: '4px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                    Listo
+                  </button>
+                </span>
+              </div>
+            </div>
+          )
+        }
+        const renglon = (m) => {
+          const g = aplicarEdicionMovimiento(m.gasto, edits[m.key])
+          const abierto = editando === m.key
+          const usd = !!g.esMonedaExtranjera
+          return (
+            <div key={m.key} data-mov={m.key} onClick={() => setSel({ [m.key]: !sel[m.key] })} style={{
+              padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
+              background: sel[m.key] ? 'rgba(89,211,155,0.08)' : 'rgba(148,163,184,0.04)',
+              border: `1px solid ${abierto ? 'rgba(89,211,155,0.7)' : sel[m.key] ? 'rgba(89,211,155,0.35)' : 'rgba(148,163,184,0.15)'}`,
+            }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <input type="checkbox" checked={!!sel[m.key]} readOnly style={{ marginTop: 3, pointerEvents: 'none' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
+                    {g.proveedor} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {g.tipo} · {g.concepto || m.origen.concepto}</span>
+                    {edits[m.key] && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b' }}>EDITADO</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                    {fmtF(g.fechaFac)} · {m.origen.sheet} · póliza {g.polizaNumero}
+                    {m.origen.partes > 1 ? ` · ${m.origen.partes} transferencias juntas` : ''}
+                    {edits[m.key] ? ` · en el Saldos: ${m.origen.concepto}` : ''}
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
+                  {usd ? 'US$' : '$'}{fmt(usd ? g.montoExtranjero : g.totalCFDI)}
+                </div>
+                <button onClick={e => {
+                  e.stopPropagation()
+                  const fila = e.currentTarget.closest('[data-mov]')
+                  setMovBancoModal(prev => ({ ...prev, editando: abierto ? null : m.key }))
+                  // El formulario se abre debajo del renglón: que quede a la vista.
+                  if (!abierto) setTimeout(() => fila?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 60)
+                }}
+                  style={{ background: 'transparent', border: '1px solid rgba(89,211,155,0.45)', color: '#59D39B', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  {abierto ? 'Cerrar' : 'Editar'}
+                </button>
+              </div>
+              {abierto && editor(m, g)}
+            </div>
+          )
+        }
         const seccion = (titulo, nota, lst, color) => lst.length > 0 && (
           <section style={{ marginBottom: 18 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{titulo}</div>
@@ -7016,13 +7159,16 @@ export default function App() {
           }}>{texto}</button>
         )
         return (
-          <div className="premium-overlay" onClick={() => setMovBancoModal(null)}>
+          // Sin cerrar al hacer clic afuera: se perderían las correcciones.
+          <div className="premium-overlay">
             <div className="premium-modal" onClick={e => e.stopPropagation()}
               style={{ maxWidth: 880, width: '92vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
-              <div className="premium-title">Movimientos del banco · {label}</div>
+              <div className="premium-title">{trasCotejo ? 'Movimientos sin factura' : 'Movimientos del banco'} · {label}</div>
               <div className="premium-subtitle">
-                Egresos de las cuentas de cheques del Saldos que no tienen factura en el reporte. {elegidos.length} de {items.length} elegidos.
+                {trasCotejo ? 'El cotejo terminó. Estos egresos del Saldos (pagos IMSS, préstamos, comisiones…) no tienen factura ni comprobante en el reporte. ' : 'Egresos de las cuentas de cheques del Saldos que no tienen factura en el reporte. '}
+                Revísalos, corrige con "Editar" lo que haga falta y confirma los que van al reporte. {elegidos.length} de {items.length} elegidos.
               </div>
+              <datalist id="mov-banco-tipos">{tiposSugeridos.map(t => <option key={t} value={t} />)}</datalist>
               <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: '#94a3b8' }}>
                 Mes:
                 <select value={mes} onChange={e => abrirMovimientosBanco({ saldosRows, tcPorMes, meses, mes: e.target.value })}
@@ -7042,7 +7188,7 @@ export default function App() {
                     Todos los egresos de {label} en las cuentas de cheques ya están en el reporte.
                   </div>
                 )}
-                {seccion('Recomendados', 'Los que contabilidad agrega a mano cada mes: comisiones, créditos, fondo de ahorro, regalías, préstamos, no comprobados, impuestos y Telcel.', recomendados, '#59D39B')}
+                {seccion('Recomendados', 'Los que contabilidad agrega a mano cada mes: comisiones, créditos, fondo de ahorro, regalías, préstamos, no comprobados, IMSS, impuestos y Telcel.', recomendados, '#59D39B')}
                 {seccion('Otros egresos sin factura', 'No se agregan normalmente (reembolsos de cuentas de gastos, pagos cuya factura falta en el reporte…). Márcalos sólo si van en este reporte.', opcionales, '#94a3b8')}
               </div>
               <div className="premium-actions" style={{ marginTop: 16 }}>
