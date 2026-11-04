@@ -6718,7 +6718,15 @@ export default function App() {
         const celdaSt = { padding: '5px 8px', borderBottom: '1px solid rgba(148,163,184,0.12)', fontSize: 12, verticalAlign: 'middle' }
         const inp = { background: 'transparent', color: 'inherit', border: '1px solid transparent', borderRadius: 4, padding: '2px 4px', fontSize: 12, width: '100%', boxSizing: 'border-box' }
         return (
-          <div style={{ margin: '18px 0', borderRadius: 12, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(15,23,42,0.35)' }}>
+          // La pantalla mide 100vh y la tabla de gastos (.table-wrap, flex: 1)
+          // toma el espacio que sobra: abierto, el panel lo comparte con ella
+          // (máximo 45 % de la altura, scroll propio) sin dejarla en cero.
+          <div style={{
+            margin: '0 24px 16px', borderRadius: 12, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(15,23,42,0.35)',
+            // Abierto comparte el espacio con la tabla de gastos (las dos flex: 1).
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            flex: ingresosAbierto ? '1 1 0' : '0 0 auto', maxHeight: ingresosAbierto ? '45vh' : undefined, minHeight: 0,
+          }}>
             <button onClick={() => setIngresosAbierto(v => !v)} style={{
               width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
               padding: '12px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#e2e8f0', textAlign: 'left',
@@ -6732,11 +6740,11 @@ export default function App() {
               </span>
             </button>
             {ingresosAbierto && (
-              <div style={{ overflowX: 'auto', padding: '0 12px 12px' }}>
+              <div style={{ overflow: 'auto', flex: 1, minHeight: 0, padding: '0 12px 12px' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', color: '#e2e8f0' }}>
                   <thead>
                     <tr style={{ color: '#94a3b8', fontSize: 11, textAlign: 'left' }}>
-                      {['F. PAGO', 'RFC', 'CLIENTE', 'TIPO', 'FACTURA', 'CONCEPTO', 'BANCO', 'MONTO', 'IVA', ''].map(h => <th key={h} style={{ ...celdaSt, fontWeight: 700 }}>{h}</th>)}
+                      {['F. PAGO', 'RFC', 'CLIENTE', 'TIPO', 'FACTURA', 'CONCEPTO', 'BANCO', 'MONTO', 'IVA', ''].map(h => <th key={h} style={{ ...celdaSt, fontWeight: 700, position: 'sticky', top: 0, background: '#13151A', zIndex: 1 }}>{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>

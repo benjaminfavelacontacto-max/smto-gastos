@@ -346,6 +346,8 @@ body::before {
 ═══════════════════════════════════════════ */
 .table-wrap {
   flex: 1;
+  /* Con el panel de Ingresos abierto la tabla de gastos sigue visible. */
+  min-height: 240px;
   overflow-x: auto;
   overflow-y: auto;
   margin: 0 24px 24px;
