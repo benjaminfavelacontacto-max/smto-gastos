@@ -3343,7 +3343,9 @@ export default function App() {
   // Van aparte de `lista` porque no son gastos: no entran a KPIs ni totales.
   // { id, movKey, rfc, cliente, tipo, factura, fecha, concepto, banco, moneda, monto, conIva }
   const [ingresos, setIngresos] = useState([])
+  // Pestaña activa del área de la tabla: false = Gastos, true = Ingresos.
   const [ingresosAbierto, setIngresosAbierto] = useState(false)
+  useEffect(() => { if (!ingresos.length) setIngresosAbierto(false) }, [ingresos.length])
   // "Cuentas por Cobrar 2026.xlsx" ya leído: { index, total, nombre }. Con él
   // los ingresos toman cliente, RFC, tipo, IVA y el monto de la factura.
   const [cxc, setCxc] = useState(null)
@@ -6447,7 +6449,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.10</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.11</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6744,9 +6746,34 @@ export default function App() {
 
       <div className="divider" />
 
+      {/* ─── PESTAÑAS GASTOS / INGRESOS ─── */}
+      {ingresos.length > 0 && (() => {
+        const fmtT = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const totMXN = ingresos.filter(i => i.moneda !== 'USD').reduce((a, i) => a + (Number(i.monto) || 0), 0)
+        const totUSD = ingresos.filter(i => i.moneda === 'USD').reduce((a, i) => a + (Number(i.monto) || 0), 0)
+        const sinTipo = ingresos.filter(i => !i.tipo).length
+        return (
+          <div className="vista-tabs">
+            <button className={`vista-tab${!ingresosAbierto ? ' activa' : ''}`} onClick={() => setIngresosAbierto(false)}>
+              Gastos <span>{lista.length}</span>
+            </button>
+            <button className={`vista-tab ing${ingresosAbierto ? ' activa' : ''}`} onClick={() => setIngresosAbierto(true)}>
+              Ingresos <span>{ingresos.length}</span>
+              {sinTipo > 0 && <em>{sinTipo} sin tipo</em>}
+            </button>
+            <div className="vista-tabs-nota">
+              {ingresosAbierto
+                ? <>${fmtT(totMXN)} MXN{totUSD ? ` + US$${fmtT(totUSD)}` : ''} · van en la hoja "Ingresos" del Excel</>
+                : 'Los ingresos van en una hoja aparte del Excel; no suman a los gastos.'}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* ─── TABLA ─── */}
       <div
         className={`table-wrap table-container${isDraggingOver ? ' drag-over' : ''}`}
+        style={ingresosAbierto && ingresos.length ? { display: 'none' } : undefined}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -6847,40 +6874,22 @@ export default function App() {
       </div>
 
       {/* ─── INGRESOS DEL REPORTE (hoja "Ingresos" del Excel) ─── */}
-      {ingresos.length > 0 && (() => {
+      {ingresos.length > 0 && ingresosAbierto && (() => {
         const fmt = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const fmtF = (iso) => iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : ''
-        const totMXN = ingresos.filter(i => i.moneda !== 'USD').reduce((a, i) => a + (Number(i.monto) || 0), 0)
-        const totUSD = ingresos.filter(i => i.moneda === 'USD').reduce((a, i) => a + (Number(i.monto) || 0), 0)
-        const sinTipo = ingresos.filter(i => !i.tipo).length
         const setCampo = (id, patch) => setIngresos(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i))
         const celdaSt = { padding: '5px 8px', borderBottom: '1px solid rgba(148,163,184,0.12)', fontSize: 12, verticalAlign: 'middle' }
         const inp = { background: 'transparent', color: 'inherit', border: '1px solid transparent', borderRadius: 4, padding: '2px 4px', fontSize: 12, width: '100%', boxSizing: 'border-box' }
         return (
-          // La pantalla mide 100vh y la tabla de gastos (.table-wrap, flex: 1)
-          // toma el espacio que sobra: abierto, el panel lo comparte con ella
-          // (máximo 45 % de la altura, scroll propio) sin dejarla en cero.
+          // Vista "Ingresos": ocupa el lugar de la tabla de gastos (que se
+          // oculta), así se ve completa aunque la pantalla sea baja.
           <div style={{
-            margin: '0 24px 16px', borderRadius: 12, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(15,23,42,0.35)',
-            // Abierto comparte el espacio con la tabla de gastos (las dos flex: 1).
-            display: 'flex', flexDirection: 'column', overflow: 'hidden',
-            flex: ingresosAbierto ? '1 1 0' : '0 0 auto', maxHeight: ingresosAbierto ? '45vh' : undefined, minHeight: 0,
+            margin: '0 24px 24px', borderRadius: 20, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(15,23,42,0.35)',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: '1 1 0', minHeight: 320,
           }}>
-            <button onClick={() => setIngresosAbierto(v => !v)} style={{
-              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
-              padding: '12px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#e2e8f0', textAlign: 'left',
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: '#60A5FA' }}>
-                {ingresosAbierto ? '▾' : '▸'} Ingresos del reporte · {ingresos.length}
-                {sinTipo > 0 && <span style={{ marginLeft: 8, fontSize: 11, color: '#f59e0b' }}>{sinTipo} sin tipo</span>}
-              </span>
-              <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                ${fmt(totMXN)} MXN{totUSD ? ` + US$${fmt(totUSD)}` : ''} · van en la hoja "Ingresos" del Excel
-              </span>
-            </button>
-            {ingresosAbierto && (
-              <div style={{ overflow: 'auto', flex: 1, minHeight: 0, padding: '0 12px 12px' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', color: '#e2e8f0' }}>
+            {(
+              <div style={{ overflow: 'auto', flex: 1, minHeight: 0, padding: '4px 12px 12px' }}>
+                <table style={{ width: '100%', minWidth: 1100, tableLayout: 'auto', borderCollapse: 'collapse', color: '#e2e8f0' }}>
                   <thead>
                     <tr style={{ color: '#94a3b8', fontSize: 11, textAlign: 'left' }}>
                       {['F. PAGO', 'RFC', 'CLIENTE', 'TIPO', 'FACTURA', 'CONCEPTO', 'BANCO', 'MONTO', 'IVA', ''].map(h => <th key={h} style={{ ...celdaSt, fontWeight: 700, position: 'sticky', top: 0, background: '#13151A', zIndex: 1 }}>{h}</th>)}
