@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.09
+Current version: v9.10
 
 ## Stack
 
@@ -104,6 +104,14 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     (formato final) conserva fórmulas del crudo en Ingreso/Egreso
     ("=6000*1.16") sin valor calculado: el parser lee con `sheetStubs` y
     evalúa las fórmulas aritméticas (`valorCelda` en saldosCotejo.js).
+17. Ingresos (v9.10, solo Alejandro Olivar): el modal de Movimientos del banco
+    tiene pestañas Egresos / Ingresos. `ingresosDelMes` propone los depósitos
+    de las cuentas de cheques (cobros a clientes con factura "Fact N0465" y PO
+    del concepto, devoluciones, intereses, préstamos; nunca traspasos ni venta
+    de bonos) con cliente/RFC de `CLIENTES_INGRESOS`. Viven en el state
+    `ingresos` (NO en `lista`: no son gastos ni entran a KPIs) y se exportan a
+    la hoja "Ingresos" del Excel con el layout de contabilidad (B..L, T/C en
+    L1 ligado a 'Reporte SMTO'!R7). El import lee esa hoja de vuelta.
 
 ## Cómo agregar un colaborador
 
@@ -205,7 +213,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.09
+- Current: v9.10
 
 ## Things to be careful about
 

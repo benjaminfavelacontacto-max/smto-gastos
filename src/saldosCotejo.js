@@ -151,6 +151,7 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
           factura,
           concepto,
           egreso:   Number(getCell(r, cols.egreso)) || 0,
+          ingreso:  Number(getCell(r, cols.ingreso)) || 0,
           moneda,
         })
       }
@@ -861,4 +862,191 @@ export function movimientosSinFactura(saldosRows, lista, { mes, tcUSD = 0, busca
   }
   // Primero los que contabilidad agrega siempre, luego los opcionales; por fecha.
   return out.sort((a, b) => (b.marcado - a.marcado) || a.grupo.localeCompare(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
+}
+
+// ── Ingresos del mes ───────────────────────────────────────────────────────
+// Depósitos de las cuentas de cheques del Saldos que contabilidad captura en la
+// hoja "Ingresos" del reporte de Alejandro Olivar: cobros a clientes (la
+// factura emitida viene en el concepto: "Fact N0465"), devoluciones, intereses
+// y préstamos. Traspasos entre cuentas propias y venta de bonos no son ingreso.
+// Clientes y RFC tal como los registra contabilidad (hojas de junio y octubre
+// 2026). El primero que coincide gana: los más específicos van antes.
+const CLIENTES_INGRESOS = [
+  [/ANA TRADING/,                         'ANA TRADING CORP USA', 'NA'],
+  [/\bBCS\b/,                             'BCS-AIS ENSAMBLES MEXICO', 'TRW851211KD0', 'Consultoría'],
+  [/CARPLASTIC/,                          'CARPLASTIC', 'CAR8706226L8', 'Soldadura'],
+  [/CELESTICA/,                           'CELESTICA DE MONTERREY', 'CMO980416B81'],
+  [/COMPUTIME/,                           'COMPUTIME MEXICANA SOLUCIONES DE CONTROL', 'CMS210614SU8', 'Partes'],
+  [/\bCODEX\b|COORDINADORA Y DISENO/,     'COORDINADORA Y DISEÑO EN SOLUCIONES DE COMERCIO EXTERIOR', 'CDS041216MS3'],
+  [/COPELAND/,                            'COPELAND COMFORT CONTROL LP', 'NA', 'Consultoría'],
+  [/DESPACHOS CANO/,                      'DESPACHOS CANO', 'DCA140206116'],
+  [/DIEHL/,                               'DIEHL CONTROLS MEXICO', 'DCM030212ET4', 'Soldadura'],
+  [/\bDIRAM\b/,                           'DIRAM', 'DIR930703GJ4', 'Partes'],
+  [/ESSEMTEC/,                            'ESSEMTEC USA LLC', 'NA'],
+  [/FANCORT/,                             'FANCORT INDUSTRIES INC', 'NA', 'Comisiones'],
+  [/FLEX\w*\s+(MANUFACTURING\s+)?(AGUASCALIENTES|AGS)\b/, 'FLEXTRONICS MANUFACTURING AGUASCALIENTES', 'FMA000705HF9', 'Consultoría'],
+  [/FLEX\w*\s+MANUFACTURING/,             'FLEXTRONICS MANUFACTURING MEX', 'FMM9803095R4', 'Consultoría'],
+  [/FLEX\w*\s+TECHNOLOGIES/,              'FLEXTRONICS TECHNOLOGIES MÉXICO', 'SMM840503FQ4', 'Consultoría'],
+  [/FORNEY/,                              'FORNEY CORPORATION', 'NA', 'Equipo'],
+  [/FORSA/,                               'FORSA EXPRESS GUADALAJARA', 'FEG770328531'],
+  [/\bGPV\b/,                             'GPV AMERICAS MEXICO', 'GAM1606067K7', 'Partes'],
+  [/HOTELERA DE APODACA/,                 'HOTELERA DE APODACA', 'HAP9504215L5'],
+  [/\bIBG\b/,                             'IBG INTERNATIONAL SERVICES', 'IIS150121NE2'],
+  [/\bICT\b/,                             'ICT HOLDING CO LTD', 'NA', 'Consultoría'],
+  [/INGRASYS/,                            'INGRASYS TECHNOLOGY MEXICO', 'ITM210713AC0', 'Consultoría'],
+  [/\bISSA\b|INTEGRADORA DE SISTEMAS/,    'INTEGRADORA DE SISTEMAS Y SERVICIOS ADUANALES', 'ISS1004216Z9'],
+  [/JABIL\s+(CIRCUIT\s+)?(DE\s+)?(CHIHUAHUA|CHIH)\b/, 'JABIL CIRCUIT DE CHIHUAHUA', 'JCC000904KK2'],
+  [/JABIL\s+(DE\s+)?(MONTERREY|MTY)\b/,   'JABIL MONTERREY', 'JMO190130T20', 'Consultoría'],
+  [/JABIL/,                               'JABIL CIRCUIT DE MEXICO', 'JCM9701315Q6'],
+  [/LEVITON/,                             'LEVITON DE MEXICO', 'LME0003157U2', 'Consultoría'],
+  [/LPKF/,                                'LPKF LASER & ELECTRONICS', 'NA'],
+  [/MAGNA/,                               'MAGNA ELECTRONICS INC', 'NA', 'Equipo'],
+  [/MARELLI/,                             'MARELLI TOLUCA MEXICO', 'MMT150304BD1', 'Partes'],
+  [/MELECS/,                              'MELECS ELECTRONICS QUERETARO', 'PEQ100716IY9'],
+  [/METHODE/,                             'METHODE MEXICO', 'MME0108031L3', 'Consultoría'],
+  [/MEXKET/,                              'MEXKET', 'MEX201118673', 'Partes'],
+  [/ML\s*&\s*S/,                          'ML&S MEXICO', 'TDU160412UL6', 'Soldadura'],
+  [/MOLEX/,                               'MOLEX DE MEXICO', 'MME730507RR8', 'Partes'],
+  [/MOTORES ELECTRICOS/,                  'MOTORES ELECTRICOS SUMERGIBLES DE MEXICO', 'MES0204122KA', 'Partes'],
+  [/OPERADORA FALCON|XEPELIN/,            'OPERADORA FALCON', 'OFA200317L26', 'Préstamo'],
+  [/\bPCE\b|PARAGON/,                     'PCE PARAGON SOLUTIONS (MEXICO)', 'PPS080118T23', 'Consultoría'],
+  [/PLEXUS CORP/,                         'PLEXUS CORP', 'NA', 'Partes'],
+  [/PLEXUS/,                              'PLEXUS ELECTRONICA', 'PEL000523L12', 'Consultoría'],
+  [/PREEN/,                               'PREEN POWER', 'NA', 'Consultoría'],
+  [/REFIEL/,                              'REFIEL', 'REF2208125E6'],
+  [/ROCKWELL/,                            'ROCKWELL AUTOMATION MONTERREY MANUFACTURING', 'RAM070918578'],
+  [/SANMINA/,                             'SANMINA-SCI SYSTEMS DE MEXICO', 'SSM950412Q42'],
+  [/SCIENTIFIC ATLANTA/,                  'SCIENTIFIC ATLANTA DE MEXICO', 'SAM950112FU2', 'Consultoría'],
+  [/SERENDIPITY/,                         'SERENDIPITY', 'NA', 'Soldadura'],
+  [/SMTO INC/,                            'SMTO INC', 'NA', 'Partes'],
+  [/TEKTRONIX/,                           'TEKTRONIX', 'EK800414PFA'],
+  [/\bTORK\b/,                            'TORK ELECTRO SISTEMAS', 'TES8607033B6', 'Equipo'],
+  [/\bUBER\b/,                            'UBER', 'N/A'],
+  [/UNIVERSAL SCIENTIFIC|\bUSI\b/,        'UNIVERSAL SCIENTIFIC INDUSTRIAL DE MÉXICO', 'USI970903M23', 'Consultoría'],
+  [/VALLEN/,                              'VALLEN INTEGRATED SUPPLY INC', 'NA', 'Equipo'],
+  [/\bVIE TECH/,                          'VIE TECHNOLOGIES SDN BHD', 'NA', 'Comisiones'],
+  [/VITROX/,                              'VITROX TECHNOLOGIES SDN BHD', 'NA'],
+  // Personas que no están en el roster de empleados.
+  [/GARZA CANTU/,                         'JOSE CARLOS GARZA CANTU', 'GACC640518ID1'],
+  [/DUARTE MARTINEZ|HECTOR ALIM/,         'HECTOR ALIM DUARTE MARTINEZ', 'DUMH890817S35'],
+  [/TISOTO/,                              'JAMES TISOTO ROLDÁN', 'TIRJ841005U2A'],
+  [/\bBBVA\b|BANCOMER/,                   'BBVA BANCOMER', 'BBA830831LJ2'],
+  [/MONEX/,                               'BANCO MONEX', 'BMI9704113PA'],
+]
+const INGRESOS_EXCLUIDOS = /^(TRASPASO|BONOS?|VENTA BONOS?)$/
+export const TIPOS_INGRESO = ['Comisiones', 'Consultoría', 'Devolución', 'Equipo', 'Intereses', 'Nota de Crédito', 'Partes', 'Préstamo', 'Soldadura']
+
+const buscarCliente = (texto) => {
+  const t = sinAcentos(texto)
+  const hit = CLIENTES_INGRESOS.find(([re]) => re.test(t))
+  return hit ? { cliente: hit[1], rfc: hit[2], tipo: hit[3] || '' } : null
+}
+
+// Recalcula lo que el usuario corrige en el modal (cliente, RFC, tipo,
+// factura, concepto, fecha, monto en la moneda de la cuenta, IVA).
+export function aplicarEdicionIngreso(ing, ed) {
+  if (!ed) return ing
+  const out = { ...ing }
+  for (const k of ['cliente', 'rfc', 'tipo', 'factura', 'concepto']) {
+    if (ed[k] !== undefined) out[k] = String(ed[k]).trim() || (k === 'factura' ? 'NA' : ing[k])
+  }
+  if (ed.fecha) out.fecha = ed.fecha
+  if (ed.monto !== undefined) out.monto = r2(Number(ed.monto) || 0)
+  if (ed.conIva !== undefined) out.conIva = !!ed.conIva
+  return out
+}
+
+// Importe / IVA en la moneda de la cuenta (el Excel convierte USD con el T/C).
+export const desgloseIngreso = (ing) => {
+  const base = ing.conIva ? r2(ing.monto / 1.16) : r2(ing.monto)
+  return { importe: base, iva: r2(ing.monto - base), total: r2(ing.monto) }
+}
+
+export function ingresosDelMes(saldosRows, lista, ingresosActuales = [], { mes, buscarEmpleado } = {}) {
+  const { sinMatchSaldos } = cotejarConSaldos(saldosRows, lista)
+  const libres = new Set(sinMatchSaldos)
+  const delMes = saldosRows.filter(r =>
+    libres.has(r) &&
+    (Number(r.ingreso) || 0) > 0 &&
+    /CHEQUES/i.test(String(r.sheet || '')) &&
+    (saldosFechaToIso(r.fecha) || '').slice(0, 7) === mes &&
+    !INGRESOS_EXCLUIDOS.test(sinAcentos(r.tipo)) &&
+    !/^(TRASPASO|VENTA BONOS?)\b/.test(sinAcentos(r.concepto)))
+
+  const yaKeys = new Set(ingresosActuales.map(i => i.movKey).filter(Boolean))
+  // Un ingreso importado de un Excel anterior ya no trae su clave: se reconoce
+  // por fecha + banco + monto, o por fecha + factura (si se corrigió el monto).
+  const yaMismo = (fecha, sheet, monto, factura) => ingresosActuales.some(i =>
+    i.fecha === fecha && (
+      (String(i.banco || '').trim() === String(sheet || '').trim() && Math.abs((Number(i.monto) || 0) - monto) < 0.01) ||
+      (factura && factura !== 'NA' && String(i.factura || '').trim().toUpperCase() === factura.toUpperCase())))
+
+  const vistas = new Map()
+  const out = []
+  for (const r of delMes) {
+    const monto = r2(Number(r.ingreso) || 0)
+    const fecha = saldosFechaToIso(r.fecha)
+    const base = `ING|${r.sheet}|${fecha}|${String(r.folio || '').trim()}|${monto}|${String(r.concepto || '').trim()}`
+    const n = (vistas.get(base) || 0) + 1
+    vistas.set(base, n)
+    const key = `${base}#${n}`
+
+    const tipoS = sinAcentos(r.tipo)
+    const conc = String(r.concepto || '').trim()
+    const concU = sinAcentos(conc)
+    const fact = (conc.match(/\bFact\.?\s*([A-Z]{1,3}\d{3,6})\b/i) || [])[1]
+    const antesDeComa = conc.split(',')[0].trim()
+    const despuesDeComa = conc.includes(',') ? conc.slice(conc.indexOf(',') + 1).trim() : ''
+    const bancoCuenta = /^MONEX/i.test(r.sheet) ? buscarCliente('MONEX') : /^BBVA/i.test(r.sheet) ? buscarCliente('BBVA') : null
+
+    let grupo, marcado = true, tipo = '', factura = 'NA', concepto = conc, quien = null, conIva = false
+    if (tipoS === 'INTERESES' || /^INTERESES?\b/.test(concU)) {
+      grupo = 'Intereses'; tipo = 'Intereses'; concepto = 'Intereses'; quien = bancoCuenta
+    } else if (tipoS.startsWith('DEVOLUCION')) {
+      grupo = 'Devoluciones'; tipo = 'Devolución'
+      concepto = /NO COMPROBADO/.test(concU) ? 'Devolución Cargos No Comprobados' : (despuesDeComa || conc)
+      const emp = buscarEmpleado ? (buscarEmpleado(antesDeComa) || buscarEmpleado(antesDeComa.replace(/^DEV(OLUCION)?\s+/i, ''))) : null
+      quien = emp ? { cliente: emp.nombre.toUpperCase(), rfc: emp.rfc } : buscarCliente(conc)
+    } else if (tipoS.startsWith('PRESTAMO')) {
+      grupo = 'Préstamos'; tipo = 'Préstamo'; quien = buscarCliente(conc)
+    } else if (fact || tipoS === 'PAGO' || tipoS === 'PC') {
+      grupo = 'Cobros a clientes'
+      factura = fact || 'NA'
+      const po = (conc.match(/\bP[O0]\.?\s*([A-Z0-9][A-Z0-9\-\/]*)/i) || [])[1]
+      // Sin PO: lo que dice el concepto sin el nombre del cliente ni la factura
+      // ("ViTrox, Sales Comms Sep, Fact E2087" → "Sales Comms Sep").
+      const sinFact = (t) => t.replace(/,?\s*Fact\.?\s*[A-Z]{1,3}\d{3,6}.*$/i, '').replace(/,\s*$/, '').trim()
+      concepto = po ? `PO ${po}` : (sinFact(despuesDeComa) || sinFact(conc) || conc)
+      quien = buscarCliente(conc)
+      if (!quien && buscarEmpleado) {
+        const emp = buscarEmpleado(antesDeComa)
+        if (emp) quien = { cliente: emp.nombre.toUpperCase(), rfc: emp.rfc }
+      }
+      tipo = tipoS === 'PC' ? 'Equipo'
+        : /,\s*C\s*$/i.test(conc) ? 'Consultoría'
+        : /\bCOMM|COMISI/.test(concU) ? 'Comisiones'
+        : /CONSULT|RENTAL|\bRENTA\b|\bSMTA\b|EXPORT/.test(concU) ? 'Consultoría'
+        : (quien?.tipo || '')
+      // Las facturas nacionales (serie N) llevan IVA casi siempre; las de
+      // exportación (serie E) no. Se corrige con "Editar" si no aplica.
+      conIva = /^N/i.test(factura) && tipo !== 'Equipo'
+    } else {
+      grupo = 'Otros ingresos'; marcado = false; tipo = String(r.tipo || '').trim()
+      quien = buscarCliente(conc)
+    }
+    if (!quien) quien = { cliente: antesDeComa.toUpperCase(), rfc: '' }
+
+    out.push({
+      key, marcado, grupo,
+      yaAgregado: yaKeys.has(key) || yaMismo(fecha, r.sheet, monto, factura),
+      origen: { sheet: r.sheet, fecha, concepto: conc, ingreso: monto, moneda: r.moneda === 'USD' ? 'USD' : 'MXN', partes: 1 },
+      ingreso: {
+        movKey: key, rfc: quien.rfc || '', cliente: quien.cliente, tipo, factura,
+        fecha, concepto, banco: String(r.sheet || '').trim().replace(/\s+/g, ' '),
+        moneda: r.moneda === 'USD' ? 'USD' : 'MXN', monto, conIva,
+      },
+    })
+  }
+  const orden = ['Cobros a clientes', 'Devoluciones', 'Intereses', 'Préstamos', 'Otros ingresos']
+  return out.sort((a, b) => (b.marcado - a.marcado) || orden.indexOf(a.grupo) - orden.indexOf(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
 }
