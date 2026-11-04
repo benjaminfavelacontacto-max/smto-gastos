@@ -38,8 +38,31 @@ export function saldosFechaToIso(d) {
   return `${yyyy}-${mm}-${dd}`
 }
 
+// sheetStubs: el libro de Tesorería V1.7 conserva las fórmulas del crudo en
+// Ingreso/Egreso (ej. "=6000*1.16") y, como se generó por código, viene SIN el
+// valor calculado. Sin stubs SheetJS descarta esas celdas y el egreso se leía
+// en 0. Con stubs llegan como { t: 'z', f } y valorCelda() las evalúa.
 export const leerSaldosWorkbook = (arrayBuffer) =>
-  XLSX.read(arrayBuffer, { type: 'array', cellDates: true })
+  XLSX.read(arrayBuffer, { type: 'array', cellDates: true, sheetStubs: true })
+
+// Fórmulas aritméticas sin referencias (sólo números, + - * / % y paréntesis)
+// se pueden evaluar sin Excel. Cualquier otra fórmula sin valor guardado
+// queda vacía, igual que antes.
+const FORMULA_ARITMETICA = /^[\d.,+\-*/()% ]+$/
+const evaluarFormulaSimple = (f) => {
+  const expr = String(f || '').replace(/^=/, '').trim()
+  if (!expr || !FORMULA_ARITMETICA.test(expr) || expr.includes(',')) return undefined
+  try {
+    const n = Function(`"use strict"; return (${expr.replace(/(\d+(?:\.\d+)?)%/g, '($1/100)')})`)()
+    return Number.isFinite(n) ? n : undefined
+  } catch { return undefined }
+}
+const valorCelda = (cell) => {
+  if (!cell) return undefined
+  if (cell.t === 'z') return cell.f ? evaluarFormulaSimple(cell.f) : undefined
+  if (cell.v === undefined && cell.f) return evaluarFormulaSimple(cell.f)
+  return cell.v
+}
 
 // Acepta el ArrayBuffer del archivo o el workbook ya leído (leerSaldosWorkbook),
 // para no parsear dos veces un Saldos de varios MB.
@@ -50,7 +73,7 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
     const ws = wb.Sheets[sheetName]
     if (!ws || !ws['!ref']) continue
     const range = XLSX.utils.decode_range(ws['!ref'])
-    const getCell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })]?.v
+    const getCell = (r, c) => valorCelda(ws[XLSX.utils.encode_cell({ r, c })])
     // Texto FORMATEADO de la celda (.w), con fallback al valor crudo (.v). Se
     // usa para el folio de la póliza: Excel guarda "0036234032" como número
     // 36234032 pero lo MUESTRA con ceros a la izquierda vía formato; .v los
@@ -58,7 +81,7 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
     const getCellText = (r, c) => {
       const cell = ws[XLSX.utils.encode_cell({ r, c })]
       if (!cell) return ''
-      return String(cell.w ?? cell.v ?? '')
+      return String(cell.w ?? valorCelda(cell) ?? '')
     }
 
     // Encuentra TODAS las filas de header en la pestaña. Algunos archivos
@@ -66,23 +89,41 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
     // (ej. "BBVA MXN Cheques" trae Concentradora, Cheques SMTO Pesos, etc.).
     // Cada header inicia un bloque de datos que corre hasta el siguiente
     // header (o hasta el final de la pestaña).
+    //
+    // Sirve igual para el Saldos "crudo" y para el libro de Tesorería
+    // "Saldos 2026 Nuevo V1.6/V1.7": ese trae el resumen ARRIBA de cada pestaña y
+    // una sola tabla de movimientos con las mismas columnas A:G más Saldo,
+    // Categoría (y Titular en Clara). Los renglones en blanco entre años se
+    // saltan solos. En esas columnas extra la moneda no cuenta: la Categoría
+    // de un movimiento en pesos puede decir "Traspaso Cuenta USD Bancomer".
     const headers = []
     for (let r = range.s.r; r <= range.e.r; r++) {
       const v = (c) => String(getCell(r, c) || '').trim()
+      const conColumnasDeTesoreria = () => {
+        for (let c = 7; c <= Math.min(range.e.c, 20); c++) {
+          if (/^(SALDO|CATEGOR[IÍ]A|TITULAR)$/i.test(v(c))) return true
+        }
+        return false
+      }
       if (v(0) === 'Fecha' && v(1) === 'Tipo' && v(2) === 'Folio' && v(3) === 'Factura') {
-        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
+        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 },
+          colMaxMoneda: conColumnasDeTesoreria() ? 6 : 20 })
       } else if (v(0) === 'Fecha' && (v(1) === 'Desc' || v(1) === 'Descripción') && v(3) === 'Factura') {
-        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
+        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 },
+          colMaxMoneda: conColumnasDeTesoreria() ? 6 : 20 })
       }
     }
     if (headers.length === 0) continue
 
     for (let h = 0; h < headers.length; h++) {
-      const { row: hRow, cols } = headers[h]
+      const { row: hRow, cols, colMaxMoneda } = headers[h]
       const endRow = h + 1 < headers.length ? headers[h + 1].row - 1 : range.e.r
       for (let r = hRow + 1; r <= endRow; r++) {
         const factura = String(getCell(r, cols.factura) || '').trim()
-        const tipo    = String(getCell(r, cols.tipo) || '').trim()
+        // V1.6/V1.7 escriben "Sin clasificar" donde el crudo dejaba el tipo vacío:
+        // no es un tipo del reporte (no debe proponerse en discrepancias).
+        const tipoRaw = String(getCell(r, cols.tipo) || '').trim()
+        const tipo    = /^sin clasificar$/i.test(tipoRaw) ? '' : tipoRaw
         const concepto = String(getCell(r, cols.concepto) || '').trim()
         // Skip filas completamente vacías (sin tipo, factura, ni concepto)
         if (!factura && !tipo && !concepto) continue
@@ -97,7 +138,7 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
         // pestaña misma ("Monex USD Cheques", "BBVA USD Cheques") también
         // cuenta: sus renglones casi nunca repiten "USD" en las celdas.
         let moneda = /\bUSD\b/i.test(sheetName) ? 'USD' : 'MXN'
-        const colMax = Math.min(range.e.c, 20)
+        const colMax = Math.min(range.e.c, colMaxMoneda)
         for (let c = range.s.c; c <= colMax; c++) {
           const v = String(getCell(r, c) || '').toUpperCase()
           if (/\bUSD\b|\bD[ÓO]LAR/.test(v)) { moneda = 'USD'; break }

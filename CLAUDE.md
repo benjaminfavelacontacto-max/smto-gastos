@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.07
+Current version: v9.08
 
 ## Stack
 
@@ -92,6 +92,14 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     préstamos de nómina, no comprobados, ISR, Telcel) con el proveedor, RFC,
     IVA y T/C como los captura contabilidad (`movimientosSinFactura` en
     src/saldosCotejo.js). El resto de egresos sin factura sale como opcional.
+16. El Saldos se puede cargar en los dos formatos: el "crudo" (Saldos 2026 (N))
+    y el libro de Tesorería "Saldos 2026 Nuevo V1.x" (resumen arriba de cada
+    pestaña, columnas extra Saldo/Categoría/Titular, "Sin clasificar" = tipo
+    vacío). El V1.x no trae la tabla "Tipo Cambio": el T/C del mes se captura
+    en el campo de los modales de Cotejar / Movimientos del banco. El V1.7
+    (formato final) conserva fórmulas del crudo en Ingreso/Egreso
+    ("=6000*1.16") sin valor calculado: el parser lee con `sheetStubs` y
+    evalúa las fórmulas aritméticas (`valorCelda` en saldosCotejo.js).
 
 ## Cómo agregar un colaborador
 
@@ -193,7 +201,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.07
+- Current: v9.08
 
 ## Things to be careful about
 
