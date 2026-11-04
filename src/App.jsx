@@ -3185,7 +3185,12 @@ function PremiumModal({ open, type, title, subtitle, body, stats, primaryLabel, 
           <div className="premium-stats">
             {stats.map((s, i) => (
               <div key={i} className="premium-stat-card" style={{ animationDelay: `${i * 80}ms` }}>
-                <div className="premium-stat-value" style={{ color: s.color || accentColor }}>{s.value}</div>
+                <div className="premium-stat-value" style={{
+                  color: s.color || accentColor,
+                  // Montos largos ("$1,234,567.89") no caben a 28px en tarjetas
+                  // de ~130px y se enciman con la de al lado.
+                  fontSize: (() => { const n = String(s.value ?? '').length; return n <= 6 ? 28 : n <= 9 ? 22 : n <= 11 ? 18 : n <= 13 ? 15 : 13 })(),
+                }}>{s.value}</div>
                 <div className="premium-stat-label">{s.label}</div>
               </div>
             ))}

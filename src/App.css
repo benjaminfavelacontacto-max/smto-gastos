@@ -1087,10 +1087,11 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
   margin: 20px 0 24px;
 }
 .premium-stat-card {
+  min-width: 0;            /* que el monto no ensanche la tarjeta sobre la vecina */
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
-  padding: 16px 12px;
+  padding: 16px 8px;
   animation: statFadeIn 0.4s ease both;
   transition: all 0.2s;
 }
@@ -1104,6 +1105,8 @@ tbody { animation: fadeInUp 0.4s ease forwards; }
 }
 .premium-stat-value {
   font-size: 28px; font-weight: 700;
+  white-space: nowrap;      /* un monto no se parte en dos renglones */
+  font-variant-numeric: tabular-nums;
   line-height: 1; margin-bottom: 6px;
   letter-spacing: -0.02em;
 }
