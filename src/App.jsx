@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo, TIPO_RULES_RFC } from './tipoRules'
-import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura } from './saldosCotejo'
+import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura, ingresosDelMes, aplicarEdicionIngreso, desgloseIngreso, TIPOS_INGRESO, parseCuentasPorCobrar, completarIngresoConCxC } from './saldosCotejo'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -324,6 +324,7 @@ const aplicarEdicionMovimiento = (g, ed) => {
     if (ed[k] !== undefined && String(ed[k]).trim()) out[k] = String(ed[k]).trim()
   }
   if (ed.polizaNumero !== undefined) out.polizaNumero = String(ed.polizaNumero).trim() || 'N/A'
+  if (ed.noFactura !== undefined) out.noFactura = String(ed.noFactura).trim() || 'N/A'
   if (ed.fecha) { out.fechaFac = ed.fecha; out.fechaCobro = ed.fecha }
   if (ed.monto !== undefined || ed.conIva !== undefined) {
     const usd = !!g.esMonedaExtranjera
@@ -3184,7 +3185,12 @@ function PremiumModal({ open, type, title, subtitle, body, stats, primaryLabel, 
           <div className="premium-stats">
             {stats.map((s, i) => (
               <div key={i} className="premium-stat-card" style={{ animationDelay: `${i * 80}ms` }}>
-                <div className="premium-stat-value" style={{ color: s.color || accentColor }}>{s.value}</div>
+                <div className="premium-stat-value" style={{
+                  color: s.color || accentColor,
+                  // Montos largos ("$1,234,567.89") no caben a 28px en tarjetas
+                  // de ~130px y se enciman con la de al lado.
+                  fontSize: (() => { const n = String(s.value ?? '').length; return n <= 6 ? 28 : n <= 9 ? 22 : n <= 11 ? 18 : n <= 13 ? 15 : 13 })(),
+                }}>{s.value}</div>
                 <div className="premium-stat-label">{s.label}</div>
               </div>
             ))}
@@ -3317,6 +3323,7 @@ export default function App() {
   const saldosRef = useRef(null)
   const nominaRef = useRef(null)
   const movBancoRef = useRef(null)
+  const cxcRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
   // T/C USD del mes del reporte, leído de la tabla "Tipo Cambio" del Saldos
   // al cotejar ({ mes: '2026-10', tc: 18.4 }). Va al Excel como celda R7.
@@ -3331,6 +3338,23 @@ export default function App() {
   // solo el modal de Movimientos del banco (pagos IMSS, préstamos,
   // comisiones… que no tienen factura ni comprobante en el reporte).
   const [movBancoTrasCotejo, setMovBancoTrasCotejo] = useState(null)
+  // Ingresos del reporte (hoja "Ingresos" del Excel, como la lleva
+  // contabilidad): cobros a clientes, devoluciones, intereses, préstamos.
+  // Van aparte de `lista` porque no son gastos: no entran a KPIs ni totales.
+  // { id, movKey, rfc, cliente, tipo, factura, fecha, concepto, banco, moneda, monto, conIva }
+  const [ingresos, setIngresos] = useState([])
+  const [ingresosAbierto, setIngresosAbierto] = useState(false)
+  // "Cuentas por Cobrar 2026.xlsx" ya leído: { index, total, nombre }. Con él
+  // los ingresos toman cliente, RFC, tipo, IVA y el monto de la factura.
+  const [cxc, setCxc] = useState(null)
+  // Paso 2 de la secuencia (Cotejar con Saldos) ya aplicado a este reporte.
+  const [cotejoHecho, setCotejoHecho] = useState(false)
+  useEffect(() => { if (!lista.length) setCotejoHecho(false) }, [lista.length])
+  const ingresosParaExcel = () => ingresos.map(i => ({
+    rfc: i.rfc || '', cliente: i.cliente || '', tipo: i.tipo || '', factura: i.factura || 'NA',
+    fecha: i.fecha || '', concepto: i.concepto || '', banco: i.banco || '',
+    moneda: i.moneda === 'USD' ? 'USD' : 'MXN', monto: Number(i.monto) || 0, conIva: !!i.conIva,
+  }))
 
   // ── PremiumModal helpers ──
   const showModal  = (config) => setModal(config)
@@ -5320,7 +5344,7 @@ export default function App() {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA, tipoCambioUSD: tcSaldos?.tc || 0 }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA, tipoCambioUSD: tcSaldos?.tc || 0, ingresos: ingresosParaExcel() }),
       })
       if (response.ok) {
         const excelBlob = await response.blob()
@@ -5638,6 +5662,47 @@ export default function App() {
       } else {
         setLista(tagged)
       }
+      // Hoja "Ingresos" (reporte de Alejandro): se lee con sheetStubs porque
+      // el Excel generado trae fórmulas sin valor guardado (TOTAL, MONTO USD).
+      // Columnas B..L: RFC, CLIENTE, TIPO, FACTURA, IMPORTE, IVA, TOTAL,
+      // F. PAGO, CONCEPTO, BANCO, MONTO USD. En cuentas USD el monto es MONTO
+      // USD (literal); en pesos, IMPORTE + IVA.
+      if (wb.SheetNames.includes('Ingresos')) {
+        try {
+          const wbI = XLSX.read(arrayBuffer, { type: 'array', cellDates: true, sheetStubs: true, sheets: 'Ingresos' })
+          const wi = wbI.Sheets['Ingresos']
+          const celda = (r, c) => wi[XLSX.utils.encode_cell({ r, c })]
+          const valor = (r, c) => { const x = celda(r, c); return x && x.t !== 'z' ? x.v : undefined }
+          const leidos = []
+          let fila = 3
+          for (let r = 3; r <= 3000; r++) {
+            const cliente = String(valor(r, 2) ?? '').trim()
+            const banco = String(valor(r, 10) ?? '').trim()
+            if (!cliente && !banco) { if (r - fila > 3) break; continue }
+            fila = r
+            if (/^TOTAL/i.test(cliente)) break
+            const usd = /\bUSD\b/i.test(banco)
+            const importe = Number(valor(r, 5)) || 0
+            const ivaCelda = celda(r, 6)
+            const iva = Number(valor(r, 6)) || 0
+            const monto = usd ? (Number(valor(r, 11)) || 0) : Math.round((importe + iva) * 100) / 100
+            leidos.push({
+              id: genId(), movKey: '', rfc: String(valor(r, 1) ?? '').trim(), cliente,
+              tipo: String(valor(r, 3) ?? '').trim(), factura: String(valor(r, 4) ?? 'NA').trim() || 'NA',
+              fecha: parseDate(valor(r, 8)), concepto: String(valor(r, 9) ?? '').trim(), banco,
+              moneda: usd ? 'USD' : 'MXN', monto,
+              // USD: el IMPORTE es fórmula "…/1.16" cuando lleva IVA.
+              conIva: iva !== 0 || /\/\s*1\.16/.test(celda(r, 5)?.f || '') || /0?\.16/.test(ivaCelda?.f || ''),
+            })
+          }
+          if (action) setIngresos(prev => [...prev, ...leidos])
+          else setIngresos(leidos)
+        } catch (errIng) {
+          console.warn('Hoja Ingresos:', errIng)
+        }
+      } else if (!action) {
+        setIngresos([])
+      }
 
       // Premium success modal (count-up + progress bar + glow). Errors
       // still route through the generic PremiumModal via showModal().
@@ -5723,6 +5788,7 @@ export default function App() {
         }
       }))
       setCotejoModal({ result, decisions: {} })
+      setCotejoHecho(true)
       if (colaborador?.nombre === 'Alejandro Olivar') {
         const meses = mesesConEgresos(saldosRows)
         const mes = mesReporte || meses[0] || ''
@@ -5975,11 +6041,11 @@ export default function App() {
   // Campo "T/C USD del mes" de los modales de Saldos. Se llena solo con la
   // tabla "Tipo Cambio" del Saldos (formato crudo); el libro de Tesorería
   // V1.6 no la trae, así que aquí se captura. Es la celda de T/C del Excel.
-  const campoTipoCambio = (mesSugerido) => {
+  const campoTipoCambio = (mesSugerido, compacto = false) => {
     const tc = tcSaldos?.tc || ''
     const delSaldos = tcSaldos?.fuente === 'saldos' && tcSaldos?.tc > 0
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: compacto ? 0 : 10, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
         T/C USD del mes:
         <input
           type="number" step="0.0001" min="0" value={tc} placeholder="Ej. 18.40"
@@ -5992,7 +6058,7 @@ export default function App() {
         {delSaldos && <span style={{ color: '#59D39B' }}>tomado del Saldos</span>}
         {!tc && (
           <span style={{ color: '#f59e0b' }}>
-            El Saldos no trae la tabla de tipo de cambio: captúralo para que el Excel convierta los dólares.
+            {compacto ? 'captúralo para convertir los dólares' : 'El Saldos no trae la tabla de tipo de cambio: captúralo para que el Excel convierta los dólares.'}
           </span>
         )}
       </div>
@@ -6008,6 +6074,100 @@ export default function App() {
       .filter(ym => /^\d{4}-\d{2}$/.test(ym) && ym <= hoyYM))].sort().reverse()
   }
 
+  const completarItemsIng = (itemsIng, cxcData, ingresosActuales = ingresos) => {
+    if (!cxcData) return itemsIng
+    const out = []
+    for (const m of itemsIng) {
+      if (m.cxcInfo || m.esNC) { out.push(m); continue }
+      const r = completarIngresoConCxC(m.ingreso, cxcData)
+      if (!r) { out.push(m); continue }
+      out.push({ ...m, ingreso: r.ingreso, cxcInfo: { cambios: r.cambios, revisar: r.revisar } })
+      const nc = r.notaCredito
+      if (nc && !ingresosActuales.some(i => String(i.factura).toUpperCase() === nc.factura.toUpperCase())) {
+        out.push({
+          key: `${m.key}|NC`, marcado: m.marcado, grupo: 'Notas de crédito', esNC: true, yaAgregado: false,
+          origen: { ...m.origen, concepto: `Aplicada al cobro de la factura ${m.ingreso.factura}` },
+          ingreso: nc, cxcInfo: { cambios: [], revisar: '' },
+        })
+      }
+    }
+    return out
+  }
+  // Lo mismo para los ingresos que ya están en el reporte.
+  const completarIngresosReporte = (lst, cxcData) => {
+    const out = []
+    const resumen = { completados: 0, montos: 0, notas: 0, revisar: [] }
+    for (const i of lst) {
+      if (i.tipo === 'Nota de Crédito') { out.push(i); continue }
+      const r = completarIngresoConCxC(i, cxcData)
+      if (!r) { out.push(i); continue }
+      if (r.cambios.length) resumen.completados++
+      if (r.cambios.includes('monto de la factura')) resumen.montos++
+      if (r.revisar) resumen.revisar.push(r.revisar)
+      out.push({ ...r.ingreso, revisarCxC: r.revisar || '' })
+      const nc = r.notaCredito
+      if (nc && ![...lst, ...out].some(x => String(x.factura).toUpperCase() === nc.factura.toUpperCase())) {
+        out.push({ ...nc, id: genId() })
+        resumen.notas++
+      }
+    }
+    return { lista: out, resumen }
+  }
+
+  const handleCxcFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const data = parseCuentasPorCobrar(XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true }))
+      if (!data.total) {
+        showModal({ type: 'error', title: 'Cuentas por Cobrar sin facturas', subtitle: 'No encontré la pestaña "Facturas" con las columnas Invoice / Customer / RFC / Nat / Type.', primaryLabel: 'Entendido' })
+        return
+      }
+      const cxcData = { ...data, nombre: file.name }
+      setCxc(cxcData)
+      // Ingresos ya agregados al reporte.
+      const { lista: nuevosIng, resumen } = completarIngresosReporte(ingresos, cxcData)
+      setIngresos(nuevosIng.sort((x, y) => String(x.fecha).localeCompare(String(y.fecha))))
+      // Ingresos propuestos en el modal abierto.
+      let enModal = null
+      if (movBancoModal?.itemsIng) {
+        const items = completarItemsIng(movBancoModal.itemsIng, cxcData, nuevosIng)
+        const nCompletados = items.filter(m => m.cxcInfo && !m.esNC && m.cxcInfo.cambios.length).length
+        const nNC = items.filter(m => m.esNC).length
+        const nRevisar = items.filter(m => m.cxcInfo?.revisar).length
+        const nSin = items.filter(m => !m.cxcInfo && m.ingreso.factura && m.ingreso.factura !== 'NA').length
+        enModal = { nCompletados, nNC, nRevisar, nSin }
+        setMovBancoModal(prev => prev && ({
+          ...prev, itemsIng: items,
+          sel: { ...prev.sel, ...Object.fromEntries(items.filter(m => m.esNC && !(m.key in prev.sel)).map(m => [m.key, !!prev.sel[m.key.replace(/\|NC$/, '')]])) },
+          cxcResumen: `${file.name}: ${nCompletados} ingreso${nCompletados === 1 ? '' : 's'} completado${nCompletados === 1 ? '' : 's'} con su factura`
+            + (nNC ? `, ${nNC} nota${nNC === 1 ? '' : 's'} de crédito agregada${nNC === 1 ? '' : 's'}` : '')
+            + (nRevisar ? `, ${nRevisar} para revisar` : '')
+            + (nSin ? `, ${nSin} con factura que no está en el archivo` : '') + '.',
+        }))
+      }
+      if (!enModal) {
+        showModal({
+          type: resumen.revisar.length ? 'warning' : 'success',
+          title: 'Cuentas por Cobrar cargadas',
+          subtitle: `${data.total} facturas leídas. ${ingresos.length ? 'Completé los ingresos del reporte con su factura (cliente, RFC, tipo, IVA y monto); los' : 'Los'} que agregues desde el Saldos también la toman.`
+            + (resumen.revisar.length ? ` Revisa: ${resumen.revisar.join(' · ')}` : ''),
+          stats: [
+            { value: resumen.completados, label: 'Ingresos completados', color: '#60A5FA' },
+            ...(resumen.montos ? [{ value: resumen.montos, label: 'Montos de la factura', color: 'rgba(255,255,255,0.85)' }] : []),
+            ...(resumen.notas ? [{ value: `+${resumen.notas}`, label: 'Notas de crédito', color: '#f59e0b' }] : []),
+          ],
+          primaryLabel: 'Continuar',
+        })
+      }
+    } catch (err) {
+      console.warn('handleCxcFile:', err)
+      showModal({ type: 'error', title: 'Error leyendo Cuentas por Cobrar', subtitle: err.message || 'No se pudo leer el archivo.', primaryLabel: 'Entendido' })
+    } finally {
+      e.target.value = ''
+    }
+  }
+
   // Calcula (o recalcula al cambiar de mes) los movimientos propuestos.
   const abrirMovimientosBanco = ({ saldosRows, tcPorMes, meses, mes, trasCotejo = false }) => {
     const tcMes = tcPorMes[mes.slice(5, 7)]
@@ -6015,9 +6175,13 @@ export default function App() {
     const items = movimientosSinFactura(saldosRows, lista, {
       mes, tcUSD: tcMes || tcSaldos?.tc || 0, buscarEmpleado: matchEmpleadoByShortName,
     }).filter(m => !m.yaAgregado)
+    const itemsIng = completarItemsIng(ingresosDelMes(saldosRows, lista, ingresos, {
+      mes, buscarEmpleado: matchEmpleadoByShortName,
+    }).filter(m => !m.yaAgregado), cxc)
     setMovBancoModal(prev => ({
-      saldosRows, tcPorMes, meses, mes, label: etiquetaMes(mes), items,
-      sel: Object.fromEntries(items.map(m => [m.key, m.marcado])),
+      saldosRows, tcPorMes, meses, mes, label: etiquetaMes(mes), items, itemsIng,
+      vista: prev?.vista || 'egresos',
+      sel: Object.fromEntries([...items, ...itemsIng].map(m => [m.key, m.marcado])),
       // Las correcciones se guardan por movimiento: sobreviven al cambio de mes.
       edits: prev?.edits || {}, editando: null,
       trasCotejo: trasCotejo || !!prev?.trasCotejo,
@@ -6064,26 +6228,38 @@ export default function App() {
 
   const agregarMovimientosBanco = () => {
     if (!movBancoModal) return
-    const elegidos = movBancoModal.items.filter(m => movBancoModal.sel[m.key])
+    const { items = [], itemsIng = [], sel = {}, edits = {}, label } = movBancoModal
+    const elegidos = items.filter(m => sel[m.key])
+    const elegidosIng = itemsIng.filter(m => sel[m.key])
     setMovBancoModal(null)
-    if (elegidos.length === 0) return
-    const editados = elegidos.filter(m => movBancoModal.edits?.[m.key]).length
+    if (elegidos.length + elegidosIng.length === 0) return
+    const editados = [...elegidos, ...elegidosIng].filter(m => edits[m.key]).length
     const nuevos = elegidos.map(m => ({
-      ...aplicarEdicionMovimiento(m.gasto, movBancoModal.edits?.[m.key]),
+      ...aplicarEdicionMovimiento(m.gasto, edits[m.key]),
       id: genId(), uuid: crypto.randomUUID(), isNew: true,
     }))
-    setLista(prev => [...prev, ...nuevos])
-    const total = nuevos.reduce((s, g) => s + (g.totalCFDI || 0), 0)
-    const enUsd = nuevos.filter(g => g.esMonedaExtranjera).length
+    const nuevosIng = elegidosIng.map(m => ({ ...aplicarEdicionIngreso(m.ingreso, edits[m.key]), revisarCxC: m.cxcInfo?.revisar || '', id: genId() }))
+    if (nuevos.length) setLista(prev => [...prev, ...nuevos])
+    if (nuevosIng.length) setIngresos(prev => [...prev, ...nuevosIng].sort((x, y) => String(x.fecha).localeCompare(String(y.fecha))))
+    const fmtMx = (n) => '$' + n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const total = nuevos.reduce((acc, g) => acc + (g.totalCFDI || 0), 0)
+    const enUsd = nuevos.filter(g => g.esMonedaExtranjera).length + nuevosIng.filter(i => i.moneda === 'USD').length
+    const sinTipo = nuevosIng.filter(i => !i.tipo).length
+    const partes = [
+      nuevos.length ? `${nuevos.length} egreso${nuevos.length === 1 ? '' : 's'}` : '',
+      nuevosIng.length ? `${nuevosIng.length} ingreso${nuevosIng.length === 1 ? '' : 's'} (hoja "Ingresos" del Excel)` : '',
+    ].filter(Boolean).join(' y ')
     showModal({
       type: 'success',
-      title: `Movimientos de ${movBancoModal.label} agregados`,
-      subtitle: `${nuevos.length} movimiento${nuevos.length === 1 ? '' : 's'} del banco agregado${nuevos.length === 1 ? '' : 's'} al reporte.`
+      title: `Movimientos de ${label} agregados`,
+      subtitle: `${partes} agregado${nuevos.length + nuevosIng.length === 1 ? '' : 's'} al reporte.`
         + (editados ? ` ${editados} con tus correcciones.` : '')
-        + (enUsd ? ` ${enUsd} en dólares se convierten con el T/C del Excel.` : ''),
+        + (enUsd ? ` ${enUsd} en dólares se convierten con el T/C del Excel.` : '')
+        + (sinTipo ? ` ${sinTipo} ingreso${sinTipo === 1 ? '' : 's'} sin tipo: corrígelo en la lista de ingresos.` : ''),
       stats: [
-        { value: `+${nuevos.length}`, label: 'Movimientos', color: '#59D39B' },
-        { value: `$${total.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, label: 'Total MXN', color: 'rgba(255,255,255,0.85)' },
+        ...(nuevos.length ? [{ value: `+${nuevos.length}`, label: 'Egresos', color: '#59D39B' }] : []),
+        ...(nuevos.length ? [{ value: fmtMx(total), label: 'Egresos MXN', color: 'rgba(255,255,255,0.85)' }] : []),
+        ...(nuevosIng.length ? [{ value: `+${nuevosIng.length}`, label: 'Ingresos', color: '#60A5FA' }] : []),
       ],
       primaryLabel: 'Continuar',
     })
@@ -6185,7 +6361,7 @@ export default function App() {
       const response = await fetch('/api/export-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA, tipoCambioUSD: tcSaldos?.tc || 0 }),
+        body: JSON.stringify({ gastos: gastosSlim, colaborador: colaborador?.nombre || '', polizaNumero: POLIZAS_CLARA[colaborador?.nombre] || 'N/A', polizasMap: POLIZAS_CLARA, tipoCambioUSD: tcSaldos?.tc || 0, ingresos: ingresosParaExcel() }),
       })
       if (!response.ok) {
         try {
@@ -6271,7 +6447,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.09</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.10</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6315,18 +6491,21 @@ export default function App() {
       <div className="divider" />
 
       {/* ─── BARRA DE ACCIONES ─── */}
-      <div className="action-bar">
-        <div className="action-group">
-          <PremiumButton title="Manual"         icon="＋"  variant="ghost"     onClick={agregarManual} />
+      {(() => {
+        const esAlejandro = colaborador?.nombre === 'Alejandro Olivar'
+        const esEspecial = COLABORADORES_ESPECIALES.includes(colaborador?.nombre)
+        const iconoCheck = (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        )
+        const btnManual = <PremiumButton title="Manual" icon="＋" variant="ghost" onClick={agregarManual} />
+        const btnImportar = (
           <PremiumButton
             title={importSuccess ? 'Importado' : 'Importar reporte'}
             variant={importSuccess ? 'success' : 'ghost'}
             onClick={() => document.getElementById('import-xlsx-input').click()}
-            icon={importSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            ) : (
+            icon={importSuccess ? iconoCheck : (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                 <polyline points="17 8 12 3 7 8"/>
@@ -6334,99 +6513,128 @@ export default function App() {
               </svg>
             )}
           />
-          <input
-            id="import-xlsx-input"
-            type="file"
-            accept=".xlsx"
-            style={{ display: 'none' }}
-            onChange={handleImportExcel}
-          />
-          <PremiumButton
-            id="tour-carpeta"
-            title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
-            variant={carpetaSuccess ? 'success' : 'primary'}
-            onClick={() => folderRef.current?.click()}
-            icon={carpetaSuccess ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+        )
+        const btnFoto = <PremiumButton title="Cargar Foto" icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
+        const btnBanco = <PremiumButton id="tour-banco" title="Validar Banco" icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
+        const contador = (() => {
+          const total = lista.length
+          const validados = lista.filter(g => g.validado).length
+          const allDone = total > 0 && validados === total
+          return total > 0 ? (
+            <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-              </svg>
-            )}
-          />
-          <PremiumButton title="Cargar Foto"    icon="📸" variant="secondary" onClick={() => setShowPhotoChoice(true)} />
-          <PremiumButton id="tour-banco" title="Validar Banco"  icon="🏦" variant="secondary" onClick={() => bancoRef.current?.click()} />
-          {COLABORADORES_ESPECIALES.includes(colaborador?.nombre) && (
-            <PremiumButton
-              title="Cotejar con Saldos"
-              icon="🔍"
-              variant="secondary"
-              isDisabled={!lista.length}
-              onClick={() => saldosRef.current?.click()}
-            />
-          )}
-          {colaborador?.nombre === 'Alejandro Olivar' && (
-            <PremiumButton
-              title="Agregar Nómina"
-              icon="👥"
-              variant="secondary"
-              onClick={() => nominaRef.current?.click()}
-            />
-          )}
-          {colaborador?.nombre === 'Alejandro Olivar' && (
-            <PremiumButton
-              title="Movimientos del banco"
-              icon="🧾"
-              variant="secondary"
-              onClick={() => movBancoRef.current?.click()}
-            />
-          )}
-          <input
-            ref={saldosRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleSaldosFile}
-          />
-          <input
-            ref={nominaRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleNominaFile}
-          />
-          <input
-            ref={movBancoRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={handleMovimientosBancoFile}
-          />
-          {(() => {
-            const total = lista.length
-            const validados = lista.filter(g => g.validado).length
-            const allDone = total > 0 && validados === total
-            return total > 0 ? (
-              <div className={`validacion-counter${allDone ? ' all-done' : ''}`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <span>
-                  {allDone
-                    ? `✓ ${total} facturas validadas`
-                    : `${validados} / ${total} validadas`}
-                </span>
+              <span>{allDone ? `✓ ${total} facturas validadas` : `${validados} / ${total} validadas`}</span>
+            </div>
+          ) : null
+        })()
+        const exportar2 = (
+          <div className="action-group">
+            <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
+            <PremiumButton id="tour-zip" title="Exportar a ZIP" icon="📦" variant="export" isDisabled={!lista.length} onClick={exportar} />
+          </div>
+        )
+        const inputs = (
+          <>
+            <input id="import-xlsx-input" type="file" accept=".xlsx" style={{ display: 'none' }} onChange={handleImportExcel} />
+            <input ref={cxcRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleCxcFile} />
+            <input ref={saldosRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleSaldosFile} />
+            <input ref={nominaRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleNominaFile} />
+            <input ref={movBancoRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleMovimientosBancoFile} />
+          </>
+        )
+
+        // Perfiles normales: la barra de siempre.
+        if (!esEspecial) {
+          return (
+            <div className="action-bar">
+              <div className="action-group">
+                {btnManual}
+                {btnImportar}
+                <PremiumButton
+                  id="tour-carpeta"
+                  title={carpetaSuccess ? 'Cargado' : 'Cargar Carpeta'}
+                  variant={carpetaSuccess ? 'success' : 'primary'}
+                  onClick={() => folderRef.current?.click()}
+                  icon={carpetaSuccess ? iconoCheck : (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                    </svg>
+                  )}
+                />
+                {btnFoto}
+                {btnBanco}
+                {inputs}
+                {contador}
               </div>
-            ) : null
-          })()}
-        </div>
-        <div className="action-group">
-          <PremiumButton title="Exportar a Excel" icon="📊" variant="primary" isDisabled={!lista.length} onClick={exportarExcel} />
-          <PremiumButton id="tour-zip" title="Exportar a ZIP"  icon="📦" variant="export"  isDisabled={!lista.length} onClick={exportar} />
-        </div>
-      </div>
+              {exportar2}
+            </div>
+          )
+        }
+
+        // Perfiles especiales: la secuencia numerada del reporte arriba y las
+        // herramientas sueltas abajo. Cada paso se pone en verde al terminarlo
+        // y el siguiente pendiente se resalta.
+        const pasos = [
+          { id: 'tour-carpeta', icono: '📁', titulo: 'Cargar Carpeta', hint: 'XML y PDF de las facturas',
+            hecho: lista.some(g => !g.esNomina && !g.esMovimientoBanco), onClick: () => folderRef.current?.click() },
+          { icono: '🔍', titulo: 'Cotejar con Saldos', hint: 'Pólizas, banco y movimientos sin factura',
+            hecho: cotejoHecho, bloqueado: !lista.length, onClick: () => saldosRef.current?.click() },
+          ...(esAlejandro ? [
+            { icono: '👥', titulo: 'Agregar Nómina', hint: 'Nóminas del mes desde el Saldos',
+              hecho: lista.some(g => g.esNomina), onClick: () => nominaRef.current?.click() },
+            { icono: '📒', titulo: 'Cuentas por Cobrar', hint: 'Cliente, RFC, tipo e IVA de los ingresos',
+              hecho: !!cxc, onClick: () => cxcRef.current?.click() },
+          ] : []),
+        ]
+        const siguiente = pasos.findIndex(x => !x.hecho)
+        return (
+          <div className="action-bar action-bar-flujo">
+            <div className="flujo">
+              <div className="flujo-titulo">
+                Secuencia del reporte
+                <span>{pasos.filter(x => x.hecho).length} de {pasos.length} pasos</span>
+              </div>
+              <div className="flujo-pasos">
+                {pasos.map((x, i) => (
+                  <div key={x.titulo} className="flujo-item">
+                    {i > 0 && <div className={`flujo-linea${pasos[i - 1].hecho ? ' hecha' : ''}`} />}
+                    <button
+                      id={x.id}
+                      className={`flujo-paso${x.hecho ? ' hecho' : ''}${i === siguiente ? ' actual' : ''}${x.bloqueado ? ' bloqueado' : ''}`}
+                      onClick={x.bloqueado ? undefined : x.onClick}
+                      disabled={x.bloqueado}
+                      title={x.bloqueado ? 'Primero carga la carpeta' : x.hint}
+                    >
+                      <span className="flujo-num">{x.hecho ? '✓' : i + 1}</span>
+                      <span className="flujo-texto">
+                        <span className="flujo-nombre"><span className="flujo-icono">{x.icono}</span>{x.titulo}</span>
+                        <span className="flujo-hint">{x.hint}</span>
+                      </span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="herramientas-fila">
+              <div className="action-group">
+                <span className="herramientas-titulo">Herramientas</span>
+                {btnManual}
+                {btnImportar}
+                {btnFoto}
+                {btnBanco}
+                {esAlejandro && (
+                  <PremiumButton title="Movimientos del banco" icon="🧾" variant="ghost" onClick={() => movBancoRef.current?.click()} />
+                )}
+                {inputs}
+                {contador}
+              </div>
+              {exportar2}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ─── BARRA DE MÉTRICAS ─── */}
       <div className="metrics-bar">
@@ -6637,6 +6845,77 @@ export default function App() {
           </table>
         )}
       </div>
+
+      {/* ─── INGRESOS DEL REPORTE (hoja "Ingresos" del Excel) ─── */}
+      {ingresos.length > 0 && (() => {
+        const fmt = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const fmtF = (iso) => iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : ''
+        const totMXN = ingresos.filter(i => i.moneda !== 'USD').reduce((a, i) => a + (Number(i.monto) || 0), 0)
+        const totUSD = ingresos.filter(i => i.moneda === 'USD').reduce((a, i) => a + (Number(i.monto) || 0), 0)
+        const sinTipo = ingresos.filter(i => !i.tipo).length
+        const setCampo = (id, patch) => setIngresos(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i))
+        const celdaSt = { padding: '5px 8px', borderBottom: '1px solid rgba(148,163,184,0.12)', fontSize: 12, verticalAlign: 'middle' }
+        const inp = { background: 'transparent', color: 'inherit', border: '1px solid transparent', borderRadius: 4, padding: '2px 4px', fontSize: 12, width: '100%', boxSizing: 'border-box' }
+        return (
+          // La pantalla mide 100vh y la tabla de gastos (.table-wrap, flex: 1)
+          // toma el espacio que sobra: abierto, el panel lo comparte con ella
+          // (máximo 45 % de la altura, scroll propio) sin dejarla en cero.
+          <div style={{
+            margin: '0 24px 16px', borderRadius: 12, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(15,23,42,0.35)',
+            // Abierto comparte el espacio con la tabla de gastos (las dos flex: 1).
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            flex: ingresosAbierto ? '1 1 0' : '0 0 auto', maxHeight: ingresosAbierto ? '45vh' : undefined, minHeight: 0,
+          }}>
+            <button onClick={() => setIngresosAbierto(v => !v)} style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+              padding: '12px 16px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#e2e8f0', textAlign: 'left',
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#60A5FA' }}>
+                {ingresosAbierto ? '▾' : '▸'} Ingresos del reporte · {ingresos.length}
+                {sinTipo > 0 && <span style={{ marginLeft: 8, fontSize: 11, color: '#f59e0b' }}>{sinTipo} sin tipo</span>}
+              </span>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                ${fmt(totMXN)} MXN{totUSD ? ` + US$${fmt(totUSD)}` : ''} · van en la hoja "Ingresos" del Excel
+              </span>
+            </button>
+            {ingresosAbierto && (
+              <div style={{ overflow: 'auto', flex: 1, minHeight: 0, padding: '0 12px 12px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', color: '#e2e8f0' }}>
+                  <thead>
+                    <tr style={{ color: '#94a3b8', fontSize: 11, textAlign: 'left' }}>
+                      {['F. PAGO', 'RFC', 'CLIENTE', 'TIPO', 'FACTURA', 'CONCEPTO', 'BANCO', 'MONTO', 'IVA', ''].map(h => <th key={h} style={{ ...celdaSt, fontWeight: 700, position: 'sticky', top: 0, background: '#13151A', zIndex: 1 }}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ingresos.map(i => (
+                      <tr key={i.id}>
+                        <td style={{ ...celdaSt, whiteSpace: 'nowrap' }}>{fmtF(i.fecha)}</td>
+                        <td style={{ ...celdaSt, minWidth: 110 }}><input style={inp} value={i.rfc} onChange={e => setCampo(i.id, { rfc: e.target.value.toUpperCase() })} /></td>
+                        <td style={{ ...celdaSt, minWidth: 200 }}><input style={inp} value={i.cliente} onChange={e => setCampo(i.id, { cliente: e.target.value })} /></td>
+                        <td style={{ ...celdaSt, minWidth: 110 }}>
+                          <input style={{ ...inp, borderColor: i.tipo ? 'transparent' : '#f59e0b' }} list="ingresos-tipos" placeholder="Falta tipo" value={i.tipo} onChange={e => setCampo(i.id, { tipo: e.target.value })} />
+                        </td>
+                        <td style={{ ...celdaSt, minWidth: 70 }}><input style={inp} value={i.factura} onChange={e => setCampo(i.id, { factura: e.target.value })} /></td>
+                        <td style={{ ...celdaSt, minWidth: 180 }}><input style={inp} value={i.concepto} onChange={e => setCampo(i.id, { concepto: e.target.value })} /></td>
+                        <td style={{ ...celdaSt, whiteSpace: 'nowrap', color: '#94a3b8' }}>{i.banco}</td>
+                        <td title={i.revisarCxC || ''} style={{ ...celdaSt, whiteSpace: 'nowrap', textAlign: 'right', color: i.revisarCxC ? '#f59e0b' : (i.monto < 0 ? '#F87171' : '#60A5FA'), fontWeight: 700 }}>{i.revisarCxC ? '⚠ ' : ''}{i.monto < 0 ? '−' : ''}{i.moneda === 'USD' ? 'US$' : '$'}{fmt(Math.abs(i.monto))}</td>
+                        <td style={celdaSt}><input type="checkbox" checked={!!i.conIva} onChange={e => setCampo(i.id, { conIva: e.target.checked })} title="Incluye IVA 16%" /></td>
+                        <td style={celdaSt}>
+                          <button onClick={() => setIngresos(prev => prev.filter(x => x.id !== i.id))} title="Quitar del reporte"
+                            style={{ background: 'transparent', border: '1px solid rgba(248,113,113,0.4)', color: '#F87171', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}>
+                            Quitar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <datalist id="ingresos-tipos">{TIPOS_INGRESO.map(t => <option key={t} value={t} />)}</datalist>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* ─── PREMIUM MODAL (info / warning / error / confirm) ─── */}
       {modal && (
@@ -7026,13 +7305,18 @@ export default function App() {
       })()}
 
       {movBancoModal && (() => {
-        const { label, items = [], sel = {}, meses = [], mes = '', saldosRows = [], tcPorMes = {}, edits = {}, editando = null, trasCotejo = false } = movBancoModal
+        const { label, items: itemsEg = [], itemsIng = [], vista = 'egresos', sel = {}, meses = [], mes = '', saldosRows = [], tcPorMes = {}, edits = {}, editando = null, trasCotejo = false } = movBancoModal
+        const esIng = vista === 'ingresos'
+        const items = esIng ? itemsIng : itemsEg
         const fmt = (n) => Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const fmtF = (iso) => iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : ''
         const setSel = (patch) => setMovBancoModal(prev => ({ ...prev, sel: { ...prev.sel, ...patch } }))
+        // Los botones de selección masiva actúan sólo sobre la vista actual.
         const marcarTodos = (v, soloRecomendados = false) =>
           setSel(Object.fromEntries(items.map(m => [m.key, soloRecomendados ? m.marcado : v])))
-        const elegidos = items.filter(m => sel[m.key])
+        const elegidosEg = itemsEg.filter(m => sel[m.key])
+        const elegidosIng = itemsIng.filter(m => sel[m.key])
+        const elegidos = esIng ? elegidosIng : elegidosEg
         const recomendados = items.filter(m => m.marcado)
         const opcionales = items.filter(m => !m.marcado)
         const grupos = (lst) => {
@@ -7047,39 +7331,64 @@ export default function App() {
           const { [key]: _, ...resto } = prev.edits || {}
           return { ...prev, edits: resto, editando: null }
         })
-        const tiposSugeridos = [...new Set([...TIPOS_NORMALES, ...items.map(m => m.gasto.tipo)].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'))
+        const tiposEg = [...new Set([...TIPOS_NORMALES, ...itemsEg.map(m => m.gasto.tipo)].filter(Boolean))].sort((x, y) => x.localeCompare(y, 'es'))
+        const tiposIng = [...new Set([...TIPOS_INGRESO, ...itemsIng.map(m => m.ingreso.tipo)].filter(Boolean))].sort((x, y) => x.localeCompare(y, 'es'))
+        // Vista unificada de un egreso o un ingreso con sus correcciones.
+        const ver = (m) => {
+          if (m.ingreso) {
+            const i = aplicarEdicionIngreso(m.ingreso, edits[m.key])
+            return {
+              obj: i, nombre: i.cliente, tipo: i.tipo, concepto: i.concepto, fecha: i.fecha,
+              detalle: `${m.origen.sheet} · factura ${i.factura || 'NA'}${m.cxcInfo && !m.esNC ? ' · de Cuentas por Cobrar' : ''}`,
+              revisar: m.cxcInfo?.revisar || '',
+              usd: i.moneda === 'USD', monto: i.monto, desg: desgloseIngreso(i), conIva: i.conIva,
+            }
+          }
+          const g = aplicarEdicionMovimiento(m.gasto, edits[m.key])
+          const usd = !!g.esMonedaExtranjera
+          return {
+            obj: g, nombre: g.proveedor, tipo: g.tipo, concepto: g.concepto || m.origen.concepto, fecha: g.fechaFac,
+            detalle: `${m.origen.sheet} · póliza ${g.polizaNumero}${g.noFactura && g.noFactura !== 'N/A' ? ` · factura ${g.noFactura}` : ''}`,
+            usd, monto: usd ? g.montoExtranjero : g.totalCFDI, conIva: (usd ? g.ivaUSD : g.iva) > 0,
+            desg: { importe: usd ? g.importeUSD : g.importe, iva: usd ? g.ivaUSD : g.iva, total: usd ? g.montoExtranjero : g.totalCFDI },
+          }
+        }
         const inputSt = { width: '100%', boxSizing: 'border-box', background: 'rgba(15,23,42,0.6)', color: '#e2e8f0', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: '5px 8px', fontSize: 12 }
         const campo = (texto, control, ancho = 1) => (
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, gridColumn: `span ${ancho}` }}>
+          <label key={texto} style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, gridColumn: `span ${ancho}` }}>
             {texto}{control}
           </label>
         )
-        const editor = (m, g) => {
-          const usd = !!m.gasto.esMonedaExtranjera
+        const editor = (m, v) => {
           const ed = edits[m.key] || {}
-          const monto = ed.monto ?? (usd ? m.gasto.montoExtranjero : m.gasto.totalCFDI)
-          const conIva = ed.conIva ?? ((usd ? m.gasto.ivaUSD : m.gasto.iva) > 0)
+          const base = m.ingreso || m.gasto
+          const val = (k, def) => ed[k] ?? def ?? ''
+          const texto = (etq, k, def, ancho = 1, extra = {}) => campo(etq,
+            <input style={inputSt} value={val(k, def)} onChange={e => setEdit(m.key, { [k]: extra.upper ? e.target.value.toUpperCase() : e.target.value })} list={extra.list} />, ancho)
+          const monto = ed.monto ?? (m.ingreso ? base.monto : (v.usd ? base.montoExtranjero : base.totalCFDI))
           return (
             <div onClick={e => e.stopPropagation()} style={{
               display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8,
               marginTop: 8, padding: 10, borderRadius: 8, background: 'rgba(15,23,42,0.45)', border: '1px solid rgba(148,163,184,0.2)',
             }}>
-              {campo('Proveedor', <input style={inputSt} value={ed.proveedor ?? m.gasto.proveedor ?? ''} onChange={e => setEdit(m.key, { proveedor: e.target.value })} />, 2)}
-              {campo('RFC', <input style={inputSt} value={ed.rfc ?? m.gasto.rfc ?? ''} onChange={e => setEdit(m.key, { rfc: e.target.value.toUpperCase() })} />)}
-              {campo('Tipo', <input style={inputSt} list="mov-banco-tipos" value={ed.tipo ?? m.gasto.tipo ?? ''} onChange={e => setEdit(m.key, { tipo: e.target.value })} />)}
-              {campo('Concepto', <input style={inputSt} value={ed.concepto ?? m.gasto.concepto ?? ''} onChange={e => setEdit(m.key, { concepto: e.target.value })} />, 2)}
-              {campo('Fecha', <input type="date" style={inputSt} value={ed.fecha ?? m.gasto.fechaFac ?? ''} onChange={e => setEdit(m.key, { fecha: e.target.value })} />)}
-              {campo('Póliza', <input style={inputSt} value={ed.polizaNumero ?? m.gasto.polizaNumero ?? ''} onChange={e => setEdit(m.key, { polizaNumero: e.target.value })} />)}
-              {campo(`Monto ${usd ? '(USD)' : '(MXN)'}`, <input type="number" step="0.01" style={inputSt} value={monto ?? ''} onChange={e => setEdit(m.key, { monto: e.target.value === '' ? 0 : Number(e.target.value) })} />)}
+              {m.ingreso ? texto('Cliente', 'cliente', base.cliente, 2) : texto('Proveedor', 'proveedor', base.proveedor, 2)}
+              {texto('RFC', 'rfc', base.rfc, 1, { upper: true })}
+              {texto('Tipo', 'tipo', base.tipo, 1, { list: m.ingreso ? 'mov-banco-tipos-ing' : 'mov-banco-tipos' })}
+              {m.ingreso ? texto('Factura', 'factura', base.factura) : texto('Factura', 'noFactura', base.noFactura)}
+              {texto('Concepto', 'concepto', base.concepto, 2)}
+              {campo('Fecha', <input type="date" style={inputSt} value={val('fecha', m.ingreso ? base.fecha : base.fechaFac)} onChange={e => setEdit(m.key, { fecha: e.target.value })} />)}
+              {!m.ingreso && texto('Póliza', 'polizaNumero', base.polizaNumero)}
+              {campo(`Monto ${v.usd ? '(USD)' : '(MXN)'}`, <input type="number" step="0.01" style={inputSt} value={monto ?? ''} onChange={e => setEdit(m.key, { monto: e.target.value === '' ? 0 : Number(e.target.value) })} />)}
               {campo('IVA', (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6, textTransform: 'none', color: '#e2e8f0', fontSize: 12, paddingTop: 4 }}>
-                  <input type="checkbox" checked={conIva} onChange={e => setEdit(m.key, { conIva: e.target.checked })} />
+                  <input type="checkbox" checked={!!v.conIva} onChange={e => setEdit(m.key, { conIva: e.target.checked })} />
                   Incluye IVA 16%
                 </span>
               ))}
               <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#94a3b8' }}>
                 <span>
-                  Queda: importe {usd ? 'US$' : '$'}{fmt(usd ? g.importeUSD : g.importe)} + IVA {usd ? 'US$' : '$'}{fmt(usd ? g.ivaUSD : g.iva)} = {usd ? 'US$' : '$'}{fmt(usd ? g.montoExtranjero : g.totalCFDI)}
+                  Queda: importe {v.usd ? 'US$' : '$'}{fmt(v.desg.importe)} + IVA {v.usd ? 'US$' : '$'}{fmt(v.desg.iva)} = {v.usd ? 'US$' : '$'}{fmt(v.desg.total)}
+                  {m.ingreso && v.usd ? ' (el Excel lo pasa a pesos con el T/C)' : ''}
                 </span>
                 <span style={{ display: 'flex', gap: 8 }}>
                   {edits[m.key] && (
@@ -7097,9 +7406,8 @@ export default function App() {
           )
         }
         const renglon = (m) => {
-          const g = aplicarEdicionMovimiento(m.gasto, edits[m.key])
+          const v = ver(m)
           const abierto = editando === m.key
-          const usd = !!g.esMonedaExtranjera
           return (
             <div key={m.key} data-mov={m.key} onClick={() => setSel({ [m.key]: !sel[m.key] })} style={{
               padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
@@ -7110,17 +7418,20 @@ export default function App() {
                 <input type="checkbox" checked={!!sel[m.key]} readOnly style={{ marginTop: 3, pointerEvents: 'none' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
-                    {g.proveedor} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {g.tipo} · {g.concepto || m.origen.concepto}</span>
+                    {v.nombre} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {v.tipo || ''}{v.tipo ? ' · ' : ''}{v.concepto}</span>
+                    {!v.tipo && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b' }}>FALTA TIPO</span>}
+                    {m.cxcInfo && !m.esNC && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#60A5FA' }}>CxC</span>}
                     {edits[m.key] && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b' }}>EDITADO</span>}
                   </div>
                   <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                    {fmtF(g.fechaFac)} · {m.origen.sheet} · póliza {g.polizaNumero}
+                    {fmtF(v.fecha)} · {v.detalle}
                     {m.origen.partes > 1 ? ` · ${m.origen.partes} transferencias juntas` : ''}
-                    {edits[m.key] ? ` · en el Saldos: ${m.origen.concepto}` : ''}
+                    {edits[m.key] || m.ingreso ? ` · en el Saldos: ${m.origen.concepto}` : ''}
                   </div>
+                  {v.revisar && <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 2 }}>⚠ {v.revisar}</div>}
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap' }}>
-                  {usd ? 'US$' : '$'}{fmt(usd ? g.montoExtranjero : g.totalCFDI)}
+                <div style={{ fontSize: 12, fontWeight: 700, color: m.ingreso ? (v.monto < 0 ? '#F87171' : '#60A5FA') : '#e2e8f0', whiteSpace: 'nowrap' }}>
+                  {m.ingreso ? (v.monto < 0 ? '−' : '+') : ''}{v.usd ? 'US$' : '$'}{fmt(m.ingreso ? Math.abs(v.monto) : v.monto)}
                 </div>
                 <button onClick={e => {
                   e.stopPropagation()
@@ -7133,7 +7444,7 @@ export default function App() {
                   {abierto ? 'Cerrar' : 'Editar'}
                 </button>
               </div>
-              {abierto && editor(m, g)}
+              {abierto && editor(m, v)}
             </div>
           )
         }
@@ -7153,11 +7464,30 @@ export default function App() {
         )
         const btn = (texto, onClick) => (
           <button onClick={onClick} style={{
-            flex: 1, minWidth: 150, padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
+            flex: 1, minWidth: 120, padding: '6px 10px', borderRadius: 8, cursor: 'pointer',
             border: '1px solid rgba(89,211,155,0.45)', background: 'rgba(89,211,155,0.05)',
-            color: '#59D39B', fontSize: 12, fontWeight: 700,
+            color: '#59D39B', fontSize: 11, fontWeight: 700,
           }}>{texto}</button>
         )
+        const pestaña = (clave, texto, lst, elegidosLst, color) => {
+          const activa = vista === clave
+          return (
+            <button onClick={() => setMovBancoModal(prev => ({ ...prev, vista: clave, editando: null }))} style={{
+              flex: 1, padding: '9px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700,
+              border: `1px solid ${activa ? color : 'rgba(148,163,184,0.25)'}`,
+              background: activa ? `${color}22` : 'transparent', color: activa ? color : '#94a3b8',
+            }}>
+              {texto} <span style={{ fontWeight: 500, opacity: 0.85 }}>· {elegidosLst.length} de {lst.length}</span>
+            </button>
+          )
+        }
+        const hayUsd = itemsEg.some(m => m.gasto.esMonedaExtranjera) || itemsIng.some(m => m.ingreso.moneda === 'USD')
+        const totalElegidos = elegidosEg.length + elegidosIng.length
+        const sinTipoIng = elegidosIng.filter(m => !ver(m).tipo).length
+        const textoAgregar = [
+          elegidosEg.length ? `${elegidosEg.length} egreso${elegidosEg.length === 1 ? '' : 's'}` : '',
+          elegidosIng.length ? `${elegidosIng.length} ingreso${elegidosIng.length === 1 ? '' : 's'}` : '',
+        ].filter(Boolean).join(' y ') || '0 movimientos'
         return (
           // Sin cerrar al hacer clic afuera: se perderían las correcciones.
           <div className="premium-overlay">
@@ -7165,19 +7495,41 @@ export default function App() {
               style={{ maxWidth: 880, width: '92vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
               <div className="premium-title">{trasCotejo ? 'Movimientos sin factura' : 'Movimientos del banco'} · {label}</div>
               <div className="premium-subtitle">
-                {trasCotejo ? 'El cotejo terminó. Estos egresos del Saldos (pagos IMSS, préstamos, comisiones…) no tienen factura ni comprobante en el reporte. ' : 'Egresos de las cuentas de cheques del Saldos que no tienen factura en el reporte. '}
-                Revísalos, corrige con "Editar" lo que haga falta y confirma los que van al reporte. {elegidos.length} de {items.length} elegidos.
+                {esIng
+                  ? 'Depósitos del Saldos para la hoja "Ingresos" del Excel (sin traspasos ni venta de bonos). '
+                  : trasCotejo ? 'Egresos del Saldos sin factura ni comprobante en el reporte (IMSS, préstamos, comisiones…). ' : 'Egresos de las cuentas de cheques del Saldos que no tienen factura en el reporte. '}
+                Corrige con "Editar" y confirma los que van.
               </div>
-              <datalist id="mov-banco-tipos">{tiposSugeridos.map(t => <option key={t} value={t} />)}</datalist>
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: '#94a3b8' }}>
-                Mes:
-                <select value={mes} onChange={e => abrirMovimientosBanco({ saldosRows, tcPorMes, meses, mes: e.target.value })}
-                  style={{ background: 'rgba(15,23,42,0.6)', color: '#e2e8f0', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}>
-                  {meses.map(ym => <option key={ym} value={ym}>{etiquetaMes(ym)}</option>)}
-                </select>
+              <datalist id="mov-banco-tipos">{tiposEg.map(t => <option key={t} value={t} />)}</datalist>
+              <datalist id="mov-banco-tipos-ing">{tiposIng.map(t => <option key={t} value={t} />)}</datalist>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                {pestaña('egresos', 'Egresos', itemsEg, elegidosEg, '#59D39B')}
+                {pestaña('ingresos', 'Ingresos', itemsIng, elegidosIng, '#60A5FA')}
               </div>
-              {items.some(m => m.gasto.esMonedaExtranjera) && campoTipoCambio(mes)}
-              <div style={{ display: 'flex', gap: 8, margin: '14px 0 4px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16, marginTop: 10, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  Mes:
+                  <select value={mes} onChange={e => abrirMovimientosBanco({ saldosRows, tcPorMes, meses, mes: e.target.value })}
+                    style={{ background: 'rgba(15,23,42,0.6)', color: '#e2e8f0', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: '4px 8px', fontSize: 12 }}>
+                    {meses.map(ym => <option key={ym} value={ym}>{etiquetaMes(ym)}</option>)}
+                  </select>
+                </span>
+                {hayUsd && campoTipoCambio(mes, true)}
+              </div>
+              {esIng && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 8, fontSize: 12, flexWrap: 'wrap' }}>
+                  <button onClick={() => cxcRef.current?.click()} style={{
+                    padding: '5px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                    border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(96,165,250,0.08)', color: '#60A5FA',
+                  }}>
+                    {cxc ? 'Cambiar Cuentas por Cobrar' : 'Completar con Cuentas por Cobrar'}
+                  </button>
+                  <span style={{ color: cxc ? '#60A5FA' : '#94a3b8' }}>
+                    {movBancoModal.cxcResumen || (cxc ? `${cxc.nombre}: cliente, RFC, tipo, IVA y monto de cada factura.` : 'Carga el archivo para traer cliente, RFC, tipo, IVA y monto de cada factura.')}
+                  </span>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8, margin: '10px 0 2px', flexWrap: 'wrap' }}>
                 {btn('Marcar todo', () => marcarTodos(true))}
                 {btn('Solo los recomendados', () => marcarTodos(true, true))}
                 {btn('Desmarcar todo', () => marcarTodos(false))}
@@ -7185,16 +7537,32 @@ export default function App() {
               <div style={{ overflowY: 'auto', flex: 1, marginTop: 12, padding: '0 4px', textAlign: 'left' }}>
                 {items.length === 0 && (
                   <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: 13, padding: 24 }}>
-                    Todos los egresos de {label} en las cuentas de cheques ya están en el reporte.
+                    {esIng
+                      ? `Todos los ingresos de ${label} en las cuentas de cheques ya están en el reporte.`
+                      : `Todos los egresos de ${label} en las cuentas de cheques ya están en el reporte.`}
                   </div>
                 )}
-                {seccion('Recomendados', 'Los que contabilidad agrega a mano cada mes: comisiones, créditos, fondo de ahorro, regalías, préstamos, no comprobados, IMSS, impuestos y Telcel.', recomendados, '#59D39B')}
-                {seccion('Otros egresos sin factura', 'No se agregan normalmente (reembolsos de cuentas de gastos, pagos cuya factura falta en el reporte…). Márcalos sólo si van en este reporte.', opcionales, '#94a3b8')}
+                {esIng ? (
+                  <>
+                    {seccion('Recomendados', 'Cobros a clientes (factura y PO salen del concepto del Saldos), devoluciones, intereses y préstamos. El monto es lo que entró al banco: si la factura fue por otra cantidad, corrígelo con "Editar".', recomendados, '#60A5FA')}
+                    {seccion('Otros depósitos', 'Depósitos que no se reconocen como cobro, devolución ni intereses. Márcalos sólo si van en este reporte.', opcionales, '#94a3b8')}
+                  </>
+                ) : (
+                  <>
+                    {seccion('Recomendados', 'Los que contabilidad agrega a mano cada mes: comisiones, créditos, fondo de ahorro, regalías, préstamos, no comprobados, IMSS, impuestos y Telcel.', recomendados, '#59D39B')}
+                    {seccion('Otros egresos sin factura', 'No se agregan normalmente (reembolsos de cuentas de gastos, pagos cuya factura falta en el reporte…). Márcalos sólo si van en este reporte.', opcionales, '#94a3b8')}
+                  </>
+                )}
               </div>
+              {sinTipoIng > 0 && (
+                <div style={{ marginTop: 10, fontSize: 12, color: '#f59e0b', textAlign: 'center' }}>
+                  {sinTipoIng} ingreso{sinTipoIng === 1 ? '' : 's'} elegido{sinTipoIng === 1 ? '' : 's'} sin tipo (el cliente vende partes, equipo y consultoría): elígelo con "Editar".
+                </div>
+              )}
               <div className="premium-actions" style={{ marginTop: 16 }}>
                 <button className="premium-btn-secondary" onClick={() => setMovBancoModal(null)}>Cancelar</button>
-                <button className="premium-btn-primary" disabled={!elegidos.length} onClick={agregarMovimientosBanco}>
-                  Agregar {elegidos.length} movimiento{elegidos.length === 1 ? '' : 's'}
+                <button className="premium-btn-primary" disabled={!totalElegidos} onClick={agregarMovimientosBanco}>
+                  Agregar {textoAgregar}
                 </button>
               </div>
             </div>

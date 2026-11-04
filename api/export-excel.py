@@ -354,7 +354,7 @@ def ordenar_como_contabilidad(gastos, poliza_numero='N/A'):
     return sorted(gastos, key=clave)
 
 
-def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None, tc_usd_saldos=0):
+def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None, tc_usd_saldos=0, ingresos=None):
     if (colaborador or '').strip() == 'Alejandro Olivar':
         gastos = ordenar_como_contabilidad(gastos, poliza_numero)
     # Invierte POLIZAS_CLARA (nombre → folio) a (folio → nombre) para que la
@@ -1241,7 +1241,7 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
     ws.row_dimensions[row].height = 18
     ws.merge_cells(start_row=row, start_column=11, end_row=row, end_column=23)
     ft = ws.cell(row=row, column=11)
-    ft.value = 'SMTO Engineering · v9.09'
+    ft.value = 'SMTO Engineering · v9.10'
     ft.font = Font(name='Aptos', size=8, italic=True, color=TEXT_MUTED)
     ft.alignment = Alignment(horizontal='right', vertical='center')
     ft.fill = PatternFill('solid', start_color=BG_PAGE)
@@ -1280,7 +1280,114 @@ def build_workbook(gastos, colaborador='', poliza_numero='N/A', polizas_map=None
                 continue  # fórmula → se queda locked=True, sin triángulo
             cell.protection = _unlocked
 
+    if ingresos:
+        agregar_hoja_ingresos(wb, ingresos, tc_refs.get('USD'), tc_usd_saldos)
+
     return wb
+
+
+def _fecha_iso(s):
+    try:
+        return datetime.strptime(str(s)[:10], '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return None
+
+
+def agregar_hoja_ingresos(wb, ingresos, tc_ref_usd=None, tc_usd_saldos=0):
+    """Hoja "Ingresos" con el layout de la hoja de trabajo de contabilidad:
+    T/C en L1 (ligado a la celda de T/C del reporte), encabezado en la fila 3
+    (B..L: RFC CLIENTE … MONTO USD) y un renglón por ingreso desde la fila 4.
+    Montos en pesos. En cuentas USD el MONTO USD es el depósito y el IMPORTE
+    se calcula con el T/C; en pesos el MONTO USD es TOTAL / T/C, igual que
+    contabilidad. TOTAL siempre = IMPORTE + IVA."""
+    wi = wb.create_sheet('Ingresos')
+    wi.sheet_view.showGridLines = False
+    anchos = {'A': 2, 'B': 17, 'C': 45, 'D': 14, 'E': 10, 'F': 17, 'G': 15, 'H': 18, 'I': 12, 'J': 34, 'K': 20, 'L': 16}
+    for col, w in anchos.items():
+        wi.column_dimensions[col].width = w
+
+    thin = Side(style='thin', color=BORDER_LIGHT)
+    borde = Border(left=thin, right=thin, top=thin, bottom=thin)
+    dinero = '"$"#,##0.00'
+
+    wi.merge_cells('I1:K1')
+    lbl = wi['I1']
+    lbl.value = 'TIPO DE CAMBIO USD →'
+    lbl.font = Font(name='Aptos', size=11, bold=True, color=BADGE_AMBER_FG)
+    lbl.alignment = Alignment(horizontal='right', vertical='center', indent=1)
+    for c in ('I1', 'J1', 'K1'):
+        wi[c].fill = PatternFill('solid', start_color=BADGE_AMBER_BG)
+    tc = wi['L1']
+    tc.value = f"='Reporte SMTO'!{tc_ref_usd}" if tc_ref_usd else (round(tc_usd_saldos, 4) if tc_usd_saldos else 17.50)
+    tc.number_format = '#,##0.0000'
+    tc.font = Font(name='Aptos', size=14, bold=True, color=BADGE_AMBER_FG)
+    tc.alignment = Alignment(horizontal='center', vertical='center')
+    tc.fill = PatternFill('solid', start_color='FDE68A')
+    wi.row_dimensions[1].height = 26
+
+    encabezados = ['RFC CLIENTE', 'NOMBRE DEL CLIENTE', 'TIPO', 'FACTURA', 'IMPORTE', 'IVA', 'TOTAL', 'F. PAGO', 'CONCEPTO', 'BANCO', 'MONTO USD']
+    for j, h in enumerate(encabezados):
+        c = wi.cell(row=3, column=2 + j, value=h)
+        c.font = Font(name='Aptos', size=10, bold=True, color=SMTO_GREEN)
+        c.fill = PatternFill('solid', start_color=SMTO_BLACK)
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        c.border = borde
+    wi.row_dimensions[3].height = 24
+
+    filas = sorted(ingresos, key=lambda i: str(i.get('fecha') or ''))
+    fila0 = 4
+    for k, ing in enumerate(filas):
+        r = fila0 + k
+        usd = str(ing.get('moneda') or '').upper() == 'USD'
+        con_iva = bool(ing.get('conIva'))
+        try:
+            monto = float(ing.get('monto') or 0)
+        except (TypeError, ValueError):
+            monto = 0.0
+        if usd:
+            importe = f'=ROUND(L{r}*$L$1/1.16,2)' if con_iva else f'=ROUND(L{r}*$L$1,2)'
+            iva = f'=ROUND(L{r}*$L$1-F{r},2)' if con_iva else 0
+            monto_usd = round(monto, 2)
+        else:
+            base = round(monto / 1.16, 2) if con_iva else round(monto, 2)
+            importe = base
+            iva = round(monto - base, 2)
+            monto_usd = f'=IFERROR(H{r}/$L$1,0)'
+        valores = [
+            ing.get('rfc') or '', ing.get('cliente') or '', ing.get('tipo') or '', ing.get('factura') or 'NA',
+            importe, iva, f'=F{r}+G{r}', _fecha_iso(ing.get('fecha')), ing.get('concepto') or '',
+            ing.get('banco') or '', monto_usd,
+        ]
+        zebra = ROW_ALT if k % 2 else WHITE
+        for j, v in enumerate(valores):
+            c = wi.cell(row=r, column=2 + j, value=v)
+            c.font = Font(name='Aptos', size=10, bold=j in (0, 1, 6), color=TEXT_PRIMARY)
+            c.fill = PatternFill('solid', start_color=zebra)
+            c.border = borde
+            c.alignment = Alignment(vertical='center', horizontal='center' if j in (2, 3, 7) else None)
+            if j in (4, 5, 6, 10):
+                c.number_format = dinero
+            if j == 7:
+                c.number_format = 'dd/mm/yyyy'
+        if not ing.get('tipo'):
+            wi.cell(row=r, column=4).fill = PatternFill('solid', start_color='FEF3C7')
+
+    # Totales
+    rt = fila0 + len(filas)
+    ult = rt - 1
+    t = wi.cell(row=rt, column=3, value='TOTAL INGRESOS')
+    for col in range(2, 13):
+        c = wi.cell(row=rt, column=col)
+        c.fill = PatternFill('solid', start_color=SMTO_BLACK)
+        c.font = Font(name='Aptos', size=10, bold=True, color=WHITE)
+        c.border = borde
+    t.font = Font(name='Aptos', size=10, bold=True, color=SMTO_GREEN)
+    if filas:
+        for col in ('F', 'G', 'H', 'L'):
+            c = wi[f'{col}{rt}']
+            c.value = f'=SUM({col}{fila0}:{col}{ult})'
+            c.number_format = dinero
+    wi.freeze_panes = 'B4'
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -1309,17 +1416,22 @@ class handler(BaseHTTPRequestHandler):
                     tc_usd_saldos = float(data.get('tipoCambioUSD') or 0)
                 except (TypeError, ValueError):
                     tc_usd_saldos = 0
+                ingresos = data.get('ingresos') or []
+                if not isinstance(ingresos, list):
+                    ingresos = []
             else:
                 gastos = data
                 colaborador = ''
                 poliza_numero = 'N/A'
                 polizas_map = {}
                 tc_usd_saldos = 0
+                ingresos = []
             gastos = sanitize(gastos)
+            ingresos = sanitize(ingresos)
             colaborador = sanitize(colaborador)
             poliza_numero = sanitize(poliza_numero)
             polizas_map = sanitize(polizas_map) if isinstance(polizas_map, dict) else {}
-            wb = build_workbook(gastos, colaborador, poliza_numero, polizas_map, tc_usd_saldos)
+            wb = build_workbook(gastos, colaborador, poliza_numero, polizas_map, tc_usd_saldos, ingresos)
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
                 tmp_path = tmp.name
             wb.save(tmp_path)

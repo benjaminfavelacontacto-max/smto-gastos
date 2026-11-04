@@ -151,6 +151,7 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
           factura,
           concepto,
           egreso:   Number(getCell(r, cols.egreso)) || 0,
+          ingreso:  Number(getCell(r, cols.ingreso)) || 0,
           moneda,
         })
       }
@@ -861,4 +862,378 @@ export function movimientosSinFactura(saldosRows, lista, { mes, tcUSD = 0, busca
   }
   // Primero los que contabilidad agrega siempre, luego los opcionales; por fecha.
   return out.sort((a, b) => (b.marcado - a.marcado) || a.grupo.localeCompare(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
+}
+
+// ── Ingresos del mes ───────────────────────────────────────────────────────
+// Depósitos de las cuentas de cheques del Saldos que contabilidad captura en la
+// hoja "Ingresos" del reporte de Alejandro Olivar: cobros a clientes (la
+// factura emitida viene en el concepto: "Fact N0465"), devoluciones, intereses
+// y préstamos. Traspasos entre cuentas propias y venta de bonos no son ingreso.
+// Clientes y RFC tal como los registra contabilidad (hojas de junio y octubre
+// 2026). El primero que coincide gana: los más específicos van antes.
+const CLIENTES_INGRESOS = [
+  [/ANA TRADING/,                         'ANA TRADING CORP USA', 'NA'],
+  [/\bBCS\b/,                             'BCS-AIS ENSAMBLES MEXICO', 'TRW851211KD0', 'Consultoría'],
+  [/CARPLASTIC/,                          'CARPLASTIC', 'CAR8706226L8', 'Soldadura'],
+  [/CELESTICA/,                           'CELESTICA DE MONTERREY', 'CMO980416B81'],
+  [/COMPUTIME/,                           'COMPUTIME MEXICANA SOLUCIONES DE CONTROL', 'CMS210614SU8', 'Partes'],
+  [/\bCODEX\b|COORDINADORA Y DISENO/,     'COORDINADORA Y DISEÑO EN SOLUCIONES DE COMERCIO EXTERIOR', 'CDS041216MS3'],
+  [/COPELAND/,                            'COPELAND COMFORT CONTROL LP', 'NA', 'Consultoría'],
+  [/DESPACHOS CANO/,                      'DESPACHOS CANO', 'DCA140206116'],
+  [/DIEHL/,                               'DIEHL CONTROLS MEXICO', 'DCM030212ET4', 'Soldadura'],
+  [/\bDIRAM\b/,                           'DIRAM', 'DIR930703GJ4', 'Partes'],
+  [/ESSEMTEC/,                            'ESSEMTEC USA LLC', 'NA'],
+  [/FANCORT/,                             'FANCORT INDUSTRIES INC', 'NA', 'Comisiones'],
+  [/FLEX\w*\s+(MANUFACTURING\s+)?(AGUASCALIENTES|AGS)\b/, 'FLEXTRONICS MANUFACTURING AGUASCALIENTES', 'FMA000705HF9', 'Consultoría'],
+  [/FLEX\w*\s+MANUFACTURING/,             'FLEXTRONICS MANUFACTURING MEX', 'FMM9803095R4', 'Consultoría'],
+  [/FLEX\w*\s+TECHNOLOGIES/,              'FLEXTRONICS TECHNOLOGIES MÉXICO', 'SMM840503FQ4', 'Consultoría'],
+  [/FORNEY/,                              'FORNEY CORPORATION', 'NA', 'Equipo'],
+  [/FORSA/,                               'FORSA EXPRESS GUADALAJARA', 'FEG770328531'],
+  [/\bGPV\b/,                             'GPV AMERICAS MEXICO', 'GAM1606067K7', 'Partes'],
+  [/HOTELERA DE APODACA/,                 'HOTELERA DE APODACA', 'HAP9504215L5'],
+  [/\bIBG\b/,                             'IBG INTERNATIONAL SERVICES', 'IIS150121NE2'],
+  [/\bICT\b/,                             'ICT HOLDING CO LTD', 'NA', 'Consultoría'],
+  [/INGRASYS/,                            'INGRASYS TECHNOLOGY MEXICO', 'ITM210713AC0', 'Consultoría'],
+  [/\bISSA\b|INTEGRADORA DE SISTEMAS/,    'INTEGRADORA DE SISTEMAS Y SERVICIOS ADUANALES', 'ISS1004216Z9'],
+  [/JABIL\s+(CIRCUIT\s+)?(DE\s+)?(CHIHUAHUA|CHIH)\b/, 'JABIL CIRCUIT DE CHIHUAHUA', 'JCC000904KK2'],
+  [/JABIL\s+(DE\s+)?(MONTERREY|MTY)\b/,   'JABIL MONTERREY', 'JMO190130T20', 'Consultoría'],
+  [/JABIL/,                               'JABIL CIRCUIT DE MEXICO', 'JCM9701315Q6'],
+  [/LEVITON/,                             'LEVITON DE MEXICO', 'LME0003157U2', 'Consultoría'],
+  [/LPKF/,                                'LPKF LASER & ELECTRONICS', 'NA'],
+  [/MAGNA/,                               'MAGNA ELECTRONICS INC', 'NA', 'Equipo'],
+  [/MARELLI/,                             'MARELLI TOLUCA MEXICO', 'MMT150304BD1', 'Partes'],
+  [/MELECS/,                              'MELECS ELECTRONICS QUERETARO', 'PEQ100716IY9'],
+  [/METHODE/,                             'METHODE MEXICO', 'MME0108031L3', 'Consultoría'],
+  [/MEXKET/,                              'MEXKET', 'MEX201118673', 'Partes'],
+  [/ML\s*&\s*S/,                          'ML&S MEXICO', 'TDU160412UL6', 'Soldadura'],
+  [/MOLEX/,                               'MOLEX DE MEXICO', 'MME730507RR8', 'Partes'],
+  [/MOTORES ELECTRICOS/,                  'MOTORES ELECTRICOS SUMERGIBLES DE MEXICO', 'MES0204122KA', 'Partes'],
+  [/OPERADORA FALCON|XEPELIN/,            'OPERADORA FALCON', 'OFA200317L26', 'Préstamo'],
+  [/\bPCE\b|PARAGON/,                     'PCE PARAGON SOLUTIONS (MEXICO)', 'PPS080118T23', 'Consultoría'],
+  [/PLEXUS CORP/,                         'PLEXUS CORP', 'NA', 'Partes'],
+  [/PLEXUS/,                              'PLEXUS ELECTRONICA', 'PEL000523L12', 'Consultoría'],
+  [/PREEN/,                               'PREEN POWER', 'NA', 'Consultoría'],
+  [/REFIEL/,                              'REFIEL', 'REF2208125E6'],
+  [/ROCKWELL/,                            'ROCKWELL AUTOMATION MONTERREY MANUFACTURING', 'RAM070918578'],
+  [/SANMINA/,                             'SANMINA-SCI SYSTEMS DE MEXICO', 'SSM950412Q42'],
+  [/SCIENTIFIC ATLANTA/,                  'SCIENTIFIC ATLANTA DE MEXICO', 'SAM950112FU2', 'Consultoría'],
+  [/SERENDIPITY/,                         'SERENDIPITY', 'NA', 'Soldadura'],
+  [/SMTO INC/,                            'SMTO INC', 'NA', 'Partes'],
+  [/TEKTRONIX/,                           'TEKTRONIX', 'EK800414PFA'],
+  [/\bTORK\b/,                            'TORK ELECTRO SISTEMAS', 'TES8607033B6', 'Equipo'],
+  [/\bUBER\b/,                            'UBER', 'N/A'],
+  [/UNIVERSAL SCIENTIFIC|\bUSI\b/,        'UNIVERSAL SCIENTIFIC INDUSTRIAL DE MÉXICO', 'USI970903M23', 'Consultoría'],
+  [/VALLEN/,                              'VALLEN INTEGRATED SUPPLY INC', 'NA', 'Equipo'],
+  [/\bVIE TECH/,                          'VIE TECHNOLOGIES SDN BHD', 'NA', 'Comisiones'],
+  [/VITROX/,                              'VITROX TECHNOLOGIES SDN BHD', 'NA'],
+  // Personas que no están en el roster de empleados.
+  [/GARZA CANTU/,                         'JOSE CARLOS GARZA CANTU', 'GACC640518ID1'],
+  [/DUARTE MARTINEZ|HECTOR ALIM/,         'HECTOR ALIM DUARTE MARTINEZ', 'DUMH890817S35'],
+  [/TISOTO/,                              'JAMES TISOTO ROLDÁN', 'TIRJ841005U2A'],
+  [/\bBBVA\b|BANCOMER/,                   'BBVA BANCOMER', 'BBA830831LJ2'],
+  [/MONEX/,                               'BANCO MONEX', 'BMI9704113PA'],
+]
+const INGRESOS_EXCLUIDOS = /^(TRASPASO|BONOS?|VENTA BONOS?)$/
+export const TIPOS_INGRESO = ['Comisiones', 'Consultoría', 'Devolución', 'Equipo', 'Etiquetas', 'Intereses', 'Nota de Crédito', 'Partes', 'Préstamo', 'Renta', 'Soldadura']
+
+const buscarCliente = (texto) => {
+  const t = sinAcentos(texto)
+  const hit = CLIENTES_INGRESOS.find(([re]) => re.test(t))
+  return hit ? { cliente: hit[1], rfc: hit[2], tipo: hit[3] || '' } : null
+}
+
+// Recalcula lo que el usuario corrige en el modal (cliente, RFC, tipo,
+// factura, concepto, fecha, monto en la moneda de la cuenta, IVA).
+export function aplicarEdicionIngreso(ing, ed) {
+  if (!ed) return ing
+  const out = { ...ing }
+  for (const k of ['cliente', 'rfc', 'tipo', 'factura', 'concepto']) {
+    if (ed[k] !== undefined) out[k] = String(ed[k]).trim() || (k === 'factura' ? 'NA' : ing[k])
+  }
+  if (ed.fecha) out.fecha = ed.fecha
+  if (ed.monto !== undefined) out.monto = r2(Number(ed.monto) || 0)
+  if (ed.conIva !== undefined) out.conIva = !!ed.conIva
+  return out
+}
+
+// Importe / IVA en la moneda de la cuenta (el Excel convierte USD con el T/C).
+export const desgloseIngreso = (ing) => {
+  const base = ing.conIva ? r2(ing.monto / 1.16) : r2(ing.monto)
+  return { importe: base, iva: r2(ing.monto - base), total: r2(ing.monto) }
+}
+
+export function ingresosDelMes(saldosRows, lista, ingresosActuales = [], { mes, buscarEmpleado } = {}) {
+  const { sinMatchSaldos } = cotejarConSaldos(saldosRows, lista)
+  const libres = new Set(sinMatchSaldos)
+  const delMes = saldosRows.filter(r =>
+    libres.has(r) &&
+    (Number(r.ingreso) || 0) > 0 &&
+    /CHEQUES/i.test(String(r.sheet || '')) &&
+    (saldosFechaToIso(r.fecha) || '').slice(0, 7) === mes &&
+    !INGRESOS_EXCLUIDOS.test(sinAcentos(r.tipo)) &&
+    !/^(TRASPASO|VENTA BONOS?)\b/.test(sinAcentos(r.concepto)))
+
+  const yaKeys = new Set(ingresosActuales.map(i => i.movKey).filter(Boolean))
+  // Un ingreso importado de un Excel anterior ya no trae su clave: se reconoce
+  // por fecha + banco + monto, o por fecha + factura (si se corrigió el monto).
+  const yaMismo = (fecha, sheet, monto, factura) => ingresosActuales.some(i =>
+    i.fecha === fecha && (
+      (String(i.banco || '').trim() === String(sheet || '').trim() && Math.abs((Number(i.monto) || 0) - monto) < 0.01) ||
+      (factura && factura !== 'NA' && String(i.factura || '').trim().toUpperCase() === factura.toUpperCase())))
+
+  const vistas = new Map()
+  const out = []
+  for (const r of delMes) {
+    const monto = r2(Number(r.ingreso) || 0)
+    const fecha = saldosFechaToIso(r.fecha)
+    const base = `ING|${r.sheet}|${fecha}|${String(r.folio || '').trim()}|${monto}|${String(r.concepto || '').trim()}`
+    const n = (vistas.get(base) || 0) + 1
+    vistas.set(base, n)
+    const key = `${base}#${n}`
+
+    const tipoS = sinAcentos(r.tipo)
+    const conc = String(r.concepto || '').trim()
+    const concU = sinAcentos(conc)
+    const fact = (conc.match(/\bFact\.?\s*([A-Z]{1,3}\d{3,6})\b/i) || [])[1]
+    const antesDeComa = conc.split(',')[0].trim()
+    const despuesDeComa = conc.includes(',') ? conc.slice(conc.indexOf(',') + 1).trim() : ''
+    const bancoCuenta = /^MONEX/i.test(r.sheet) ? buscarCliente('MONEX') : /^BBVA/i.test(r.sheet) ? buscarCliente('BBVA') : null
+
+    let grupo, marcado = true, tipo = '', factura = 'NA', concepto = conc, quien = null, conIva = false
+    if (tipoS === 'INTERESES' || /^INTERESES?\b/.test(concU)) {
+      grupo = 'Intereses'; tipo = 'Intereses'; concepto = 'Intereses'; quien = bancoCuenta
+    } else if (tipoS.startsWith('DEVOLUCION')) {
+      grupo = 'Devoluciones'; tipo = 'Devolución'
+      concepto = /NO COMPROBADO/.test(concU) ? 'Devolución Cargos No Comprobados' : (despuesDeComa || conc)
+      const emp = buscarEmpleado ? (buscarEmpleado(antesDeComa) || buscarEmpleado(antesDeComa.replace(/^DEV(OLUCION)?\s+/i, ''))) : null
+      quien = emp ? { cliente: emp.nombre.toUpperCase(), rfc: emp.rfc } : buscarCliente(conc)
+    } else if (tipoS.startsWith('PRESTAMO')) {
+      grupo = 'Préstamos'; tipo = 'Préstamo'; quien = buscarCliente(conc)
+    } else if (fact || tipoS === 'PAGO' || tipoS === 'PC') {
+      grupo = 'Cobros a clientes'
+      factura = fact || 'NA'
+      const po = (conc.match(/\bP[O0]\.?\s*([A-Z0-9][A-Z0-9\-\/]*)/i) || [])[1]
+      // Sin PO: lo que dice el concepto sin el nombre del cliente ni la factura
+      // ("ViTrox, Sales Comms Sep, Fact E2087" → "Sales Comms Sep").
+      const sinFact = (t) => t.replace(/,?\s*Fact\.?\s*[A-Z]{1,3}\d{3,6}.*$/i, '').replace(/,\s*$/, '').trim()
+      concepto = po ? `PO ${po}` : (sinFact(despuesDeComa) || sinFact(conc) || conc)
+      quien = buscarCliente(conc)
+      if (!quien && buscarEmpleado) {
+        const emp = buscarEmpleado(antesDeComa)
+        if (emp) quien = { cliente: emp.nombre.toUpperCase(), rfc: emp.rfc }
+      }
+      tipo = tipoS === 'PC' ? 'Equipo'
+        : /,\s*C\s*$/i.test(conc) ? 'Consultoría'
+        : /\bCOMM|COMISI/.test(concU) ? 'Comisiones'
+        : /CONSULT|RENTAL|\bRENTA\b|\bSMTA\b|EXPORT/.test(concU) ? 'Consultoría'
+        : (quien?.tipo || '')
+      // Las facturas nacionales (serie N) llevan IVA casi siempre; las de
+      // exportación (serie E) no. Se corrige con "Editar" si no aplica.
+      conIva = /^N/i.test(factura) && tipo !== 'Equipo'
+    } else {
+      grupo = 'Otros ingresos'; marcado = false; tipo = String(r.tipo || '').trim()
+      quien = buscarCliente(conc)
+    }
+    if (!quien) quien = { cliente: antesDeComa.toUpperCase(), rfc: '' }
+
+    out.push({
+      key, marcado, grupo,
+      yaAgregado: yaKeys.has(key) || yaMismo(fecha, r.sheet, monto, factura),
+      origen: { sheet: r.sheet, fecha, concepto: conc, ingreso: monto, moneda: r.moneda === 'USD' ? 'USD' : 'MXN', partes: 1 },
+      ingreso: {
+        movKey: key, rfc: quien.rfc || '', cliente: quien.cliente, tipo, factura,
+        fecha, concepto, banco: String(r.sheet || '').trim().replace(/\s+/g, ' '),
+        moneda: r.moneda === 'USD' ? 'USD' : 'MXN', monto, conIva, _conceptoSaldos: conc,
+      },
+    })
+  }
+  // ── Intereses de Monex: rendimiento de bonos + intereses del mes ──
+  // Monex invierte el saldo en bonos: "Compra Bonos" (egreso) y al día
+  // siguiente "Venta Bonos" (ingreso) por un poco más. Cada venta menos su
+  // compra (la anterior en la pestaña) es rendimiento; cuenta en el mes de la
+  // venta. Contabilidad lo captura como UNA línea "Intereses" de BANCO MONEX
+  // por cuenta, al último día del mes, sumando también los "Intereses" que
+  // ya trae la cuenta (oct-2026: USD 18.68; MXN 4,489.51 + 2,895.77 = 7,385.28).
+  const [anio, mesNum] = String(mes || '').split('-').map(Number)
+  const finDeMes = anio && mesNum ? `${mes}-${String(new Date(anio, mesNum, 0).getDate()).padStart(2, '0')}` : ''
+  const hojasMonex = [...new Set(saldosRows.map(r => String(r.sheet || '').trim()).filter(h => /^MONEX\b.*CHEQUES/i.test(h)))]
+  for (const hoja of hojasMonex) {
+    const filas = saldosRows.filter(r => String(r.sheet || '').trim() === hoja)
+    let compra = null
+    let rendimiento = 0
+    let ventas = 0
+    for (const r of filas) {
+      const t = sinAcentos(`${r.tipo} ${r.concepto}`)
+      if (!/\bBONOS?\b/.test(t)) continue
+      if (/COMPRA/.test(t) && (Number(r.egreso) || 0) > 0) compra = Number(r.egreso)
+      else if (/VENTA/.test(t) && (Number(r.ingreso) || 0) > 0) {
+        if (compra != null && (saldosFechaToIso(r.fecha) || '').slice(0, 7) === mes) {
+          rendimiento += Number(r.ingreso) - compra
+          ventas++
+        }
+        compra = null
+      }
+    }
+    // Los "Intereses" sueltos de esta cuenta se suman a la misma línea.
+    const sueltos = out.filter(m => m.grupo === 'Intereses' && String(m.origen.sheet || '').trim() === hoja)
+    const intereses = sueltos.reduce((a, m) => a + (Number(m.ingreso.monto) || 0), 0)
+    const total = r2(rendimiento + intereses)
+    if (!ventas && !sueltos.length) continue
+    for (const m of sueltos) out.splice(out.indexOf(m), 1)
+    const usd = /\bUSD\b/i.test(hoja)
+    const key = `ING|INTERESES|${hoja}|${mes}`
+    const detalle = [
+      ventas ? `rendimiento de ${ventas} venta${ventas === 1 ? '' : 's'} de bonos ${usd ? 'US$' : '$'}${r2(rendimiento).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '',
+      sueltos.length ? `intereses ${usd ? 'US$' : '$'}${r2(intereses).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '',
+    ].filter(Boolean).join(' + ')
+    out.push({
+      key, marcado: total > 0, grupo: 'Intereses',
+      yaAgregado: yaKeys.has(key) || ingresosActuales.some(i =>
+        i.tipo === 'Intereses' && String(i.banco || '').trim() === hoja && String(i.fecha || '').slice(0, 7) === mes),
+      origen: { sheet: hoja, fecha: finDeMes, concepto: detalle, ingreso: total, moneda: usd ? 'USD' : 'MXN', partes: 1 },
+      ingreso: {
+        movKey: key, rfc: 'BMI9704113PA', cliente: 'BANCO MONEX', tipo: 'Intereses', factura: 'NA',
+        fecha: finDeMes, concepto: 'Intereses', banco: hoja, moneda: usd ? 'USD' : 'MXN', monto: total, conIva: false,
+      },
+    })
+  }
+
+  const orden = ['Cobros a clientes', 'Devoluciones', 'Intereses', 'Préstamos', 'Otros ingresos']
+  return out.sort((a, b) => (b.marcado - a.marcado) || orden.indexOf(a.grupo) - orden.indexOf(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
+}
+
+// ── Cuentas por Cobrar ─────────────────────────────────────────────────────
+// "Cuentas por Cobrar 2026.xlsx" (pestaña "Facturas") es el registro de
+// facturas emitidas: Invoice, PO, Customer, RFC, Nat (E/N = serie), Type,
+// Desc, Invoice Amount, Tax, Invoice Total, Invoice Date, Due Date, Pay Date,
+// Status, Delayed days, Currency, Payment Complement y una nota libre (col R).
+// Los números se repiten entre años (N0452 existe en 2019 y en 2026), así que
+// se guardan todos los renglones de cada clave y se elige por fecha de pago.
+const TIPO_CXC = {
+  CONSULTING: 'Consultoría', COMMISSIONS: 'Comisiones', PARTS: 'Partes',
+  EQUIPMENT: 'Equipo', SOLDER: 'Soldadura', 'CREDIT NOTE': 'Nota de Crédito',
+  LABELS: 'Etiquetas', RENT: 'Renta',
+}
+
+// "N0465" → "N465", "E2061" → "E2061", "NCN43" → "NCN43".
+const claveFactura = (f) => {
+  const m = String(f || '').toUpperCase().replace(/\s+/g, '').match(/^([A-Z]+)0*(\d+)$/)
+  return m ? `${m[1]}${m[2]}` : ''
+}
+
+export function parseCuentasPorCobrar(arrayBufferOrWb) {
+  const wb = arrayBufferOrWb?.SheetNames ? arrayBufferOrWb : XLSX.read(arrayBufferOrWb, { type: 'array', cellDates: true })
+  const nombre = wb.SheetNames.find(n => /factura/i.test(n)) || wb.SheetNames[0]
+  const ws = wb.Sheets[nombre]
+  if (!ws || !ws['!ref']) return { index: new Map(), total: 0 }
+  const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
+  const h = filas.findIndex(r => /^invoice$/i.test(String(r?.[0] || '').trim()) && r.some(x => /^customer$/i.test(String(x || '').trim())))
+  if (h < 0) return { index: new Map(), total: 0 }
+  const col = (re) => filas[h].findIndex(x => re.test(String(x || '').trim()))
+  const C = {
+    inv: 0, po: col(/^PO$/i), cliente: col(/^customer$/i), rfc: col(/^RFC$/i), nat: col(/^nat$/i),
+    tipo: col(/^type$/i), desc: col(/^desc/i), importe: col(/^invoice amount$/i), iva: col(/^tax$/i),
+    total: col(/^invoice total$/i), fecha: col(/^invoice date$/i), pago: col(/^pay date$/i),
+    status: col(/^status$/i), moneda: col(/^currency$/i),
+  }
+  const index = new Map()
+  let total = 0
+  for (let i = h + 1; i < filas.length; i++) {
+    const r = filas[i] || []
+    const inv = r[C.inv]
+    if (inv == null || r[C.cliente] == null) continue   // separadores de año / "Nacionales"
+    const nat = String(r[C.nat] || '').trim().toUpperCase()
+    const clave = typeof inv === 'number' ? `${nat}${inv}` : claveFactura(inv)
+    if (!clave) continue
+    const iso = (d) => d instanceof Date && !isNaN(d) ? d.toISOString().slice(0, 10) : ''
+    const fila = {
+      clave, factura: typeof inv === 'number' ? `${nat}${String(inv).padStart(4, '0')}` : String(inv).trim(),
+      po: String(r[C.po] ?? '').trim(), cliente: String(r[C.cliente] || '').trim().replace(/\s+/g, ' ').toUpperCase(),
+      rfc: String(r[C.rfc] || '').trim(), tipoCxC: String(r[C.tipo] || '').trim(), desc: String(r[C.desc] || '').trim(),
+      importe: Number(r[C.importe]) || 0, iva: Number(r[C.iva]) || 0, total: Number(r[C.total]) || 0,
+      fecha: iso(r[C.fecha]), pago: iso(r[C.pago]), status: String(r[C.status] || '').trim(),
+      moneda: String(r[C.moneda] || '').trim().toUpperCase(), nota: String(r[17] ?? '').trim(), orden: i,
+    }
+    if (!index.has(clave)) index.set(clave, [])
+    index.get(clave).push(fila)
+    total++
+  }
+  return { index, total }
+}
+
+const diasEntre = (a, b) => (a && b) ? Math.abs((new Date(a) - new Date(b)) / 86400000) : Infinity
+
+// Renglón de Cuentas por Cobrar para una factura cobrada en `fecha`: el no
+// cancelado cuya fecha de pago está más cerca; si ninguno la trae, el más
+// reciente del archivo (el bloque del año actual va al final).
+export function buscarEnCxC(cxc, factura, fecha) {
+  const cands = (cxc?.index?.get(claveFactura(factura)) || []).filter(r => !/cancel/i.test(r.status) && !/cancel/i.test(r.tipoCxC))
+  if (!cands.length) return null
+  const conPago = cands.filter(r => r.pago).sort((x, y) => diasEntre(x.pago, fecha) - diasEntre(y.pago, fecha))
+  if (conPago.length && diasEntre(conPago[0].pago, fecha) <= 45) return conPago[0]
+  return cands.slice().sort((x, y) => y.orden - x.orden)[0]
+}
+
+/* Completa un ingreso con su factura de Cuentas por Cobrar.
+   - Cliente, RFC, tipo e IVA salen de la factura.
+   - Monto: en cuentas USD con factura en USD se usa el total facturado cuando
+     la diferencia con el depósito es la comisión del banco (≤ 2 % o ≤ 50) o
+     la explica una nota de crédito aplicada; si no, se deja el depósito y se
+     marca para revisar. En cuentas en pesos se deja el depósito (el archivo
+     guarda en dólares facturas que se cobran en pesos).
+   Devuelve { ingreso, cambios, notaCredito, revisar } o null si no aparece. */
+export function completarIngresoConCxC(ing, cxc) {
+  if (!ing || !cxc || !ing.factura || ing.factura === 'NA') return null
+  const f = buscarEnCxC(cxc, ing.factura, ing.fecha)
+  if (!f) return null
+  const out = { ...ing }
+  const cambios = []
+  const poner = (k, v, etiqueta) => {
+    if (v === undefined || v === null || v === '' || String(out[k] ?? '') === String(v)) return
+    out[k] = v
+    cambios.push(etiqueta)
+  }
+  poner('cliente', f.cliente, 'cliente')
+  if (f.rfc) poner('rfc', f.rfc, 'RFC')
+  const tipo = TIPO_CXC[f.tipoCxC.toUpperCase()]
+  if (tipo) poner('tipo', tipo, 'tipo')
+  poner('conIva', Math.abs(f.iva) > 0.005, 'IVA')
+  if (!/\bPO\b/i.test(out.concepto || '') && f.po && !/^NA$/i.test(f.po)) poner('concepto', `PO ${f.po}`, 'concepto')
+
+  // Nota de crédito aplicada a este cobro ("Aplicaron NCN43…" en la nota de
+  // la factura, o "NCN43 aplicada" en el concepto del Saldos).
+  const refNC = (`${f.nota} ${ing._conceptoSaldos || ''}`.match(/\bNC[A-Z]?\d+\b/i) || [])[0]
+  const nc = refNC ? buscarEnCxC(cxc, refNC, ing.fecha) : null
+  let notaCredito = null
+  let revisar = ''
+  const deposito = Number(ing.monto) || 0
+  if (ing.moneda === 'USD' && (f.moneda === 'USD' || !f.moneda) && f.total > 0) {
+    const dif = f.total - deposito
+    const ncTotal = nc ? -Math.abs(nc.total) : 0
+    if (Math.abs(dif) < 0.005) {
+      // igual
+    } else if (nc && Math.abs(f.total + ncTotal - deposito) <= Math.max(1, f.total * 0.02)) {
+      poner('monto', r2(f.total), 'monto de la factura')
+      notaCredito = {
+        movKey: `${ing.movKey || ''}|${nc.factura}`, rfc: nc.rfc || f.rfc, cliente: nc.cliente || f.cliente,
+        tipo: 'Nota de Crédito', factura: nc.factura, fecha: ing.fecha,
+        concepto: nc.desc ? `NC ${nc.desc}` : 'Nota de crédito', banco: ing.banco, moneda: ing.moneda,
+        monto: r2(ncTotal), conIva: Math.abs(nc.iva) > 0.005,
+      }
+    } else if (Math.abs(dif) <= Math.max(50, f.total * 0.02)) {
+      poner('monto', r2(f.total), 'monto de la factura')
+    } else {
+      const fmtU = (n) => 'US$' + r2(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      // ¿Una nota de crédito del mismo cliente por la diferencia? Sólo se
+      // sugiere: contabilidad decide si la aplica.
+      let pista = ''
+      for (const rows of cxc.index.values()) {
+        const x = rows.find(n => /^NC/i.test(n.factura) && n.cliente === f.cliente && Math.abs(Math.abs(n.total) - Math.abs(dif)) < 0.05)
+        if (x) { pista = ` (coincide con la nota de crédito ${x.factura}: ${x.desc})`; break }
+      }
+      revisar = `${f.factura}: la factura es por ${fmtU(f.total)} y en el banco entraron ${fmtU(deposito)}${pista}. Se deja lo del banco.`
+    }
+  }
+  out.cxc = f.factura
+  return { ingreso: out, cambios, notaCredito, revisar }
 }

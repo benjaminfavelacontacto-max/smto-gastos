@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.09
+Current version: v9.10
 
 ## Stack
 
@@ -104,6 +104,35 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     (formato final) conserva fórmulas del crudo en Ingreso/Egreso
     ("=6000*1.16") sin valor calculado: el parser lee con `sheetStubs` y
     evalúa las fórmulas aritméticas (`valorCelda` en saldosCotejo.js).
+17. Ingresos (v9.10, solo Alejandro Olivar): el modal de Movimientos del banco
+    tiene pestañas Egresos / Ingresos. `ingresosDelMes` propone los depósitos
+    de las cuentas de cheques (cobros a clientes con factura "Fact N0465" y PO
+    del concepto, devoluciones, intereses, préstamos; nunca traspasos ni venta
+    de bonos) con cliente/RFC de `CLIENTES_INGRESOS`. Viven en el state
+    `ingresos` (NO en `lista`: no son gastos ni entran a KPIs) y se exportan a
+    la hoja "Ingresos" del Excel con el layout de contabilidad (B..L, T/C en
+    L1 ligado a 'Reporte SMTO'!R7). El import lee esa hoja de vuelta.
+    Botón "Cuentas por Cobrar" (registro de facturas emitidas, pestaña
+    "Facturas"): `parseCuentasPorCobrar` + `completarIngresoConCxC` ponen
+    cliente, RFC, tipo (Type → Consultoría/Partes/Equipo/…), IVA (Tax ≠ 0) y,
+    en cuentas USD, el total facturado cuando la diferencia es comisión del
+    banco o la explica una nota de crédito (que se agrega como renglón
+    negativo, como contabilidad). En cuentas en pesos se deja el depósito: el
+    archivo guarda en USD facturas cobradas en pesos. Los números de factura
+    se repiten entre años: se elige por fecha de pago.
+    Intereses de Monex: una línea por cuenta (Monex USD / Monex MXN Cheques)
+    al último día del mes = rendimiento de bonos (cada "Venta Bonos" menos
+    su "Compra Bonos" anterior, en el mes de la venta) + los "Intereses" que
+    ya trae la cuenta. Oct-2026: USD 18.68 y MXN 4,489.51 + 2,895.77 =
+    7,385.28, igual que contabilidad.
+
+18. Barra de acciones de los perfiles especiales (COLABORADORES_ESPECIALES):
+    arriba la "Secuencia del reporte" numerada — 1 Cargar Carpeta, 2 Cotejar
+    con Saldos y, sólo Alejandro, 3 Agregar Nómina y 4 Cuentas por Cobrar —
+    cada paso en verde con ✓ al terminarlo y el siguiente pendiente
+    resaltado; abajo "Herramientas" (Manual, Importar reporte, Cargar Foto,
+    Validar Banco, Movimientos del banco) y Exportar. Los demás perfiles
+    conservan la barra de siempre.
 
 ## Cómo agregar un colaborador
 
@@ -205,7 +234,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.09
+- Current: v9.10
 
 ## Things to be careful about
 
