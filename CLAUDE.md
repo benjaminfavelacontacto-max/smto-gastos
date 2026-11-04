@@ -120,6 +120,11 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     negativo, como contabilidad). En cuentas en pesos se deja el depósito: el
     archivo guarda en USD facturas cobradas en pesos. Los números de factura
     se repiten entre años: se elige por fecha de pago.
+    Intereses de Monex: una línea por cuenta (Monex USD / Monex MXN Cheques)
+    al último día del mes = rendimiento de bonos (cada "Venta Bonos" menos
+    su "Compra Bonos" anterior, en el mes de la venta) + los "Intereses" que
+    ya trae la cuenta. Oct-2026: USD 18.68 y MXN 4,489.51 + 2,895.77 =
+    7,385.28, igual que contabilidad.
 
 ## Cómo agregar un colaborador
 

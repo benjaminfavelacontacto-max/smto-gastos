@@ -1047,6 +1047,57 @@ export function ingresosDelMes(saldosRows, lista, ingresosActuales = [], { mes, 
       },
     })
   }
+  // ── Intereses de Monex: rendimiento de bonos + intereses del mes ──
+  // Monex invierte el saldo en bonos: "Compra Bonos" (egreso) y al día
+  // siguiente "Venta Bonos" (ingreso) por un poco más. Cada venta menos su
+  // compra (la anterior en la pestaña) es rendimiento; cuenta en el mes de la
+  // venta. Contabilidad lo captura como UNA línea "Intereses" de BANCO MONEX
+  // por cuenta, al último día del mes, sumando también los "Intereses" que
+  // ya trae la cuenta (oct-2026: USD 18.68; MXN 4,489.51 + 2,895.77 = 7,385.28).
+  const [anio, mesNum] = String(mes || '').split('-').map(Number)
+  const finDeMes = anio && mesNum ? `${mes}-${String(new Date(anio, mesNum, 0).getDate()).padStart(2, '0')}` : ''
+  const hojasMonex = [...new Set(saldosRows.map(r => String(r.sheet || '').trim()).filter(h => /^MONEX\b.*CHEQUES/i.test(h)))]
+  for (const hoja of hojasMonex) {
+    const filas = saldosRows.filter(r => String(r.sheet || '').trim() === hoja)
+    let compra = null
+    let rendimiento = 0
+    let ventas = 0
+    for (const r of filas) {
+      const t = sinAcentos(`${r.tipo} ${r.concepto}`)
+      if (!/\bBONOS?\b/.test(t)) continue
+      if (/COMPRA/.test(t) && (Number(r.egreso) || 0) > 0) compra = Number(r.egreso)
+      else if (/VENTA/.test(t) && (Number(r.ingreso) || 0) > 0) {
+        if (compra != null && (saldosFechaToIso(r.fecha) || '').slice(0, 7) === mes) {
+          rendimiento += Number(r.ingreso) - compra
+          ventas++
+        }
+        compra = null
+      }
+    }
+    // Los "Intereses" sueltos de esta cuenta se suman a la misma línea.
+    const sueltos = out.filter(m => m.grupo === 'Intereses' && String(m.origen.sheet || '').trim() === hoja)
+    const intereses = sueltos.reduce((a, m) => a + (Number(m.ingreso.monto) || 0), 0)
+    const total = r2(rendimiento + intereses)
+    if (!ventas && !sueltos.length) continue
+    for (const m of sueltos) out.splice(out.indexOf(m), 1)
+    const usd = /\bUSD\b/i.test(hoja)
+    const key = `ING|INTERESES|${hoja}|${mes}`
+    const detalle = [
+      ventas ? `rendimiento de ${ventas} venta${ventas === 1 ? '' : 's'} de bonos ${usd ? 'US$' : '$'}${r2(rendimiento).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '',
+      sueltos.length ? `intereses ${usd ? 'US$' : '$'}${r2(intereses).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '',
+    ].filter(Boolean).join(' + ')
+    out.push({
+      key, marcado: total > 0, grupo: 'Intereses',
+      yaAgregado: yaKeys.has(key) || ingresosActuales.some(i =>
+        i.tipo === 'Intereses' && String(i.banco || '').trim() === hoja && String(i.fecha || '').slice(0, 7) === mes),
+      origen: { sheet: hoja, fecha: finDeMes, concepto: detalle, ingreso: total, moneda: usd ? 'USD' : 'MXN', partes: 1 },
+      ingreso: {
+        movKey: key, rfc: 'BMI9704113PA', cliente: 'BANCO MONEX', tipo: 'Intereses', factura: 'NA',
+        fecha: finDeMes, concepto: 'Intereses', banco: hoja, moneda: usd ? 'USD' : 'MXN', monto: total, conIva: false,
+      },
+    })
+  }
+
   const orden = ['Cobros a clientes', 'Devoluciones', 'Intereses', 'Préstamos', 'Otros ingresos']
   return out.sort((a, b) => (b.marcado - a.marcado) || orden.indexOf(a.grupo) - orden.indexOf(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
 }
