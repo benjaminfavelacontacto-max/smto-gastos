@@ -5657,7 +5657,12 @@ export default function App() {
       const result = cotejarConSaldos(saldosRows, lista)
       const mesReporte = mesDelReporte(lista)
       const tcMes = parseTipoCambioSaldos(wbSaldos)[mesReporte.slice(5, 7)]
-      setTcSaldos(tcMes ? { mes: mesReporte, tc: tcMes } : null)
+      // El formato de Tesorería V1.6 no trae la tabla "Tipo Cambio": entonces
+      // se conserva el que el usuario haya capturado para ese mes (campo en el
+      // modal) en vez de borrarlo al volver a cotejar.
+      setTcSaldos(prev => tcMes
+        ? { mes: mesReporte, tc: tcMes, fuente: 'saldos' }
+        : (prev?.mes === mesReporte && prev?.tc ? prev : { mes: mesReporte, tc: 0, fuente: 'manual' }))
       // Aplica las pólizas y la fecha de cobro de TODOS los matches (la
       // fecha del Saldos es la fecha real de pago del banco, equivalente
       // a dCSV en validarBanco). Tipo NO se cambia aquí; el modal lo
@@ -5924,10 +5929,37 @@ export default function App() {
   // elige cuáles agregar.
   const MESES_NOMBRE = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
   const etiquetaMes = (ym) => ym ? `${MESES_NOMBRE[parseInt(ym.slice(5, 7), 10) - 1]} ${ym.slice(0, 4)}` : ''
+
+  // Campo "T/C USD del mes" de los modales de Saldos. Se llena solo con la
+  // tabla "Tipo Cambio" del Saldos (formato crudo); el libro de Tesorería
+  // V1.6 no la trae, así que aquí se captura. Es la celda de T/C del Excel.
+  const campoTipoCambio = (mesSugerido) => {
+    const tc = tcSaldos?.tc || ''
+    const delSaldos = tcSaldos?.fuente === 'saldos' && tcSaldos?.tc > 0
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
+        T/C USD del mes:
+        <input
+          type="number" step="0.0001" min="0" value={tc} placeholder="Ej. 18.40"
+          onChange={e => {
+            const n = parseFloat(e.target.value)
+            setTcSaldos({ mes: tcSaldos?.mes || mesSugerido || mesDelReporte(lista), tc: n > 0 ? n : 0, fuente: 'manual' })
+          }}
+          style={{ width: 90, background: 'rgba(15,23,42,0.6)', color: '#e2e8f0', border: `1px solid ${tc ? 'rgba(148,163,184,0.3)' : 'rgba(245,158,11,0.7)'}`, borderRadius: 6, padding: '4px 8px', fontSize: 12 }}
+        />
+        {delSaldos && <span style={{ color: '#59D39B' }}>tomado del Saldos</span>}
+        {!tc && (
+          <span style={{ color: '#f59e0b' }}>
+            El Saldos no trae la tabla de tipo de cambio: captúralo para que el Excel convierta los dólares.
+          </span>
+        )}
+      </div>
+    )
+  }
   // Calcula (o recalcula al cambiar de mes) los movimientos propuestos.
   const abrirMovimientosBanco = ({ saldosRows, tcPorMes, meses, mes }) => {
     const tcMes = tcPorMes[mes.slice(5, 7)]
-    if (tcMes && !tcSaldos) setTcSaldos({ mes, tc: tcMes })
+    if (tcMes && !tcSaldos?.tc) setTcSaldos({ mes, tc: tcMes, fuente: 'saldos' })
     const items = movimientosSinFactura(saldosRows, lista, {
       mes, tcUSD: tcMes || tcSaldos?.tc || 0, buscarEmpleado: matchEmpleadoByShortName,
     }).filter(m => !m.yaAgregado)
@@ -6172,7 +6204,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.07</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.08</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6611,6 +6643,7 @@ export default function App() {
               <div className="premium-subtitle">
                 {result.matched.length} pólizas aplicadas · {discrepancias.length} discrepancia(s) de tipo{colisiones.length > 0 ? ` · ${colisiones.length} factura(s) con número repetido` : ''} · {sinMatchG.length} gasto(s) sin match · {sinMatchS.length} fila(s) Saldos sobrantes
               </div>
+              {campoTipoCambio()}
 
               <div style={{ overflowY: 'auto', flex: 1, marginTop: 16, padding: '0 4px' }}>
                 {discrepancias.length > 0 && (
@@ -6997,6 +7030,7 @@ export default function App() {
                   {meses.map(ym => <option key={ym} value={ym}>{etiquetaMes(ym)}</option>)}
                 </select>
               </div>
+              {items.some(m => m.gasto.esMonedaExtranjera) && campoTipoCambio(mes)}
               <div style={{ display: 'flex', gap: 8, margin: '14px 0 4px', flexWrap: 'wrap' }}>
                 {btn('Marcar todo', () => marcarTodos(true))}
                 {btn('Solo los recomendados', () => marcarTodos(true, true))}

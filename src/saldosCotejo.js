@@ -66,23 +66,41 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
     // (ej. "BBVA MXN Cheques" trae Concentradora, Cheques SMTO Pesos, etc.).
     // Cada header inicia un bloque de datos que corre hasta el siguiente
     // header (o hasta el final de la pestaña).
+    //
+    // Sirve igual para el Saldos "crudo" y para el libro de Tesorería
+    // "Saldos 2026 Nuevo V1.6": ese trae el resumen ARRIBA de cada pestaña y
+    // una sola tabla de movimientos con las mismas columnas A:G más Saldo,
+    // Categoría (y Titular en Clara). Los renglones en blanco entre años se
+    // saltan solos. En esas columnas extra la moneda no cuenta: la Categoría
+    // de un movimiento en pesos puede decir "Traspaso Cuenta USD Bancomer".
     const headers = []
     for (let r = range.s.r; r <= range.e.r; r++) {
       const v = (c) => String(getCell(r, c) || '').trim()
+      const conColumnasDeTesoreria = () => {
+        for (let c = 7; c <= Math.min(range.e.c, 20); c++) {
+          if (/^(SALDO|CATEGOR[IÍ]A|TITULAR)$/i.test(v(c))) return true
+        }
+        return false
+      }
       if (v(0) === 'Fecha' && v(1) === 'Tipo' && v(2) === 'Folio' && v(3) === 'Factura') {
-        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
+        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: 2, factura: 3, concepto: 4, ingreso: 5, egreso: 6 },
+          colMaxMoneda: conColumnasDeTesoreria() ? 6 : 20 })
       } else if (v(0) === 'Fecha' && (v(1) === 'Desc' || v(1) === 'Descripción') && v(3) === 'Factura') {
-        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 } })
+        headers.push({ row: r, cols: { fecha: 0, tipo: 1, folio: null, factura: 3, concepto: 4, ingreso: 5, egreso: 6 },
+          colMaxMoneda: conColumnasDeTesoreria() ? 6 : 20 })
       }
     }
     if (headers.length === 0) continue
 
     for (let h = 0; h < headers.length; h++) {
-      const { row: hRow, cols } = headers[h]
+      const { row: hRow, cols, colMaxMoneda } = headers[h]
       const endRow = h + 1 < headers.length ? headers[h + 1].row - 1 : range.e.r
       for (let r = hRow + 1; r <= endRow; r++) {
         const factura = String(getCell(r, cols.factura) || '').trim()
-        const tipo    = String(getCell(r, cols.tipo) || '').trim()
+        // V1.6 escribe "Sin clasificar" donde el crudo dejaba el tipo vacío:
+        // no es un tipo del reporte (no debe proponerse en discrepancias).
+        const tipoRaw = String(getCell(r, cols.tipo) || '').trim()
+        const tipo    = /^sin clasificar$/i.test(tipoRaw) ? '' : tipoRaw
         const concepto = String(getCell(r, cols.concepto) || '').trim()
         // Skip filas completamente vacías (sin tipo, factura, ni concepto)
         if (!factura && !tipo && !concepto) continue
@@ -97,7 +115,7 @@ export function parseSaldosXLSX(arrayBufferOrWb) {
         // pestaña misma ("Monex USD Cheques", "BBVA USD Cheques") también
         // cuenta: sus renglones casi nunca repiten "USD" en las celdas.
         let moneda = /\bUSD\b/i.test(sheetName) ? 'USD' : 'MXN'
-        const colMax = Math.min(range.e.c, 20)
+        const colMax = Math.min(range.e.c, colMaxMoneda)
         for (let c = range.s.c; c <= colMax; c++) {
           const v = String(getCell(r, c) || '').toUpperCase()
           if (/\bUSD\b|\bD[ÓO]LAR/.test(v)) { moneda = 'USD'; break }
