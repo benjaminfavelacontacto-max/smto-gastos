@@ -96,7 +96,10 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     y el libro de Tesorería "Saldos 2026 Nuevo V1.x" (resumen arriba de cada
     pestaña, columnas extra Saldo/Categoría/Titular, "Sin clasificar" = tipo
     vacío). El V1.x no trae la tabla "Tipo Cambio": el T/C del mes se captura
-    en el campo de los modales de Cotejar / Movimientos del banco.
+    en el campo de los modales de Cotejar / Movimientos del banco. El V1.7
+    (formato final) conserva fórmulas del crudo en Ingreso/Egreso
+    ("=6000*1.16") sin valor calculado: el parser lee con `sheetStubs` y
+    evalúa las fórmulas aritméticas (`valorCelda` en saldosCotejo.js).
 
 ## Cómo agregar un colaborador
 
