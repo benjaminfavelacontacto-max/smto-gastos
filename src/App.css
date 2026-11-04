@@ -48,7 +48,10 @@ body::before {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  overflow: hidden;
+  /* En pantallas bajas la página se desplaza en vez de dejar la tabla en 0
+     (la tabla conserva su min-height y su scroll propio). */
+  overflow-x: hidden;
+  overflow-y: auto;
   min-width: 960px;
   background: transparent;
   position: relative;
@@ -152,7 +155,7 @@ body::before {
 }
 .flujo-titulo span { font-weight: 500; letter-spacing: 0.02em; text-transform: none; color: rgba(255, 255, 255, 0.35); }
 .flujo-pasos { display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px 0; }
-.flujo-item { display: flex; align-items: center; flex: 1 1 0; min-width: 210px; }
+.flujo-item { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
 .flujo-linea {
   flex: 0 0 22px; height: 2px; margin: 0 6px; border-radius: 2px;
   background: rgba(255, 255, 255, 0.12);
@@ -196,12 +199,20 @@ body::before {
   color: rgba(255, 255, 255, 0.35); margin-right: 2px;
 }
 .herramientas-fila .btn-premium:not(.primary):not(.export) { height: 34px; padding: 0 12px; font-size: 12px; }
-@media (max-width: 1024px) {
-  .flujo-item { min-width: 46%; }
-  .flujo-item:nth-child(3) .flujo-linea { display: none; }
+/* Pantallas angostas: los 4 pasos siguen en un renglón; se ocultan las
+   notas para no duplicar la altura de la barra. */
+@media (max-width: 1280px) {
+  .herramientas-titulo { display: none; }
+  .herramientas-fila { gap: 6px; }
+  .herramientas-fila .action-group { gap: 6px; }
+  .herramientas-fila .btn-premium { height: 32px !important; padding: 0 10px !important; font-size: 12px !important; }
+  .herramientas-fila .validacion-counter { padding: 5px 10px; font-size: 12px; }
+  .flujo-hint { display: none; }
+  .flujo-paso { padding: 7px 10px; }
+  .flujo-linea { flex-basis: 12px; margin: 0 4px; }
 }
-@media (max-width: 640px) {
-  .flujo-item { min-width: 100%; }
+@media (max-width: 760px) {
+  .flujo-item { min-width: 50%; }
   .flujo-linea { display: none; }
 }
 
@@ -417,8 +428,7 @@ body::before {
 ═══════════════════════════════════════════ */
 .table-wrap {
   flex: 1;
-  /* Con el panel de Ingresos abierto la tabla de gastos sigue visible. */
-  min-height: 240px;
+  min-height: 320px;
   overflow-x: auto;
   overflow-y: auto;
   margin: 0 24px 24px;
@@ -2976,3 +2986,29 @@ tr.row-new {
     text-align: center;
   }
 }
+
+/* ── Pestañas Gastos / Ingresos sobre la tabla ── */
+.vista-tabs {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0 24px 10px; flex-shrink: 0;
+}
+.vista-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 34px; padding: 0 14px; border-radius: 10px; cursor: pointer;
+  font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.vista-tab span {
+  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.7);
+}
+.vista-tab em { font-style: normal; font-size: 11px; font-weight: 600; color: #f59e0b; }
+.vista-tab:hover { background: rgba(255, 255, 255, 0.07); }
+.vista-tab.activa { color: #59D39B; border-color: rgba(89, 211, 155, 0.5); background: rgba(89, 211, 155, 0.1); }
+.vista-tab.activa span { background: rgba(89, 211, 155, 0.2); color: #59D39B; }
+.vista-tab.ing.activa { color: #60A5FA; border-color: rgba(96, 165, 250, 0.55); background: rgba(96, 165, 250, 0.12); }
+.vista-tab.ing.activa span { background: rgba(96, 165, 250, 0.2); color: #60A5FA; }
+.vista-tabs-nota { margin-left: auto; font-size: 12px; color: rgba(255, 255, 255, 0.45); }

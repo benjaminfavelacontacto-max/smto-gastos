@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.10
+Current version: v9.11
 
 ## Stack
 
@@ -132,7 +132,10 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     cada paso en verde con ✓ al terminarlo y el siguiente pendiente
     resaltado; abajo "Herramientas" (Manual, Importar reporte, Cargar Foto,
     Validar Banco, Movimientos del banco) y Exportar. Los demás perfiles
-    conservan la barra de siempre.
+    conservan la barra de siempre. Con ingresos en el reporte, pestañas
+    "Gastos | Ingresos" sobre la tabla (los ingresos ocupan el lugar de la
+    tabla). La tabla conserva min-height 320px y, en pantallas bajas, la
+    página (.app) se desplaza en vez de aplastarla.
 
 ## Cómo agregar un colaborador
 
@@ -234,7 +237,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.10
+- Current: v9.11
 
 ## Things to be careful about
 
