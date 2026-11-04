@@ -665,7 +665,7 @@ export function aplicarCobroSaldos(g, m) {
 // Renglones del Saldos que contabilidad captura a mano en el reporte de
 // Alejandro Olivar porque no traen CFDI: comisiones bancarias, pagos de
 // crédito, fondo de ahorro, regalías, préstamos de nómina, no comprobados,
-// ISR, Telcel. Cada tipo del Saldos se convierte como lo hace contabilidad.
+// IMSS, ISR, Telcel. Cada tipo del Saldos se convierte como lo hace contabilidad.
 //   marcado: entra seleccionado en el modal; iva: el egreso incluye IVA 16 %.
 const MOVIMIENTOS_POR_TIPO = {
   'COMISIONES':      { tipo: 'Comisiones Banco', iva: true,  marcado: true, formaPago: '99' },
@@ -679,6 +679,9 @@ const MOVIMIENTOS_POR_TIPO = {
   'NO COMPROBADO':   { tipo: 'No Comprobado',    iva: false, marcado: true },
   'ISR':             { tipo: 'ISR',              iva: false, marcado: true },
   'CELULAR':         { tipo: 'Celular',          iva: true,  marcado: true },
+  // Cuotas obrero-patronales: contabilidad las captura con la línea de
+  // captura del Saldos como FACTURA (hoja de octubre: 186462, 232,926.47).
+  'IMSS':            { tipo: 'IMSS',             iva: false, marcado: true, conFactura: true },
 }
 // Nunca se proponen: la nómina la agrega "Agregar Nómina"; traspasos entre
 // cuentas propias, bonos y devoluciones no son gasto del reporte.
@@ -712,6 +715,9 @@ function beneficiario(sRow, regla, lista, buscarEmpleado) {
   if (regla?.tipo === 'Comisiones Banco') return banco || { proveedor: sheet.split(/\s+/)[0].toUpperCase(), rfc: '' }
   if (regla?.tipo === 'Pago Crédito') return ACREEDORES.find(([re]) => re.test(conc))?.[1] || banco || { proveedor: conc.toUpperCase(), rfc: '' }
   if (regla?.tipo === 'Fondo de Ahorro') return SMTO
+  // Así lo capturó contabilidad en octubre 2026 (en junio usó al IMSS,
+  // IMS421231I45): se puede corregir en el modal con "Editar".
+  if (regla?.tipo === 'IMSS') return SMTO
   if (regla?.tipo === 'ISR' || /\bSAT\b/i.test(conc)) return SAT
   if (regla?.tipo === 'Celular' || /RADIOMOVIL|TELCEL/i.test(conc)) return TELCEL
 
@@ -803,12 +809,14 @@ export function movimientosSinFactura(saldosRows, lista, { mes, tcUSD = 0, busca
     const iva = r2(egreso - base)
     const concepto = regla?.tipo === 'Comisiones Banco' && usd ? 'Comisiones pago en USD'
       : regla?.tipo === 'Préstamo Nómina' ? 'Préstamo Nómina'
+      // "Pago IMSS-Infonavit Sep" → "Pago de cuotas obrero patronales Sep"
+      : regla?.tipo === 'IMSS' ? `Pago de cuotas obrero patronales ${(String(r.concepto || '').match(/\b(Ene|Feb|Mar|Abr|May|Jun|Jul|Ago|Sep|Oct|Nov|Dic)\w*\s*$/i) || [''])[0]}`.trim()
       : String(r.concepto || '').trim()
 
     const gasto = {
       rfc, proveedor,
       tipo: regla?.tipo || String(r.tipo || '').trim(),
-      noFactura: 'N/A',
+      noFactura: regla?.conFactura && !['', 'NA'].includes(normFactura(r.factura)) ? String(r.factura).trim() : 'N/A',
       fechaFac: fecha, fechaCobro: fecha,
       concepto,
       isrTrasladado: 0, ishIeps: 0, retencionISR: 0, retencionIVA: 0, retenciones: 0,
