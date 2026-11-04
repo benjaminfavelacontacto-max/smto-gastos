@@ -934,7 +934,7 @@ const CLIENTES_INGRESOS = [
   [/MONEX/,                               'BANCO MONEX', 'BMI9704113PA'],
 ]
 const INGRESOS_EXCLUIDOS = /^(TRASPASO|BONOS?|VENTA BONOS?)$/
-export const TIPOS_INGRESO = ['Comisiones', 'Consultoría', 'Devolución', 'Equipo', 'Intereses', 'Nota de Crédito', 'Partes', 'Préstamo', 'Soldadura']
+export const TIPOS_INGRESO = ['Comisiones', 'Consultoría', 'Devolución', 'Equipo', 'Etiquetas', 'Intereses', 'Nota de Crédito', 'Partes', 'Préstamo', 'Renta', 'Soldadura']
 
 const buscarCliente = (texto) => {
   const t = sinAcentos(texto)
@@ -1043,10 +1043,146 @@ export function ingresosDelMes(saldosRows, lista, ingresosActuales = [], { mes, 
       ingreso: {
         movKey: key, rfc: quien.rfc || '', cliente: quien.cliente, tipo, factura,
         fecha, concepto, banco: String(r.sheet || '').trim().replace(/\s+/g, ' '),
-        moneda: r.moneda === 'USD' ? 'USD' : 'MXN', monto, conIva,
+        moneda: r.moneda === 'USD' ? 'USD' : 'MXN', monto, conIva, _conceptoSaldos: conc,
       },
     })
   }
   const orden = ['Cobros a clientes', 'Devoluciones', 'Intereses', 'Préstamos', 'Otros ingresos']
   return out.sort((a, b) => (b.marcado - a.marcado) || orden.indexOf(a.grupo) - orden.indexOf(b.grupo) || a.origen.fecha.localeCompare(b.origen.fecha))
+}
+
+// ── Cuentas por Cobrar ─────────────────────────────────────────────────────
+// "Cuentas por Cobrar 2026.xlsx" (pestaña "Facturas") es el registro de
+// facturas emitidas: Invoice, PO, Customer, RFC, Nat (E/N = serie), Type,
+// Desc, Invoice Amount, Tax, Invoice Total, Invoice Date, Due Date, Pay Date,
+// Status, Delayed days, Currency, Payment Complement y una nota libre (col R).
+// Los números se repiten entre años (N0452 existe en 2019 y en 2026), así que
+// se guardan todos los renglones de cada clave y se elige por fecha de pago.
+const TIPO_CXC = {
+  CONSULTING: 'Consultoría', COMMISSIONS: 'Comisiones', PARTS: 'Partes',
+  EQUIPMENT: 'Equipo', SOLDER: 'Soldadura', 'CREDIT NOTE': 'Nota de Crédito',
+  LABELS: 'Etiquetas', RENT: 'Renta',
+}
+
+// "N0465" → "N465", "E2061" → "E2061", "NCN43" → "NCN43".
+const claveFactura = (f) => {
+  const m = String(f || '').toUpperCase().replace(/\s+/g, '').match(/^([A-Z]+)0*(\d+)$/)
+  return m ? `${m[1]}${m[2]}` : ''
+}
+
+export function parseCuentasPorCobrar(arrayBufferOrWb) {
+  const wb = arrayBufferOrWb?.SheetNames ? arrayBufferOrWb : XLSX.read(arrayBufferOrWb, { type: 'array', cellDates: true })
+  const nombre = wb.SheetNames.find(n => /factura/i.test(n)) || wb.SheetNames[0]
+  const ws = wb.Sheets[nombre]
+  if (!ws || !ws['!ref']) return { index: new Map(), total: 0 }
+  const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
+  const h = filas.findIndex(r => /^invoice$/i.test(String(r?.[0] || '').trim()) && r.some(x => /^customer$/i.test(String(x || '').trim())))
+  if (h < 0) return { index: new Map(), total: 0 }
+  const col = (re) => filas[h].findIndex(x => re.test(String(x || '').trim()))
+  const C = {
+    inv: 0, po: col(/^PO$/i), cliente: col(/^customer$/i), rfc: col(/^RFC$/i), nat: col(/^nat$/i),
+    tipo: col(/^type$/i), desc: col(/^desc/i), importe: col(/^invoice amount$/i), iva: col(/^tax$/i),
+    total: col(/^invoice total$/i), fecha: col(/^invoice date$/i), pago: col(/^pay date$/i),
+    status: col(/^status$/i), moneda: col(/^currency$/i),
+  }
+  const index = new Map()
+  let total = 0
+  for (let i = h + 1; i < filas.length; i++) {
+    const r = filas[i] || []
+    const inv = r[C.inv]
+    if (inv == null || r[C.cliente] == null) continue   // separadores de año / "Nacionales"
+    const nat = String(r[C.nat] || '').trim().toUpperCase()
+    const clave = typeof inv === 'number' ? `${nat}${inv}` : claveFactura(inv)
+    if (!clave) continue
+    const iso = (d) => d instanceof Date && !isNaN(d) ? d.toISOString().slice(0, 10) : ''
+    const fila = {
+      clave, factura: typeof inv === 'number' ? `${nat}${String(inv).padStart(4, '0')}` : String(inv).trim(),
+      po: String(r[C.po] ?? '').trim(), cliente: String(r[C.cliente] || '').trim().replace(/\s+/g, ' ').toUpperCase(),
+      rfc: String(r[C.rfc] || '').trim(), tipoCxC: String(r[C.tipo] || '').trim(), desc: String(r[C.desc] || '').trim(),
+      importe: Number(r[C.importe]) || 0, iva: Number(r[C.iva]) || 0, total: Number(r[C.total]) || 0,
+      fecha: iso(r[C.fecha]), pago: iso(r[C.pago]), status: String(r[C.status] || '').trim(),
+      moneda: String(r[C.moneda] || '').trim().toUpperCase(), nota: String(r[17] ?? '').trim(), orden: i,
+    }
+    if (!index.has(clave)) index.set(clave, [])
+    index.get(clave).push(fila)
+    total++
+  }
+  return { index, total }
+}
+
+const diasEntre = (a, b) => (a && b) ? Math.abs((new Date(a) - new Date(b)) / 86400000) : Infinity
+
+// Renglón de Cuentas por Cobrar para una factura cobrada en `fecha`: el no
+// cancelado cuya fecha de pago está más cerca; si ninguno la trae, el más
+// reciente del archivo (el bloque del año actual va al final).
+export function buscarEnCxC(cxc, factura, fecha) {
+  const cands = (cxc?.index?.get(claveFactura(factura)) || []).filter(r => !/cancel/i.test(r.status) && !/cancel/i.test(r.tipoCxC))
+  if (!cands.length) return null
+  const conPago = cands.filter(r => r.pago).sort((x, y) => diasEntre(x.pago, fecha) - diasEntre(y.pago, fecha))
+  if (conPago.length && diasEntre(conPago[0].pago, fecha) <= 45) return conPago[0]
+  return cands.slice().sort((x, y) => y.orden - x.orden)[0]
+}
+
+/* Completa un ingreso con su factura de Cuentas por Cobrar.
+   - Cliente, RFC, tipo e IVA salen de la factura.
+   - Monto: en cuentas USD con factura en USD se usa el total facturado cuando
+     la diferencia con el depósito es la comisión del banco (≤ 2 % o ≤ 50) o
+     la explica una nota de crédito aplicada; si no, se deja el depósito y se
+     marca para revisar. En cuentas en pesos se deja el depósito (el archivo
+     guarda en dólares facturas que se cobran en pesos).
+   Devuelve { ingreso, cambios, notaCredito, revisar } o null si no aparece. */
+export function completarIngresoConCxC(ing, cxc) {
+  if (!ing || !cxc || !ing.factura || ing.factura === 'NA') return null
+  const f = buscarEnCxC(cxc, ing.factura, ing.fecha)
+  if (!f) return null
+  const out = { ...ing }
+  const cambios = []
+  const poner = (k, v, etiqueta) => {
+    if (v === undefined || v === null || v === '' || String(out[k] ?? '') === String(v)) return
+    out[k] = v
+    cambios.push(etiqueta)
+  }
+  poner('cliente', f.cliente, 'cliente')
+  if (f.rfc) poner('rfc', f.rfc, 'RFC')
+  const tipo = TIPO_CXC[f.tipoCxC.toUpperCase()]
+  if (tipo) poner('tipo', tipo, 'tipo')
+  poner('conIva', Math.abs(f.iva) > 0.005, 'IVA')
+  if (!/\bPO\b/i.test(out.concepto || '') && f.po && !/^NA$/i.test(f.po)) poner('concepto', `PO ${f.po}`, 'concepto')
+
+  // Nota de crédito aplicada a este cobro ("Aplicaron NCN43…" en la nota de
+  // la factura, o "NCN43 aplicada" en el concepto del Saldos).
+  const refNC = (`${f.nota} ${ing._conceptoSaldos || ''}`.match(/\bNC[A-Z]?\d+\b/i) || [])[0]
+  const nc = refNC ? buscarEnCxC(cxc, refNC, ing.fecha) : null
+  let notaCredito = null
+  let revisar = ''
+  const deposito = Number(ing.monto) || 0
+  if (ing.moneda === 'USD' && (f.moneda === 'USD' || !f.moneda) && f.total > 0) {
+    const dif = f.total - deposito
+    const ncTotal = nc ? -Math.abs(nc.total) : 0
+    if (Math.abs(dif) < 0.005) {
+      // igual
+    } else if (nc && Math.abs(f.total + ncTotal - deposito) <= Math.max(1, f.total * 0.02)) {
+      poner('monto', r2(f.total), 'monto de la factura')
+      notaCredito = {
+        movKey: `${ing.movKey || ''}|${nc.factura}`, rfc: nc.rfc || f.rfc, cliente: nc.cliente || f.cliente,
+        tipo: 'Nota de Crédito', factura: nc.factura, fecha: ing.fecha,
+        concepto: nc.desc ? `NC ${nc.desc}` : 'Nota de crédito', banco: ing.banco, moneda: ing.moneda,
+        monto: r2(ncTotal), conIva: Math.abs(nc.iva) > 0.005,
+      }
+    } else if (Math.abs(dif) <= Math.max(50, f.total * 0.02)) {
+      poner('monto', r2(f.total), 'monto de la factura')
+    } else {
+      const fmtU = (n) => 'US$' + r2(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      // ¿Una nota de crédito del mismo cliente por la diferencia? Sólo se
+      // sugiere: contabilidad decide si la aplica.
+      let pista = ''
+      for (const rows of cxc.index.values()) {
+        const x = rows.find(n => /^NC/i.test(n.factura) && n.cliente === f.cliente && Math.abs(Math.abs(n.total) - Math.abs(dif)) < 0.05)
+        if (x) { pista = ` (coincide con la nota de crédito ${x.factura}: ${x.desc})`; break }
+      }
+      revisar = `${f.factura}: la factura es por ${fmtU(f.total)} y en el banco entraron ${fmtU(deposito)}${pista}. Se deja lo del banco.`
+    }
+  }
+  out.cxc = f.factura
+  return { ingreso: out, cambios, notaCredito, revisar }
 }

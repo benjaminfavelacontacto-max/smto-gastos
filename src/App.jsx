@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo, TIPO_RULES_RFC } from './tipoRules'
-import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura, ingresosDelMes, aplicarEdicionIngreso, desgloseIngreso, TIPOS_INGRESO } from './saldosCotejo'
+import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura, ingresosDelMes, aplicarEdicionIngreso, desgloseIngreso, TIPOS_INGRESO, parseCuentasPorCobrar, completarIngresoConCxC } from './saldosCotejo'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
    sales-flavored list (Hotel Ventas, Gasolina Ventas, …), everyone else
@@ -3318,6 +3318,7 @@ export default function App() {
   const saldosRef = useRef(null)
   const nominaRef = useRef(null)
   const movBancoRef = useRef(null)
+  const cxcRef = useRef(null)
   const [cotejoModal, setCotejoModal] = useState(null)
   // T/C USD del mes del reporte, leído de la tabla "Tipo Cambio" del Saldos
   // al cotejar ({ mes: '2026-10', tc: 18.4 }). Va al Excel como celda R7.
@@ -3338,6 +3339,9 @@ export default function App() {
   // { id, movKey, rfc, cliente, tipo, factura, fecha, concepto, banco, moneda, monto, conIva }
   const [ingresos, setIngresos] = useState([])
   const [ingresosAbierto, setIngresosAbierto] = useState(false)
+  // "Cuentas por Cobrar 2026.xlsx" ya leído: { index, total, nombre }. Con él
+  // los ingresos toman cliente, RFC, tipo, IVA y el monto de la factura.
+  const [cxc, setCxc] = useState(null)
   const ingresosParaExcel = () => ingresos.map(i => ({
     rfc: i.rfc || '', cliente: i.cliente || '', tipo: i.tipo || '', factura: i.factura || 'NA',
     fecha: i.fecha || '', concepto: i.concepto || '', banco: i.banco || '',
@@ -6061,6 +6065,100 @@ export default function App() {
       .filter(ym => /^\d{4}-\d{2}$/.test(ym) && ym <= hoyYM))].sort().reverse()
   }
 
+  const completarItemsIng = (itemsIng, cxcData, ingresosActuales = ingresos) => {
+    if (!cxcData) return itemsIng
+    const out = []
+    for (const m of itemsIng) {
+      if (m.cxcInfo || m.esNC) { out.push(m); continue }
+      const r = completarIngresoConCxC(m.ingreso, cxcData)
+      if (!r) { out.push(m); continue }
+      out.push({ ...m, ingreso: r.ingreso, cxcInfo: { cambios: r.cambios, revisar: r.revisar } })
+      const nc = r.notaCredito
+      if (nc && !ingresosActuales.some(i => String(i.factura).toUpperCase() === nc.factura.toUpperCase())) {
+        out.push({
+          key: `${m.key}|NC`, marcado: m.marcado, grupo: 'Notas de crédito', esNC: true, yaAgregado: false,
+          origen: { ...m.origen, concepto: `Aplicada al cobro de la factura ${m.ingreso.factura}` },
+          ingreso: nc, cxcInfo: { cambios: [], revisar: '' },
+        })
+      }
+    }
+    return out
+  }
+  // Lo mismo para los ingresos que ya están en el reporte.
+  const completarIngresosReporte = (lst, cxcData) => {
+    const out = []
+    const resumen = { completados: 0, montos: 0, notas: 0, revisar: [] }
+    for (const i of lst) {
+      if (i.tipo === 'Nota de Crédito') { out.push(i); continue }
+      const r = completarIngresoConCxC(i, cxcData)
+      if (!r) { out.push(i); continue }
+      if (r.cambios.length) resumen.completados++
+      if (r.cambios.includes('monto de la factura')) resumen.montos++
+      if (r.revisar) resumen.revisar.push(r.revisar)
+      out.push({ ...r.ingreso, revisarCxC: r.revisar || '' })
+      const nc = r.notaCredito
+      if (nc && ![...lst, ...out].some(x => String(x.factura).toUpperCase() === nc.factura.toUpperCase())) {
+        out.push({ ...nc, id: genId() })
+        resumen.notas++
+      }
+    }
+    return { lista: out, resumen }
+  }
+
+  const handleCxcFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const data = parseCuentasPorCobrar(XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true }))
+      if (!data.total) {
+        showModal({ type: 'error', title: 'Cuentas por Cobrar sin facturas', subtitle: 'No encontré la pestaña "Facturas" con las columnas Invoice / Customer / RFC / Nat / Type.', primaryLabel: 'Entendido' })
+        return
+      }
+      const cxcData = { ...data, nombre: file.name }
+      setCxc(cxcData)
+      // Ingresos ya agregados al reporte.
+      const { lista: nuevosIng, resumen } = completarIngresosReporte(ingresos, cxcData)
+      setIngresos(nuevosIng.sort((x, y) => String(x.fecha).localeCompare(String(y.fecha))))
+      // Ingresos propuestos en el modal abierto.
+      let enModal = null
+      if (movBancoModal?.itemsIng) {
+        const items = completarItemsIng(movBancoModal.itemsIng, cxcData, nuevosIng)
+        const nCompletados = items.filter(m => m.cxcInfo && !m.esNC && m.cxcInfo.cambios.length).length
+        const nNC = items.filter(m => m.esNC).length
+        const nRevisar = items.filter(m => m.cxcInfo?.revisar).length
+        const nSin = items.filter(m => !m.cxcInfo && m.ingreso.factura && m.ingreso.factura !== 'NA').length
+        enModal = { nCompletados, nNC, nRevisar, nSin }
+        setMovBancoModal(prev => prev && ({
+          ...prev, itemsIng: items,
+          sel: { ...prev.sel, ...Object.fromEntries(items.filter(m => m.esNC && !(m.key in prev.sel)).map(m => [m.key, !!prev.sel[m.key.replace(/\|NC$/, '')]])) },
+          cxcResumen: `${file.name}: ${nCompletados} ingreso${nCompletados === 1 ? '' : 's'} completado${nCompletados === 1 ? '' : 's'} con su factura`
+            + (nNC ? `, ${nNC} nota${nNC === 1 ? '' : 's'} de crédito agregada${nNC === 1 ? '' : 's'}` : '')
+            + (nRevisar ? `, ${nRevisar} para revisar` : '')
+            + (nSin ? `, ${nSin} con factura que no está en el archivo` : '') + '.',
+        }))
+      }
+      if (!enModal) {
+        showModal({
+          type: resumen.revisar.length ? 'warning' : 'success',
+          title: 'Cuentas por Cobrar cargadas',
+          subtitle: `${data.total} facturas leídas. ${ingresos.length ? 'Completé los ingresos del reporte con su factura (cliente, RFC, tipo, IVA y monto); los' : 'Los'} que agregues desde el Saldos también la toman.`
+            + (resumen.revisar.length ? ` Revisa: ${resumen.revisar.join(' · ')}` : ''),
+          stats: [
+            { value: resumen.completados, label: 'Ingresos completados', color: '#60A5FA' },
+            ...(resumen.montos ? [{ value: resumen.montos, label: 'Montos de la factura', color: 'rgba(255,255,255,0.85)' }] : []),
+            ...(resumen.notas ? [{ value: `+${resumen.notas}`, label: 'Notas de crédito', color: '#f59e0b' }] : []),
+          ],
+          primaryLabel: 'Continuar',
+        })
+      }
+    } catch (err) {
+      console.warn('handleCxcFile:', err)
+      showModal({ type: 'error', title: 'Error leyendo Cuentas por Cobrar', subtitle: err.message || 'No se pudo leer el archivo.', primaryLabel: 'Entendido' })
+    } finally {
+      e.target.value = ''
+    }
+  }
+
   // Calcula (o recalcula al cambiar de mes) los movimientos propuestos.
   const abrirMovimientosBanco = ({ saldosRows, tcPorMes, meses, mes, trasCotejo = false }) => {
     const tcMes = tcPorMes[mes.slice(5, 7)]
@@ -6068,9 +6166,9 @@ export default function App() {
     const items = movimientosSinFactura(saldosRows, lista, {
       mes, tcUSD: tcMes || tcSaldos?.tc || 0, buscarEmpleado: matchEmpleadoByShortName,
     }).filter(m => !m.yaAgregado)
-    const itemsIng = ingresosDelMes(saldosRows, lista, ingresos, {
+    const itemsIng = completarItemsIng(ingresosDelMes(saldosRows, lista, ingresos, {
       mes, buscarEmpleado: matchEmpleadoByShortName,
-    }).filter(m => !m.yaAgregado)
+    }).filter(m => !m.yaAgregado), cxc)
     setMovBancoModal(prev => ({
       saldosRows, tcPorMes, meses, mes, label: etiquetaMes(mes), items, itemsIng,
       vista: prev?.vista || 'egresos',
@@ -6131,7 +6229,7 @@ export default function App() {
       ...aplicarEdicionMovimiento(m.gasto, edits[m.key]),
       id: genId(), uuid: crypto.randomUUID(), isNew: true,
     }))
-    const nuevosIng = elegidosIng.map(m => ({ ...aplicarEdicionIngreso(m.ingreso, edits[m.key]), id: genId() }))
+    const nuevosIng = elegidosIng.map(m => ({ ...aplicarEdicionIngreso(m.ingreso, edits[m.key]), revisarCxC: m.cxcInfo?.revisar || '', id: genId() }))
     if (nuevos.length) setLista(prev => [...prev, ...nuevos])
     if (nuevosIng.length) setIngresos(prev => [...prev, ...nuevosIng].sort((x, y) => String(x.fecha).localeCompare(String(y.fecha))))
     const fmtMx = (n) => '$' + n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -6452,6 +6550,21 @@ export default function App() {
               onClick={() => movBancoRef.current?.click()}
             />
           )}
+          {colaborador?.nombre === 'Alejandro Olivar' && (
+            <PremiumButton
+              title={cxc ? 'Cuentas por Cobrar ✓' : 'Cuentas por Cobrar'}
+              icon="📒"
+              variant="secondary"
+              onClick={() => cxcRef.current?.click()}
+            />
+          )}
+          <input
+            ref={cxcRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleCxcFile}
+          />
           <input
             ref={saldosRef}
             type="file"
@@ -6759,7 +6872,7 @@ export default function App() {
                         <td style={{ ...celdaSt, minWidth: 70 }}><input style={inp} value={i.factura} onChange={e => setCampo(i.id, { factura: e.target.value })} /></td>
                         <td style={{ ...celdaSt, minWidth: 180 }}><input style={inp} value={i.concepto} onChange={e => setCampo(i.id, { concepto: e.target.value })} /></td>
                         <td style={{ ...celdaSt, whiteSpace: 'nowrap', color: '#94a3b8' }}>{i.banco}</td>
-                        <td style={{ ...celdaSt, whiteSpace: 'nowrap', textAlign: 'right', color: '#60A5FA', fontWeight: 700 }}>{i.moneda === 'USD' ? 'US$' : '$'}{fmt(i.monto)}</td>
+                        <td title={i.revisarCxC || ''} style={{ ...celdaSt, whiteSpace: 'nowrap', textAlign: 'right', color: i.revisarCxC ? '#f59e0b' : (i.monto < 0 ? '#F87171' : '#60A5FA'), fontWeight: 700 }}>{i.revisarCxC ? '⚠ ' : ''}{i.monto < 0 ? '−' : ''}{i.moneda === 'USD' ? 'US$' : '$'}{fmt(Math.abs(i.monto))}</td>
                         <td style={celdaSt}><input type="checkbox" checked={!!i.conIva} onChange={e => setCampo(i.id, { conIva: e.target.checked })} title="Incluye IVA 16%" /></td>
                         <td style={celdaSt}>
                           <button onClick={() => setIngresos(prev => prev.filter(x => x.id !== i.id))} title="Quitar del reporte"
@@ -7200,7 +7313,8 @@ export default function App() {
             const i = aplicarEdicionIngreso(m.ingreso, edits[m.key])
             return {
               obj: i, nombre: i.cliente, tipo: i.tipo, concepto: i.concepto, fecha: i.fecha,
-              detalle: `${m.origen.sheet} · factura ${i.factura || 'NA'}`,
+              detalle: `${m.origen.sheet} · factura ${i.factura || 'NA'}${m.cxcInfo && !m.esNC ? ' · de Cuentas por Cobrar' : ''}`,
+              revisar: m.cxcInfo?.revisar || '',
               usd: i.moneda === 'USD', monto: i.monto, desg: desgloseIngreso(i), conIva: i.conIva,
             }
           }
@@ -7280,6 +7394,7 @@ export default function App() {
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
                     {v.nombre} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· {v.tipo || ''}{v.tipo ? ' · ' : ''}{v.concepto}</span>
                     {!v.tipo && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b' }}>FALTA TIPO</span>}
+                    {m.cxcInfo && !m.esNC && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#60A5FA' }}>CxC</span>}
                     {edits[m.key] && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#f59e0b' }}>EDITADO</span>}
                   </div>
                   <div style={{ fontSize: 11, color: '#94a3b8' }}>
@@ -7287,9 +7402,10 @@ export default function App() {
                     {m.origen.partes > 1 ? ` · ${m.origen.partes} transferencias juntas` : ''}
                     {edits[m.key] || m.ingreso ? ` · en el Saldos: ${m.origen.concepto}` : ''}
                   </div>
+                  {v.revisar && <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 2 }}>⚠ {v.revisar}</div>}
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: m.ingreso ? '#60A5FA' : '#e2e8f0', whiteSpace: 'nowrap' }}>
-                  {m.ingreso ? '+' : ''}{v.usd ? 'US$' : '$'}{fmt(v.monto)}
+                <div style={{ fontSize: 12, fontWeight: 700, color: m.ingreso ? (v.monto < 0 ? '#F87171' : '#60A5FA') : '#e2e8f0', whiteSpace: 'nowrap' }}>
+                  {m.ingreso ? (v.monto < 0 ? '−' : '+') : ''}{v.usd ? 'US$' : '$'}{fmt(m.ingreso ? Math.abs(v.monto) : v.monto)}
                 </div>
                 <button onClick={e => {
                   e.stopPropagation()
@@ -7374,6 +7490,19 @@ export default function App() {
                 </span>
                 {hayUsd && campoTipoCambio(mes, true)}
               </div>
+              {esIng && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 8, fontSize: 12, flexWrap: 'wrap' }}>
+                  <button onClick={() => cxcRef.current?.click()} style={{
+                    padding: '5px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                    border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(96,165,250,0.08)', color: '#60A5FA',
+                  }}>
+                    {cxc ? 'Cambiar Cuentas por Cobrar' : 'Completar con Cuentas por Cobrar'}
+                  </button>
+                  <span style={{ color: cxc ? '#60A5FA' : '#94a3b8' }}>
+                    {movBancoModal.cxcResumen || (cxc ? `${cxc.nombre}: cliente, RFC, tipo, IVA y monto de cada factura.` : 'Carga el archivo para traer cliente, RFC, tipo, IVA y monto de cada factura.')}
+                  </span>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, margin: '10px 0 2px', flexWrap: 'wrap' }}>
                 {btn('Marcar todo', () => marcarTodos(true))}
                 {btn('Solo los recomendados', () => marcarTodos(true, true))}

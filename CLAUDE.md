@@ -112,6 +112,14 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     `ingresos` (NO en `lista`: no son gastos ni entran a KPIs) y se exportan a
     la hoja "Ingresos" del Excel con el layout de contabilidad (B..L, T/C en
     L1 ligado a 'Reporte SMTO'!R7). El import lee esa hoja de vuelta.
+    Botón "Cuentas por Cobrar" (registro de facturas emitidas, pestaña
+    "Facturas"): `parseCuentasPorCobrar` + `completarIngresoConCxC` ponen
+    cliente, RFC, tipo (Type → Consultoría/Partes/Equipo/…), IVA (Tax ≠ 0) y,
+    en cuentas USD, el total facturado cuando la diferencia es comisión del
+    banco o la explica una nota de crédito (que se agrega como renglón
+    negativo, como contabilidad). En cuentas en pesos se deja el depósito: el
+    archivo guarda en USD facturas cobradas en pesos. Los números de factura
+    se repiten entre años: se elige por fecha de pago.
 
 ## Cómo agregar un colaborador
 
