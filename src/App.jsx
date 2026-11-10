@@ -4,6 +4,8 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo, TIPO_RULES_RFC } from './tipoRules'
+import { generarPresupuesto, leerSaldosParaPresupuesto, leerHojaTrabajo, detalleCSV, MESES_NOMBRE } from './presupuestoDinamico'
+import { guardarArchivo, leerArchivo } from './almacenLocal'
 import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura, ingresosDelMes, aplicarEdicionIngreso, desgloseIngreso, TIPOS_INGRESO, parseCuentasPorCobrar, completarIngresoConCxC } from './saldosCotejo'
 
 /* Two type lists — picked by colaborador.categoria. Ventas/Socio see the
@@ -2734,6 +2736,324 @@ function ConciliacionModal({ data, onClose, onConfirm, onCancel, onAgregarManual
 // Generic success modal — driven entirely by the `data` object so it can
 // represent any export flow. Caller passes a pre-formatted `meta` string
 // (e.g. "17 registros · 24.5 KB") and an optional muted `note` footer.
+/* ── PRESUPUESTO DINÁMICO (sólo Alejandro Olivar) ──
+   Llena el mes de la Hoja de trabajo en el último Presupuesto Dinámico y lo
+   coteja contra el archivo de Saldos (src/presupuestoDinamico.js). El Saldos y
+   el Presupuesto base se guardan en este navegador (src/almacenLocal.js): el
+   Saldos al subirlo en cualquier paso, y el Presupuesto cada vez que se genera.
+   Así lo normal es sólo subir la Hoja de trabajo. */
+const MESES_ABREV = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+function mesDeNombreArchivo(nombre) {
+  const m = String(nombre || '').match(/(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)[a-z]*\.?[\s_-]+(20\d\d)/i)
+  return m ? { anio: +m[2], mes: MESES_ABREV.indexOf(m[1].toLowerCase()) + 1 } : {}
+}
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+function descargarDatos(datos, nombre, tipo) {
+  const url = URL.createObjectURL(new Blob([datos], { type: tipo }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = nombre
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 4000)
+}
+
+function RequisitoPresupuesto({ estado, titulo, detalle, accion, onAccion }) {
+  return (
+    <div className={`presu-req ${estado}`}>
+      <span className="presu-req-icono">{estado === 'ok' ? '✓' : estado === 'falta' ? '!' : '…'}</span>
+      <div className="presu-req-texto">
+        <div className="presu-req-titulo">{titulo}</div>
+        <div className="presu-req-detalle">{detalle}</div>
+      </div>
+      {accion && <button className="presu-req-btn" onClick={onAccion}>{accion}</button>}
+    </div>
+  )
+}
+
+function PresupuestoModal({ onClose, onGenerado }) {
+  const [saldosInfo, setSaldosInfo] = useState(undefined)   // undefined = cargando, null = falta
+  const [baseInfo, setBaseInfo] = useState(undefined)
+  const [fase, setFase] = useState('inicio')                 // inicio | saldosViejo | procesando | errores | listo | error
+  const [mensaje, setMensaje] = useState('')
+  // Saldos guardado anterior al cierre del mes de la Hoja: { mes, anio, fecha }
+  const [avisoSaldos, setAvisoSaldos] = useState(null)
+  const continuarTrasSaldos = useRef(false)                  // tras subir un Saldos nuevo, generar con la Hoja pendiente
+  const [resultado, setResultado] = useState(null)
+  const [errorMsg, setErrorMsg] = useState('')
+  const hojaPendiente = useRef(null)
+  const saldosLeido = useRef(null)                           // { guardado, datos } para no releer el Saldos
+  const saldosInput = useRef(null)
+  const baseInput = useRef(null)
+  const hojaInput = useRef(null)
+
+  const refrescar = useCallback(async () => {
+    const [s, b] = await Promise.all([leerArchivo('saldos'), leerArchivo('presupuestoBase')])
+    setSaldosInfo(s ? { nombre: s.nombre, guardado: s.guardado, modificado: s.modificado } : null)
+    setBaseInfo(b ? { nombre: b.nombre, guardado: b.guardado, anio: b.anio, mes: b.mes } : null)
+  }, [])
+  useEffect(() => { refrescar() }, [refrescar])
+
+  const money = (n) => `${Number(n) < 0 ? '-' : ''}$${Math.abs(Number(n || 0)).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const cuando = (t) => t ? new Date(t).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
+  const leerInput = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    return file ? { file, buffer: await file.arrayBuffer() } : null
+  }
+  const fallar = (msg) => { setErrorMsg(msg); setFase('error') }
+
+  const subirSaldos = async (e) => {
+    const x = await leerInput(e)
+    if (!x) return
+    await guardarArchivo('saldos', { nombre: x.file.name, buffer: x.buffer, modificado: x.file.lastModified || Date.now() })
+    saldosLeido.current = null
+    refrescar()
+    if (continuarTrasSaldos.current && hojaPendiente.current) {
+      continuarTrasSaldos.current = false
+      generar(hojaPendiente.current)
+    }
+  }
+  const subirBase = async (e) => {
+    const x = await leerInput(e)
+    if (!x) return
+    let hojas = []
+    try { hojas = XLSX.read(x.buffer, { type: 'array', bookSheets: true }).SheetNames } catch { /* no es Excel */ }
+    if (!hojas.includes('Real')) return fallar(`"${x.file.name}" no parece un Presupuesto Dinámico: no tiene la hoja "Real".`)
+    await guardarArchivo('presupuestoBase', { nombre: x.file.name, buffer: x.buffer, ...mesDeNombreArchivo(x.file.name) })
+    refrescar()
+  }
+  const pausa = () => new Promise(r => setTimeout(r, 40))   // deja pintar el mensaje antes del trabajo pesado
+
+  const generar = async (hojaBuffer, forzar = false) => {
+    setFase('procesando')
+    try {
+      const [s, b] = await Promise.all([leerArchivo('saldos'), leerArchivo('presupuestoBase')])
+      if (!s || !b) { setFase('inicio'); refrescar(); return }
+      if (saldosLeido.current?.guardado !== s.guardado) {
+        setMensaje('Leyendo el archivo de Saldos…')
+        await pausa()
+        saldosLeido.current = { guardado: s.guardado, datos: leerSaldosParaPresupuesto(s.buffer) }
+      }
+      setMensaje('Llenando las semanas y cotejando con Saldos…')
+      await pausa()
+      const r = await generarPresupuesto({ baseBuffer: b.buffer, hojaBuffer, saldos: saldosLeido.current.datos, forzar })
+      if (!r.ok) {
+        hojaPendiente.current = hojaBuffer
+        setResultado(r)
+        setFase('errores')
+        return
+      }
+      const avisos = [...r.avisos]
+      const fechaSaldos = s.modificado || s.guardado
+      if (fechaSaldos < finDeMes(r.anio, r.mes)) {
+        avisos.unshift(`Se usó un Saldos del ${cuando(fechaSaldos)}, anterior al cierre de ${MESES_NOMBRE[r.mes]}: los movimientos posteriores de los bancos no están en el presupuesto.`)
+      }
+      if (b.anio && b.mes && r.anio * 12 + r.mes > b.anio * 12 + b.mes + 1) {
+        avisos.unshift(`El presupuesto base estaba lleno hasta ${MESES_NOMBRE[b.mes]} ${b.anio}: los meses entre ése y ${MESES_NOMBRE[r.mes]} siguen con el pronóstico.`)
+      }
+      descargarDatos(r.archivo, r.nombreArchivo, XLSX_MIME)
+      const copia = r.archivo.buffer.slice(r.archivo.byteOffset, r.archivo.byteOffset + r.archivo.byteLength)
+      await guardarArchivo('presupuestoBase', { nombre: r.nombreArchivo, buffer: copia, anio: r.anio, mes: r.mes })
+      hojaPendiente.current = null
+      setResultado({ ...r, avisos })
+      setFase('listo')
+      refrescar()
+      onGenerado?.(r)
+    } catch (err) {
+      console.error('Presupuesto Dinámico:', err)
+      fallar(err?.message || 'No se pudo generar el presupuesto.')
+    }
+  }
+  // Último instante del mes (hora local): un Saldos modificado antes no trae el cierre.
+  const finDeMes = (anio, mes) => new Date(anio, mes, 0, 23, 59, 59).getTime()
+  const subirHoja = async (e) => {
+    const x = await leerInput(e)
+    if (!x) return
+    let hoja
+    try { hoja = leerHojaTrabajo(x.buffer) } catch (err) { return fallar(err?.message || 'No pude leer la Hoja de trabajo.') }
+    const s = await leerArchivo('saldos')
+    const fechaSaldos = s ? (s.modificado || s.guardado) : 0
+    if (s && fechaSaldos < finDeMes(hoja.anio, hoja.mes)) {
+      hojaPendiente.current = x.buffer
+      setAvisoSaldos({ mes: hoja.mes, anio: hoja.anio, fecha: fechaSaldos })
+      setFase('saldosViejo')
+      return
+    }
+    generar(x.buffer)
+  }
+
+  const listoParaHoja = !!saldosInfo && !!baseInfo
+  const icono = (color, path) => (
+    <div className="premium-icon-wrap" style={{ background: `${color}22`, border: `1px solid ${color}44` }}>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{path}</svg>
+    </div>
+  )
+  const iconoGrafica = <><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></>
+
+  return (
+    <div className="premium-overlay" onClick={fase === 'procesando' ? undefined : onClose}>
+      <div className="premium-modal presu-modal" onClick={e => e.stopPropagation()}>
+        <input ref={saldosInput} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={subirSaldos} />
+        <input ref={baseInput} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={subirBase} />
+        <input ref={hojaInput} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={subirHoja} />
+
+        {fase === 'inicio' && (
+          <>
+            {icono('#59D39B', iconoGrafica)}
+            <h2 className="premium-title">Presupuesto Dinámico</h2>
+            <p className="premium-subtitle">Sube la Hoja de trabajo del mes. Te regreso el presupuesto lleno por semana y cotejado con los saldos de los bancos.</p>
+            <div className="presu-reqs">
+              <RequisitoPresupuesto
+                estado={saldosInfo === undefined ? 'cargando' : saldosInfo ? 'ok' : 'falta'}
+                titulo="Archivo de Saldos"
+                detalle={saldosInfo ? `${saldosInfo.nombre} · archivo del ${cuando(saldosInfo.modificado || saldosInfo.guardado)}` : saldosInfo === null ? 'Súbelo una vez; se guarda en este navegador (también al usar "Cotejar con Saldos").' : 'Buscando…'}
+                accion={saldosInfo === undefined ? null : saldosInfo ? 'Cambiar' : 'Subir Saldos'}
+                onAccion={() => saldosInput.current?.click()}
+              />
+              <RequisitoPresupuesto
+                estado={baseInfo === undefined ? 'cargando' : baseInfo ? 'ok' : 'falta'}
+                titulo="Presupuesto base"
+                detalle={baseInfo ? `${baseInfo.nombre}${baseInfo.mes ? ` · lleno hasta ${MESES_NOMBRE[baseInfo.mes]} ${baseInfo.anio}` : ''}` : baseInfo === null ? 'Sube el último Presupuesto Dinámico (sólo la primera vez; después se guarda solo).' : 'Buscando…'}
+                accion={baseInfo === undefined ? null : baseInfo ? 'Cambiar' : 'Subir presupuesto'}
+                onAccion={() => baseInput.current?.click()}
+              />
+            </div>
+            <div className="premium-actions" style={{ marginTop: 20 }}>
+              <button className="premium-btn-secondary" onClick={onClose}>Cancelar</button>
+              <button className="premium-btn-primary" disabled={!listoParaHoja} onClick={() => hojaInput.current?.click()}
+                style={listoParaHoja ? undefined : { opacity: 0.45, cursor: 'not-allowed' }}>
+                Subir Hoja de trabajo
+              </button>
+            </div>
+          </>
+        )}
+
+        {fase === 'procesando' && (
+          <>
+            <div className="presu-spinner" />
+            <h2 className="premium-title">Generando el presupuesto</h2>
+            <p className="premium-subtitle" style={{ marginBottom: 6 }}>{mensaje}</p>
+          </>
+        )}
+
+        {fase === 'saldosViejo' && avisoSaldos && (
+          <>
+            {icono('#f59e0b', <><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>)}
+            <h2 className="premium-title">El Saldos guardado no trae el cierre de {MESES_NOMBRE[avisoSaldos.mes]}</h2>
+            <p className="premium-subtitle">
+              El archivo de Saldos es del {cuando(avisoSaldos.fecha)}, antes de que terminara {MESES_NOMBRE[avisoSaldos.mes]} {avisoSaldos.anio}.
+              Los movimientos de los bancos posteriores no quedarían en el presupuesto ni en el cotejo.
+            </p>
+            <div className="premium-actions" style={{ flexWrap: 'wrap' }}>
+              <button className="premium-btn-secondary" onClick={() => { setAvisoSaldos(null); generar(hojaPendiente.current) }}>Generar así</button>
+              <button className="premium-btn-primary" onClick={() => { continuarTrasSaldos.current = true; saldosInput.current?.click() }}>Subir Saldos actualizado</button>
+            </div>
+          </>
+        )}
+
+        {fase === 'error' && (
+          <>
+            {icono('#ef4444', <><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></>)}
+            <h2 className="premium-title">No se pudo generar</h2>
+            <p className="premium-subtitle">{errorMsg}</p>
+            <div className="premium-actions">
+              <button className="premium-btn-secondary" onClick={onClose}>Cerrar</button>
+              <button className="premium-btn-primary" onClick={() => setFase('inicio')}>Volver</button>
+            </div>
+          </>
+        )}
+
+        {fase === 'errores' && resultado && (
+          <>
+            {icono('#f59e0b', <><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>)}
+            <h2 className="premium-title">Hay partidas sin renglón en el presupuesto</h2>
+            <p className="premium-subtitle" style={{ marginBottom: 6 }}>
+              Corrige el tipo en la Hoja de trabajo y vuelve a subirla, o genera el presupuesto sin estas partidas.
+            </p>
+            <ul className="presu-lista">{resultado.errores.map((x, i) => <li key={i}>{x}</li>)}</ul>
+            <div className="premium-actions" style={{ marginTop: 18 }}>
+              <button className="premium-btn-secondary" onClick={() => setFase('inicio')}>Volver</button>
+              <button className="premium-btn-primary" onClick={() => generar(hojaPendiente.current, true)}>Generar sin ellas</button>
+            </div>
+          </>
+        )}
+
+        {fase === 'listo' && resultado && (() => {
+          const r = resultado
+          const t = r.totales
+          // Contra la Hoja: hasta $1 es redondeo de los dólares a centavos (renglón por renglón).
+          const cuadreHoja = (pres, hoja) => {
+            const d = pres - hoja
+            if (Math.abs(d) < 0.005) return <span className="presu-ok">✓ Cuadra</span>
+            if (Math.abs(d) < 1) return <span className="presu-ok">✓ Cuadra · {money(d)} de redondeo</span>
+            return <span className="presu-mal">Dif. {money(d)}</span>
+          }
+          // Contra Saldos: al centavo.
+          const cuadraBanco = (b) => Math.abs(b.diferencia) < 0.005
+          const descuadres = r.cotejoBancos.filter(b => !cuadraBanco(b)).length
+          const finMes = new Date(Date.UTC(r.anio, r.mes, 0)).getUTCDate()
+          return (
+            <>
+              {icono('#59D39B', <polyline points="20 6 9 17 4 12"/>)}
+              <h2 className="premium-title">Presupuesto de {MESES_NOMBRE[r.mes]} {r.anio} listo</h2>
+              <p className="premium-subtitle" style={{ marginBottom: 4 }}>
+                Se descargó "{r.nombreArchivo}". Quedó guardado como base para el siguiente mes.
+              </p>
+              <div className="premium-stats" style={{ margin: '14px 0 4px' }}>
+                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#59D39B', fontSize: 17 }}>{money(t.ingresosPresupuesto)}</div><div className="premium-stat-label">Ingresos del mes</div></div>
+                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#f59e0b', fontSize: 17 }}>{money(t.egresosPresupuesto)}</div><div className="premium-stat-label">Egresos del mes</div></div>
+                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#60A5FA', fontSize: 17 }}>{r.tc}</div><div className="premium-stat-label">Tipo de cambio</div></div>
+              </div>
+              <div className="presu-seccion">
+                <h3>Cuadre con la Hoja de trabajo</h3>
+                <div className="presu-check"><span>Ingresos: {money(t.ingresosHoja)} en la Hoja</span>{cuadreHoja(t.ingresosPresupuesto, t.ingresosHoja)}</div>
+                <div className="presu-check"><span>Egresos: {money(t.egresosHoja)} en la Hoja</span>{cuadreHoja(t.egresosPresupuesto, t.egresosHoja)}</div>
+              </div>
+              <div className="presu-seccion">
+                <h3>Cotejo con Saldos · saldo al {finMes} de {MESES_NOMBRE[r.mes]}{descuadres ? ` · ${descuadres} sin cuadrar` : ' · todo cuadra'}</h3>
+                <div className="presu-tabla-wrap">
+                  <table className="presu-tabla">
+                    <thead><tr><th>Cuenta</th><th>Presupuesto</th><th>Saldos</th><th></th></tr></thead>
+                    <tbody>
+                      {r.cotejoBancos.map(b => {
+                        const ok = cuadraBanco(b)
+                        return (
+                          <tr key={b.cuenta}>
+                            <td>{b.cuenta}{b.moneda === 'USD' ? ' (USD)' : ''}</td>
+                            <td>{money(b.presupuesto)}</td>
+                            <td>{money(b.saldos)}</td>
+                            <td className={ok ? 'presu-ok' : 'presu-mal'}>{ok ? '✓' : `Dif. ${money(b.diferencia)}`}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {descuadres > 0 && (
+                  <p className="presu-nota">Una diferencia aquí viene de meses anteriores del presupuesto o de movimientos que cambiaron en Saldos: revisa esa cuenta en Saldos.</p>
+                )}
+              </div>
+              {r.avisos.length > 0 && (
+                <details className="presu-seccion presu-avisos">
+                  <summary>{r.avisos.length} {r.avisos.length === 1 ? 'aviso para revisar' : 'avisos para revisar'}</summary>
+                  <ul className="presu-lista">{r.avisos.map((x, i) => <li key={i}>{x}</li>)}</ul>
+                </details>
+              )}
+              <div className="premium-actions" style={{ marginTop: 20, flexWrap: 'wrap' }}>
+                <button className="premium-btn-secondary" onClick={() => descargarDatos(detalleCSV(r.detalle), `Detalle presupuesto ${MESES_NOMBRE[r.mes]} ${r.anio}.csv`, 'text/csv;charset=utf-8')}>Detalle (CSV)</button>
+                <button className="premium-btn-secondary" onClick={() => descargarDatos(r.archivo, r.nombreArchivo, XLSX_MIME)}>Descargar otra vez</button>
+                <button className="premium-btn-primary" onClick={onClose}>Listo</button>
+              </div>
+            </>
+          )
+        })()}
+      </div>
+    </div>
+  )
+}
+
 function ExportSuccessModal({ data, onClose }) {
   const { title, subtitle, filename, meta, Icon, note } = data
   return (
@@ -3351,6 +3671,9 @@ export default function App() {
   const [cxc, setCxc] = useState(null)
   // Paso 2 de la secuencia (Cotejar con Saldos) ya aplicado a este reporte.
   const [cotejoHecho, setCotejoHecho] = useState(false)
+  // Paso 5 (Presupuesto Dinámico): modal abierto y si ya se generó en esta sesión.
+  const [presupuestoAbierto, setPresupuestoAbierto] = useState(false)
+  const [presupuestoHecho, setPresupuestoHecho] = useState(false)
   useEffect(() => { if (!lista.length) setCotejoHecho(false) }, [lista.length])
   const ingresosParaExcel = () => ingresos.map(i => ({
     rfc: i.rfc || '', cliente: i.cliente || '', tipo: i.tipo || '', factura: i.factura || 'NA',
@@ -5735,6 +6058,13 @@ export default function App() {
   // Defers to /api/export-excel (Python serverless function on Vercel) so the
   // .xls file gets full template formatting via xlrd + xlutils + xlwt —
   // something community SheetJS can't preserve in the browser.
+  // Guarda el Saldos que sube Alejandro en este navegador para que el paso
+  // "Presupuesto Dinámico" no lo vuelva a pedir.
+  const recordarSaldos = (file, buffer) => {
+    if (colaborador?.nombre !== 'Alejandro Olivar') return
+    guardarArchivo('saldos', { nombre: file.name, buffer, modificado: file.lastModified || Date.now() }).catch(() => {})
+  }
+
   // ── Cotejo con Saldos (solo colaboradores especiales) ──
   // Aplica las pólizas que sí matchean automáticamente; abre el modal de
   // discrepancias para que el usuario decida tipo por tipo.
@@ -5745,6 +6075,7 @@ export default function App() {
       const arrayBuffer = await file.arrayBuffer()
       const wbSaldos = leerSaldosWorkbook(arrayBuffer)
       const saldosRows = parseSaldosXLSX(wbSaldos)
+      if (saldosRows.length) recordarSaldos(file, arrayBuffer)
       if (saldosRows.length === 0) {
         showModal({
           type: 'error',
@@ -5825,6 +6156,7 @@ export default function App() {
     try {
       const arrayBuffer = await file.arrayBuffer()
       const saldosRows = parseSaldosXLSX(arrayBuffer)
+      if (saldosRows.length) recordarSaldos(file, arrayBuffer)
       const nominaRows = saldosRows.filter(r =>
         /^n[óo]mina\b/i.test(String(r.tipo || '').trim())
       )
@@ -6194,8 +6526,10 @@ export default function App() {
     const file = e.target.files?.[0]
     if (!file) return
     try {
-      const wbSaldos = leerSaldosWorkbook(await file.arrayBuffer())
+      const arrayBuffer = await file.arrayBuffer()
+      const wbSaldos = leerSaldosWorkbook(arrayBuffer)
       const saldosRows = parseSaldosXLSX(wbSaldos)
+      if (saldosRows.length) recordarSaldos(file, arrayBuffer)
       const tcPorMes = parseTipoCambioSaldos(wbSaldos)
       // Meses con egresos en cuentas de cheques hasta el actual (el Saldos ya
       // trae pagos programados a futuro). Por default el mes del reporte; sin
@@ -6449,7 +6783,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.12</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.13</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>
@@ -6588,6 +6922,8 @@ export default function App() {
               hecho: lista.some(g => g.esNomina), onClick: () => nominaRef.current?.click() },
             { icono: '💰', titulo: 'Ingresos', hint: 'Sube Cuentas por Cobrar: cliente, RFC, tipo e IVA',
               hecho: !!cxc, onClick: () => cxcRef.current?.click() },
+            { icono: '📈', titulo: 'Presupuesto Dinámico', hint: 'Sube la Hoja de trabajo y descarga el presupuesto',
+              hecho: presupuestoHecho, onClick: () => setPresupuestoAbierto(true) },
           ] : []),
         ]
         const siguiente = pasos.findIndex(x => !x.hecho)
@@ -6925,6 +7261,11 @@ export default function App() {
           </div>
         )
       })()}
+
+      {/* ─── PRESUPUESTO DINÁMICO (paso 5 de Alejandro Olivar) ─── */}
+      {presupuestoAbierto && (
+        <PresupuestoModal onClose={() => setPresupuestoAbierto(false)} onGenerado={() => setPresupuestoHecho(true)} />
+      )}
 
       {/* ─── PREMIUM MODAL (info / warning / error / confirm) ─── */}
       {modal && (
