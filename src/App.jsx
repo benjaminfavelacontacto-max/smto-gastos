@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, X, CreditCard, Target, Sparkles, AlertTriangle, FileText, FileSpreadsheet, FileWarning, Package, Check, Plus, Link2, Search, Download, ArrowRight, ChevronDown, XCircle, AlertCircle, Info } from 'lucide-react'
 import { autoDetectTipo, TIPO_RULES_RFC } from './tipoRules'
-import { generarPresupuesto, leerSaldosParaPresupuesto, leerHojaTrabajo, detalleCSV, MESES_NOMBRE } from './presupuestoDinamico'
+import { generarPresupuesto, leerSaldosParaPresupuesto, leerHojaTrabajo, mesesSugeridos, etiquetaMes, detalleCSV, diferenciasCSV, MESES_NOMBRE } from './presupuestoDinamico'
 import { guardarArchivo, leerArchivo } from './almacenLocal'
 import { leerSaldosWorkbook, parseSaldosXLSX, parseTipoCambioSaldos, mesDelReporte, saldosFechaToIso, cotejarConSaldos, aplicarCobroSaldos, movimientosSinFactura, ingresosDelMes, aplicarEdicionIngreso, desgloseIngreso, TIPOS_INGRESO, parseCuentasPorCobrar, completarIngresoConCxC } from './saldosCotejo'
 
@@ -2775,14 +2775,16 @@ function RequisitoPresupuesto({ estado, titulo, detalle, accion, onAccion }) {
 function PresupuestoModal({ onClose, onGenerado }) {
   const [saldosInfo, setSaldosInfo] = useState(undefined)   // undefined = cargando, null = falta
   const [baseInfo, setBaseInfo] = useState(undefined)
-  const [fase, setFase] = useState('inicio')                 // inicio | saldosViejo | procesando | errores | listo | error
+  const [fase, setFase] = useState('inicio')                 // inicio | meses | saldosViejo | procesando | errores | listo | error
+  // Hoja con varios meses: { 'AAAA-MM': true/false } de los que se van a llenar
+  const [eleccion, setEleccion] = useState(null)
   const [mensaje, setMensaje] = useState('')
   // Saldos guardado anterior al cierre del mes de la Hoja: { mes, anio, fecha }
   const [avisoSaldos, setAvisoSaldos] = useState(null)
   const continuarTrasSaldos = useRef(false)                  // tras subir un Saldos nuevo, generar con la Hoja pendiente
   const [resultado, setResultado] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
-  const hojaPendiente = useRef(null)
+  const pendiente = useRef(null)                             // { hoja, meses } de la Hoja elegida, para seguir tras un aviso
   const saldosLeido = useRef(null)                           // { guardado, datos } para no releer el Saldos
   const saldosInput = useRef(null)
   const baseInput = useRef(null)
@@ -2810,9 +2812,9 @@ function PresupuestoModal({ onClose, onGenerado }) {
     await guardarArchivo('saldos', { nombre: x.file.name, buffer: x.buffer, modificado: x.file.lastModified || Date.now() })
     saldosLeido.current = null
     refrescar()
-    if (continuarTrasSaldos.current && hojaPendiente.current) {
+    if (continuarTrasSaldos.current && pendiente.current) {
       continuarTrasSaldos.current = false
-      generar(hojaPendiente.current)
+      generar()
     }
   }
   const subirBase = async (e) => {
@@ -2826,7 +2828,14 @@ function PresupuestoModal({ onClose, onGenerado }) {
   }
   const pausa = () => new Promise(r => setTimeout(r, 40))   // deja pintar el mensaje antes del trabajo pesado
 
-  const generar = async (hojaBuffer, forzar = false) => {
+  // Guarda el presupuesto generado como base (hasta: mes en que queda lleno).
+  const guardarComoBase = async (r, hasta) => {
+    const copia = r.archivo.buffer.slice(r.archivo.byteOffset, r.archivo.byteOffset + r.archivo.byteLength)
+    await guardarArchivo('presupuestoBase', { nombre: r.nombreArchivo, buffer: copia, anio: hasta.anio, mes: hasta.mes })
+  }
+  const generar = async (forzar = false) => {
+    const p = pendiente.current
+    if (!p) { setFase('inicio'); return }
     setFase('procesando')
     try {
       const [s, b] = await Promise.all([leerArchivo('saldos'), leerArchivo('presupuestoBase')])
@@ -2838,9 +2847,9 @@ function PresupuestoModal({ onClose, onGenerado }) {
       }
       setMensaje('Llenando las semanas y cotejando con Saldos…')
       await pausa()
-      const r = await generarPresupuesto({ baseBuffer: b.buffer, hojaBuffer, saldos: saldosLeido.current.datos, forzar })
+      const baseHasta = b.anio && b.mes ? { anio: b.anio, mes: b.mes } : null
+      const r = await generarPresupuesto({ baseBuffer: b.buffer, hoja: p.hoja, meses: p.meses, saldos: saldosLeido.current.datos, forzar, baseHasta })
       if (!r.ok) {
-        hojaPendiente.current = hojaBuffer
         setResultado(r)
         setFase('errores')
         return
@@ -2854,10 +2863,12 @@ function PresupuestoModal({ onClose, onGenerado }) {
         avisos.unshift(`El presupuesto base estaba lleno hasta ${MESES_NOMBRE[b.mes]} ${b.anio}: los meses entre ése y ${MESES_NOMBRE[r.mes]} siguen con el pronóstico.`)
       }
       descargarDatos(r.archivo, r.nombreArchivo, XLSX_MIME)
-      const copia = r.archivo.buffer.slice(r.archivo.byteOffset, r.archivo.byteOffset + r.archivo.byteLength)
-      await guardarArchivo('presupuestoBase', { nombre: r.nombreArchivo, buffer: copia, anio: r.anio, mes: r.mes })
-      hojaPendiente.current = null
-      setResultado({ ...r, avisos })
+      // La base sólo se reemplaza sola con un mes nuevo; si se regeneraron meses
+      // ya capturados (una prueba o una corrección) se ofrece guardarla aparte.
+      const mesNuevo = !baseHasta || r.anio * 12 + r.mes > baseHasta.anio * 12 + baseHasta.mes
+      if (mesNuevo) await guardarComoBase(r, { anio: r.anio, mes: r.mes })
+      pendiente.current = null
+      setResultado({ ...r, avisos, guardadoComoBase: mesNuevo, baseHasta })
       setFase('listo')
       refrescar()
       onGenerado?.(r)
@@ -2868,20 +2879,33 @@ function PresupuestoModal({ onClose, onGenerado }) {
   }
   // Último instante del mes (hora local): un Saldos modificado antes no trae el cierre.
   const finDeMes = (anio, mes) => new Date(anio, mes, 0, 23, 59, 59).getTime()
+  // Antes de generar: avisa si el Saldos guardado es anterior al cierre del último mes.
+  const seguirConMeses = async () => {
+    const p = pendiente.current
+    const ultimo = p.meses[p.meses.length - 1]
+    const anio = +ultimo.slice(0, 4), mes = +ultimo.slice(5, 7)
+    const s = await leerArchivo('saldos')
+    const fechaSaldos = s ? (s.modificado || s.guardado) : 0
+    if (s && fechaSaldos < finDeMes(anio, mes)) {
+      setAvisoSaldos({ mes, anio, fecha: fechaSaldos })
+      setFase('saldosViejo')
+      return
+    }
+    generar()
+  }
   const subirHoja = async (e) => {
     const x = await leerInput(e)
     if (!x) return
     let hoja
     try { hoja = leerHojaTrabajo(x.buffer) } catch (err) { return fallar(err?.message || 'No pude leer la Hoja de trabajo.') }
-    const s = await leerArchivo('saldos')
-    const fechaSaldos = s ? (s.modificado || s.guardado) : 0
-    if (s && fechaSaldos < finDeMes(hoja.anio, hoja.mes)) {
-      hojaPendiente.current = x.buffer
-      setAvisoSaldos({ mes: hoja.mes, anio: hoja.anio, fecha: fechaSaldos })
-      setFase('saldosViejo')
+    const sugeridos = mesesSugeridos(hoja)
+    pendiente.current = { hoja, meses: sugeridos.length ? sugeridos : [hoja.ym] }
+    if (hoja.meses.length > 1) {
+      setEleccion(Object.fromEntries(hoja.meses.map(m => [m.ym, pendiente.current.meses.includes(m.ym)])))
+      setFase('meses')
       return
     }
-    generar(x.buffer)
+    seguirConMeses()
   }
 
   const listoParaHoja = !!saldosInfo && !!baseInfo
@@ -2930,6 +2954,45 @@ function PresupuestoModal({ onClose, onGenerado }) {
           </>
         )}
 
+        {fase === 'meses' && pendiente.current && eleccion && (() => {
+          const h = pendiente.current.hoja
+          const elegidos = h.meses.filter(m => eleccion[m.ym]).map(m => m.ym).sort()
+          const hasta = baseInfo?.mes ? baseInfo.anio * 12 + baseInfo.mes : null
+          return (
+            <>
+              {icono('#59D39B', <><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>)}
+              <h2 className="premium-title">¿Qué meses lleno?</h2>
+              <p className="premium-subtitle" style={{ marginBottom: 6 }}>
+                La Hoja trae renglones de {h.meses.length} meses. Marqué los que tienen la mayoría; un renglón suelto de otro mes no debe reemplazar ese mes.
+              </p>
+              <div className="month-list">
+                {h.meses.map(m => {
+                  const capturado = hasta && m.anio * 12 + m.mes <= hasta
+                  return (
+                    <label key={m.ym} className={`month-item${eleccion[m.ym] ? ' selected' : ''}`}>
+                      <input type="checkbox" checked={!!eleccion[m.ym]} onChange={() => setEleccion(prev => ({ ...prev, [m.ym]: !prev[m.ym] }))} />
+                      <div className="month-info">
+                        <div className="month-name">{etiquetaMes(m.ym)}</div>
+                        <div className="month-stats">
+                          {m.egresos} egresos · {m.ingresos} ingresos{capturado ? ' · ya capturado: se compara contra lo que tiene' : ''}
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+              <div className="premium-actions" style={{ marginTop: 18 }}>
+                <button className="premium-btn-secondary" onClick={() => { pendiente.current = null; setFase('inicio') }}>Cancelar</button>
+                <button className="premium-btn-primary" disabled={!elegidos.length}
+                  style={elegidos.length ? undefined : { opacity: 0.45, cursor: 'not-allowed' }}
+                  onClick={() => { pendiente.current = { ...pendiente.current, meses: elegidos }; seguirConMeses() }}>
+                  Generar {elegidos.length} {elegidos.length === 1 ? 'mes' : 'meses'}
+                </button>
+              </div>
+            </>
+          )
+        })()}
+
         {fase === 'procesando' && (
           <>
             <div className="presu-spinner" />
@@ -2947,7 +3010,7 @@ function PresupuestoModal({ onClose, onGenerado }) {
               Los movimientos de los bancos posteriores no quedarían en el presupuesto ni en el cotejo.
             </p>
             <div className="premium-actions" style={{ flexWrap: 'wrap' }}>
-              <button className="premium-btn-secondary" onClick={() => { setAvisoSaldos(null); generar(hojaPendiente.current) }}>Generar así</button>
+              <button className="premium-btn-secondary" onClick={() => { setAvisoSaldos(null); generar() }}>Generar así</button>
               <button className="premium-btn-primary" onClick={() => { continuarTrasSaldos.current = true; saldosInput.current?.click() }}>Subir Saldos actualizado</button>
             </div>
           </>
@@ -2975,7 +3038,7 @@ function PresupuestoModal({ onClose, onGenerado }) {
             <ul className="presu-lista">{resultado.errores.map((x, i) => <li key={i}>{x}</li>)}</ul>
             <div className="premium-actions" style={{ marginTop: 18 }}>
               <button className="premium-btn-secondary" onClick={() => setFase('inicio')}>Volver</button>
-              <button className="premium-btn-primary" onClick={() => generar(hojaPendiente.current, true)}>Generar sin ellas</button>
+              <button className="premium-btn-primary" onClick={() => generar(true)}>Generar sin ellas</button>
             </div>
           </>
         )}
@@ -2994,23 +3057,67 @@ function PresupuestoModal({ onClose, onGenerado }) {
           const cuadraBanco = (b) => Math.abs(b.diferencia) < 0.005
           const descuadres = r.cotejoBancos.filter(b => !cuadraBanco(b)).length
           const finMes = new Date(Date.UTC(r.anio, r.mes, 0)).getUTCDate()
+          const comp = r.comparacion || []
+          const varios = comp.length > 1
+          const conCapturados = comp.some(m => m.yaCapturado)
+          const titulo = varios
+            ? `Presupuesto de ${MESES_NOMBRE[comp[0].mes]} a ${MESES_NOMBRE[r.mes]} ${r.anio} listo`
+            : `Presupuesto de ${MESES_NOMBRE[r.mes]} ${r.anio} listo`
           return (
             <>
               {icono('#59D39B', <polyline points="20 6 9 17 4 12"/>)}
-              <h2 className="premium-title">Presupuesto de {MESES_NOMBRE[r.mes]} {r.anio} listo</h2>
+              <h2 className="premium-title">{titulo}</h2>
               <p className="premium-subtitle" style={{ marginBottom: 4 }}>
-                Se descargó "{r.nombreArchivo}". Quedó guardado como base para el siguiente mes.
+                Se descargó "{r.nombreArchivo}". {r.guardadoComoBase
+                  ? 'Quedó guardado como base para el siguiente mes.'
+                  : `No se guardó como base: ${varios ? 'esos meses ya estaban capturados' : 'ese mes ya estaba capturado'} en el presupuesto guardado (lleno hasta ${MESES_NOMBRE[r.baseHasta?.mes] || ''} ${r.baseHasta?.anio || ''}).`}
               </p>
               <div className="premium-stats" style={{ margin: '14px 0 4px' }}>
-                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#59D39B', fontSize: 17 }}>{money(t.ingresosPresupuesto)}</div><div className="premium-stat-label">Ingresos del mes</div></div>
-                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#f59e0b', fontSize: 17 }}>{money(t.egresosPresupuesto)}</div><div className="premium-stat-label">Egresos del mes</div></div>
-                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#60A5FA', fontSize: 17 }}>{r.tc}</div><div className="premium-stat-label">Tipo de cambio</div></div>
+                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#59D39B', fontSize: 17 }}>{money(t.ingresosPresupuesto)}</div><div className="premium-stat-label">{varios ? `Ingresos (${comp.length} meses)` : 'Ingresos del mes'}</div></div>
+                <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#f59e0b', fontSize: 17 }}>{money(t.egresosPresupuesto)}</div><div className="premium-stat-label">{varios ? `Egresos (${comp.length} meses)` : 'Egresos del mes'}</div></div>
+                {varios
+                  ? <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#60A5FA', fontSize: 17 }}>{comp.length}</div><div className="premium-stat-label">Meses llenados</div></div>
+                  : <div className="premium-stat-card"><div className="premium-stat-value" style={{ color: '#60A5FA', fontSize: 17 }}>{comp[0]?.tc ?? r.tc}</div><div className="premium-stat-label">Tipo de cambio</div></div>}
               </div>
               <div className="presu-seccion">
                 <h3>Cuadre con la Hoja de trabajo</h3>
                 <div className="presu-check"><span>Ingresos: {money(t.ingresosHoja)} en la Hoja</span>{cuadreHoja(t.ingresosPresupuesto, t.ingresosHoja)}</div>
                 <div className="presu-check"><span>Egresos: {money(t.egresosHoja)} en la Hoja</span>{cuadreHoja(t.egresosPresupuesto, t.egresosHoja)}</div>
               </div>
+              {(varios || conCapturados) && (
+                <div className="presu-seccion">
+                  <h3>Por mes{conCapturados ? ' · contra lo que ya tenía el presupuesto' : ''}</h3>
+                  <div className="presu-tabla-wrap">
+                    <table className="presu-tabla">
+                      <thead><tr><th>Mes</th><th>Ingresos</th><th>Egresos</th><th>T/C</th>{conCapturados && <th>Vs. capturado</th>}</tr></thead>
+                      <tbody>
+                        {comp.map(m => {
+                          const di = m.ingresosAhora - m.ingresosAntes, de = m.egresosAhora - m.egresosAntes
+                          const igual = Math.abs(di) < 1 && Math.abs(de) < 1
+                          return (
+                            <tr key={m.ym}>
+                              <td>{etiquetaMes(m.ym)}</td>
+                              <td>{money(m.ingresosAhora)}</td>
+                              <td>{money(m.egresosAhora)}</td>
+                              <td>{m.tc}{m.tcConservado ? '*' : ''}</td>
+                              {conCapturados && (
+                                <td className={`presu-vs ${!m.yaCapturado ? '' : igual ? 'presu-ok' : 'presu-mal'}`}>
+                                  {!m.yaCapturado ? 'nuevo' : igual ? '✓ mismo total' : `Ing. ${money(di)} · Egr. ${money(de)}`}
+                                  {m.yaCapturado && m.celdasDistintas > 0 && <span className="presu-vs-nota">{m.celdasDistintas} celdas en otro renglón</span>}
+                                </td>
+                              )}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {comp.some(m => m.tcConservado) && <p className="presu-nota">* T/C que ya tenía el presupuesto para ese mes (una Hoja de varios meses trae un solo T/C).</p>}
+                  {conCapturados && (r.diferencias || []).length > 0 && (
+                    <p className="presu-nota">"Diferencias (CSV)" lista cada celda que cambió contra lo capturado: casi siempre es el mismo monto en otro renglón (ViTrox Ventas/Servicio, Soporte/Distribución) o la clasificación de un movimiento bancario.</p>
+                  )}
+                </div>
+              )}
               <div className="presu-seccion">
                 <h3>Cotejo con Saldos · saldo al {finMes} de {MESES_NOMBRE[r.mes]}{descuadres ? ` · ${descuadres} sin cuadrar` : ' · todo cuadra'}</h3>
                 <div className="presu-tabla-wrap">
@@ -3043,7 +3150,19 @@ function PresupuestoModal({ onClose, onGenerado }) {
               )}
               <div className="premium-actions" style={{ marginTop: 20, flexWrap: 'wrap' }}>
                 <button className="premium-btn-secondary" onClick={() => descargarDatos(detalleCSV(r.detalle), `Detalle presupuesto ${MESES_NOMBRE[r.mes]} ${r.anio}.csv`, 'text/csv;charset=utf-8')}>Detalle (CSV)</button>
+                {conCapturados && (r.diferencias || []).length > 0 && (
+                  <button className="premium-btn-secondary" onClick={() => descargarDatos(diferenciasCSV(r.diferencias), `Diferencias presupuesto ${titulo.replace(/^Presupuesto de | listo$/g, '')}.csv`, 'text/csv;charset=utf-8')}>Diferencias (CSV)</button>
+                )}
                 <button className="premium-btn-secondary" onClick={() => descargarDatos(r.archivo, r.nombreArchivo, XLSX_MIME)}>Descargar otra vez</button>
+                {!r.guardadoComoBase && (
+                  <button className="premium-btn-secondary" onClick={async () => {
+                    const b = r.baseHasta
+                    const hasta = b && b.anio * 12 + b.mes > r.anio * 12 + r.mes ? b : { anio: r.anio, mes: r.mes }
+                    await guardarComoBase(r, hasta)
+                    setResultado(prev => ({ ...prev, guardadoComoBase: true }))
+                    refrescar()
+                  }}>Guardar como base</button>
+                )}
                 <button className="premium-btn-primary" onClick={onClose}>Listo</button>
               </div>
             </>
@@ -6783,7 +6902,7 @@ export default function App() {
           <img src="/logo.png" alt="SMTO" style={{ height: '54px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div className="header-info">
-          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.13</span></h1>
+          <h1 className="header-title">Reporte de Gastos SMTO<span className="version-badge">v9.14</span></h1>
           <div className="header-sub">
             <span className="sub-folder">
               <svg width="13" height="11" viewBox="0 0 13 11" fill="currentColor" style={{marginRight:4,verticalAlign:'middle'}}><path d="M1 2.5A1.5 1.5 0 012.5 1H5l1.5 1.5H11A1.5 1.5 0 0112.5 4V9A1.5 1.5 0 0111 10.5H2A1.5 1.5 0 01.5 9V2.5z" fill="currentColor"/></svg>

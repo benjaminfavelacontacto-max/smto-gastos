@@ -65,7 +65,7 @@ const EGRESOS_TIPO = {
   'avion ventas': 77, 'hotel ventas': 77, 'casetas ventas': 77, 'estacionamiento ventas': 77,
   'taxi ventas': 77, 'autobus ventas': 77, 'gasolina ventas viaticos': 77, 'gastos rep viaticos': 77,
   'consumo ventas': 77, 'consumo ventas viaticos': 77,
-  'marketing': 78, 'automovil': 79, 'renta auto': 79, 'curso': 80, 'cursos': 80,
+  'marketing': 78, 'automovil': 79, 'renta auto': 74, 'curso': 80, 'cursos': 80,
   'pasaporte o visa': 81, 'pasaporte y visa': 81, 'permiso': 82, 'permisos': 82, 'pc': 83,
   'contador': 84, 'comercio exterior': 85, 'consultoria': 86, 'envios': 87, 'aduana': 88,
   'transporte': 89, 'transportes': 89, 'cogs': 90,
@@ -74,6 +74,9 @@ const EGRESOS_TIPO = {
   // Generales
   'papeleria': 102, 'uniformes': 103, 'comisiones banco': 104, 'prestamo nomina': 105,
   'pago credito': 106, 'no comprobado': 107, 'no coprobado': 107,
+  // Nombres de las hojas de trabajo viejas (antes de la app)
+  'gasolina serv': 72, 'seguro': 61, 'comercio ext': 85, 'isr, iva': 65, 'imss, infonavit': 64,
+  'pago prestamo': 106, 'prestamo': 105, 'renta auto ventas': 77,
 }
 const EGRESOS_IGNORAR = new Set(['rechazada', 'traspaso'])
 // Principales: [palabra clave en el cliente, fila Comisiones, fila Consultoría]
@@ -86,7 +89,7 @@ const PRINCIPALES = [
   ['LPKF', 24, 25],
   ['DIGITALTEST', 26, 27], ['DIGITAL TEST', 26, 27],
   ['ESSEMTEC', 28, 29],
-  ['SCIENSCOPE', 30, 31],
+  ['SCIENSCOPE', 30, 31], ['SCIENTIFIC TECH', 30, 31],    // razón social de ScienScope
   ['ADMAT', 32, null],
   ['ICT HOLDING', null, 33],
   ['SMT THERMAL', 34, null],
@@ -94,15 +97,23 @@ const PRINCIPALES = [
 ]
 // Clientes cuya "Consultoría" se registraba en Distribución (marcas que también distribuimos)
 const CONSULTORIA_A_DISTRIBUCION = ['TEKTRONIX', 'PREEN POWER']
-const TIPOS_DISTRIBUCION = new Set(['partes', 'equipo', 'soldadura', 'sodadura', 'refacciones', 'nota de credito', 'material', 'etiquetas'])
+const TIPOS_DISTRIBUCION = new Set(['partes', 'parts', 'parters', 'equipo', 'soldadura', 'sodadura', 'refacciones', 'nota de credito', 'material', 'etiquetas'])
 const TIPOS_CONSULTORIA = new Set(['consultoria', 'consulting', 'servicio', 'soporte', 'renta'])
 const esPersonaFisica = (rfc) => String(rfc || '').toUpperCase().replace(/[^A-Z0-9&Ñ]/g, '').length === 13
 
-export function clasificaIngreso(tipo, cliente, rfc) {
+export function clasificaIngreso(tipo, cliente, rfc, concepto = '') {
   const t = norm(tipo)
   const c = String(cliente || '').toUpperCase()
   const princ = PRINCIPALES.find(p => c.includes(p[0]))
   if (t.startsWith('comision')) {
+    // A Comisiones van los pagos mensuales ("Comisiones Sep") y sus notas de
+    // crédito; otro pago del principal capturado como comisión ("Consultoría",
+    // "PO …") va a su Consultoría, como se capturaba a mano.
+    const con = norm(concepto)
+    const deComisiones = con.includes('comision') || con.includes('nota de credito') || /^nc\b/.test(con)
+    if (princ && princ[2] && con && !deComisiones) {
+      return { fila: princ[2], regla: `Consultoría ${princ[0]} (el concepto no es de comisiones)` }
+    }
     if (princ && princ[1]) return { fila: princ[1], regla: `Comisiones ${princ[0]}` }
     return { fila: null, regla: `Comisión de un cliente que no tiene renglón en el Presupuesto: ${cliente}` }
   }
@@ -116,7 +127,7 @@ export function clasificaIngreso(tipo, cliente, rfc) {
   }
   if (['venta activos', 'venta activo', 'activo'].includes(t)) return { fila: 38, regla: 'Venta Activos' }
   if (TIPOS_DISTRIBUCION.has(t)) return { fila: 36, regla: `${tipo} → Clientes Diversos Distribución` }
-  if (t.startsWith('devoluci')) return { fila: 40, regla: 'Devoluciones' }
+  if (t.startsWith('devoluci') || t === 'dev gar' || t.startsWith('dev ')) return { fila: 40, regla: 'Devoluciones' }
   if (t.startsWith('interes')) return { fila: 41, regla: 'Intereses' }
   if (t === 'fondo de ahorro') return { fila: 39, regla: 'Fondo de Ahorro' }
   if (t.startsWith('pago prestamo')) return { fila: 44, regla: 'Pago Préstamos' }
@@ -198,16 +209,27 @@ const fechaIso = (v) => {
   return saldosFechaToIso(v)
 }
 
-function buscaEncabezados(ws, claves) {
+// Encabezados por nombre, con los sinónimos de las hojas de trabajo viejas.
+// requeridas/opcionales: { clave: ['alias normalizado', …] } -> { fila, col: { clave: índice } }
+function buscaEncabezados(ws, requeridas, opcionales = {}) {
   if (!ws?.['!ref']) return null
   const rg = XLSX.utils.decode_range(ws['!ref'])
   for (let r = rg.s.r; r <= Math.min(rg.e.r, 25); r++) {
-    const cols = {}
+    const vistos = {}
     for (let c = rg.s.c; c <= Math.min(rg.e.c, 40); c++) {
       const t = norm(ws[XLSX.utils.encode_cell({ r, c })]?.v)
-      if (t && !(t in cols)) cols[t] = c
+      if (t && !(t in vistos)) vistos[t] = c
     }
-    if (claves.every(k => k in cols)) return { fila: r, cols }
+    const busca = (alias) => alias.map(a => vistos[a]).find(c => c !== undefined)
+    const col = {}
+    let completo = true
+    for (const [k, alias] of Object.entries(requeridas)) {
+      col[k] = busca(alias)
+      if (col[k] === undefined) { completo = false; break }
+    }
+    if (!completo) continue
+    for (const [k, alias] of Object.entries(opcionales)) col[k] = busca(alias)
+    return { fila: r, col }
   }
   return null
 }
@@ -239,6 +261,22 @@ const usaTC = (formula, ref) => {
 }
 
 // ── 1) Hoja de trabajo ──
+// Lee tres formatos: el de la app (hojas "Reporte SMTO"/"Egresos" + "Ingresos"
+// con fórmulas), el mismo con los valores pegados, y el viejo de contabilidad
+// (EGRESOS con FECHA DE COBRO / MONEDA EXT / TIPO CAMBIO e INGRESOS con FECHA
+// DE PAGO / Cuenta / USD). Puede traer varios meses.
+const ENC_EGRESOS = { tipo: ['tipo'], total: ['total'], fecha: ['f. cobro', 'fecha de cobro'], importe: ['importe'] }
+const ENC_EGRESOS_OPC = {
+  proveedor: ['proveedor'], concepto: ['concepto'], banco: ['banco'], formaPago: ['forma pago', 'forma de pago'],
+  me: ['monto m.e.', 'monto usd', 'moneda ext'], tcRenglon: ['t/c', 'tipo cambio'],
+}
+const ENC_INGRESOS = { tipo: ['tipo'], total: ['total'], fecha: ['f. pago', 'fecha de pago'], importe: ['importe'] }
+const ENC_INGRESOS_OPC = {
+  cliente: ['nombre del cliente', 'cliente'], rfc: ['rfc cliente', 'rfc'], factura: ['factura', 'no. de factura'],
+  concepto: ['concepto', 'descripcion'], banco: ['banco', 'cuenta'], usd: ['monto usd', 'usd'],
+}
+export const etiquetaMes = (ym) => `${MESES_NOMBRE[+ym.slice(5, 7)]} ${ym.slice(0, 4)}`
+
 export function leerHojaTrabajo(buffer) {
   const wb = XLSX.read(buffer, { type: 'array', cellFormula: true, sheetStubs: true })
   const valor = crearLector(wb)
@@ -246,62 +284,119 @@ export function leerHojaTrabajo(buffer) {
   for (const nombre of wb.SheetNames) {
     const ws = wb.Sheets[nombre]
     if (!egr) {
-      const h = buscaEncabezados(ws, ['tipo', 'total', 'f. cobro', 'banco', 'importe'])
+      const h = buscaEncabezados(ws, ENC_EGRESOS, ENC_EGRESOS_OPC)
       if (h) { egr = { nombre, ws, ...h }; continue }
     }
     if (!ing) {
-      const h = buscaEncabezados(ws, ['tipo', 'total', 'f. pago', 'banco', 'importe'])
+      const h = buscaEncabezados(ws, ENC_INGRESOS, ENC_INGRESOS_OPC)
       if (h) ing = { nombre, ws, ...h }
     }
   }
-  if (!egr) throw new Error('No encontré la hoja de egresos (encabezados TIPO, IMPORTE, TOTAL, F. COBRO y BANCO). ¿Es la Hoja de trabajo que exporta la app?')
-  const tcEg = buscaTC(egr.ws, egr.nombre, valor, egr.fila)
-  if (!tcEg) throw new Error('La Hoja de trabajo no trae el "TIPO DE CAMBIO USD".')
-  const celda = (h, r, col) => h.ws[XLSX.utils.encode_cell({ r, c: col })]
-  const val = (h, r, col) => (col === undefined ? undefined : valor(h.nombre, XLSX.utils.encode_cell({ r, c: col })))
-  const texto = (h, r, col) => { const v = val(h, r, col); return v === undefined || v === null ? '' : String(v).trim() }
-
-  const egresos = []
-  const ce = egr.cols
-  const cMe = ce['monto m.e.'] ?? ce['monto usd']
+  if (!egr) throw new Error('No encontré la hoja de egresos (encabezados TIPO, IMPORTE, TOTAL y F. COBRO). ¿Es una Hoja de trabajo?')
+  const celda = (h, r, c) => (c === undefined ? undefined : h.ws[XLSX.utils.encode_cell({ r, c })])
+  const val = (h, r, c) => (c === undefined ? undefined : valor(h.nombre, XLSX.utils.encode_cell({ r, c })))
+  const texto = (h, r, c) => { const v = val(h, r, c); return v === undefined || v === null ? '' : String(v).trim() }
+  const num = (h, r, c) => Number(val(h, r, c)) || 0
+  const ce = egr.col
   const finE = XLSX.utils.decode_range(egr.ws['!ref']).e.r
+
+  // T/C: la celda "TIPO DE CAMBIO USD"; en el formato viejo no tiene etiqueta y
+  // se toma el T/C que más se repite en los renglones en dólares.
+  let tcInfo = buscaTC(egr.ws, egr.nombre, valor, egr.fila)
+  if (!tcInfo && ing) tcInfo = buscaTC(ing.ws, ing.nombre, valor, ing.fila)
+  // T/C "de lista" de cada mes en los renglones en dólares (4 decimales a lo más;
+  // un T/C real del banco, como el del Fondo de Ahorro, trae muchos más).
+  const tcDeLista = (t) => t > 10 && t < 40 && Math.abs(t - Math.round(t * 10000) / 10000) < 1e-7
+  const tcPorMes = {}
+  if (ce.tcRenglon !== undefined && ce.me !== undefined) {
+    for (let r = egr.fila + 1; r <= finE; r++) {
+      const t = num(egr, r, ce.tcRenglon)
+      const ym = fechaIso(val(egr, r, ce.fecha)).slice(0, 7)
+      if (!ym || !num(egr, r, ce.me) || !tcDeLista(t)) continue
+      const k = Math.round(t * 10000) / 10000
+      tcPorMes[ym] = tcPorMes[ym] || {}
+      tcPorMes[ym][k] = (tcPorMes[ym][k] || 0) + 1
+    }
+  }
+  const modaMes = (ym) => {
+    const top = Object.entries(tcPorMes[ym] || {}).sort((a, b) => b[1] - a[1])[0]
+    return top ? +top[0] : 0
+  }
+  if (!tcInfo) {
+    const ultimo = Object.keys(tcPorMes).sort().pop()
+    if (ultimo) tcInfo = { tc: modaMes(ultimo), ref: null }
+  }
+  if (!tcInfo) throw new Error('La Hoja de trabajo no trae el "TIPO DE CAMBIO USD".')
+  const tc = tcInfo.tc
+
+  // ¿La hoja trae fórmulas con el T/C? Si no (valores pegados o formato viejo),
+  // un renglón está en dólares cuando su T/C es el de la hoja y MONTO USD × T/C = TOTAL.
+  let conFormulasTC = false
+  for (let r = egr.fila + 1; r <= finE && !conFormulasTC; r++) conFormulasTC = usaTC(celda(egr, r, ce.importe)?.f, tcInfo.ref)
+  const egresos = []
   for (let r = egr.fila + 1; r <= finE; r++) {
-    const fecha = fechaIso(val(egr, r, ce['f. cobro']))
+    const fecha = fechaIso(val(egr, r, ce.fecha))
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) continue
-    const total = Number(val(egr, r, ce.total)) || 0
+    const total = num(egr, r, ce.total)
+    const me = ce.me !== undefined ? num(egr, r, ce.me) : null
+    let usd = usaTC(celda(egr, r, ce.importe)?.f, tcInfo.ref)
+    let usdMonto = null                     // null = TOTAL / T/C de la hoja
+    if (!usd && !conFormulasTC && me) {
+      const tcR = ce.tcRenglon !== undefined ? num(egr, r, ce.tcRenglon) : 0
+      const lista = modaMes(fecha.slice(0, 7))
+      usd = lista > 0 && Math.abs(tcR - lista) < 0.0005 && Math.abs(me * tcR - total) <= Math.max(1, Math.abs(total) * 0.005)
+      if (usd) usdMonto = me
+    }
     egresos.push({
       fila: r + 1, fecha, tipo: texto(egr, r, ce.tipo), proveedor: texto(egr, r, ce.proveedor),
-      concepto: texto(egr, r, ce.concepto), banco: texto(egr, r, ce.banco), total,
-      usd: usaTC(celda(egr, r, ce.importe)?.f, tcEg.ref),
-      me: cMe !== undefined ? Number(val(egr, r, cMe)) || 0 : null,
+      concepto: texto(egr, r, ce.concepto), banco: texto(egr, r, ce.banco) || texto(egr, r, ce.formaPago),
+      total, usd, usdMonto, me,
     })
   }
+
   const ingresos = []
   if (ing) {
-    const ci = ing.cols
-    const tcIn = buscaTC(ing.ws, ing.nombre, valor, ing.fila) || tcEg
-    const cCli = ci['nombre del cliente'] ?? ci.cliente
-    const cRfc = ci['rfc cliente'] ?? ci.rfc
+    const ci = ing.col
+    const tcIn = buscaTC(ing.ws, ing.nombre, valor, ing.fila)
+    const refIn = tcIn?.ref || null
     const finI = XLSX.utils.decode_range(ing.ws['!ref']).e.r
+    let conFormulasIn = false
+    for (let r = ing.fila + 1; r <= finI && !conFormulasIn; r++) conFormulasIn = usaTC(celda(ing, r, ci.importe)?.f, refIn)
     for (let r = ing.fila + 1; r <= finI; r++) {
-      const fecha = fechaIso(val(ing, r, ci['f. pago']))
+      const fecha = fechaIso(val(ing, r, ci.fecha))
       if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) continue
+      const banco = texto(ing, r, ci.banco)
+      // Sin fórmulas, lo que entró a una cuenta en dólares es un ingreso en dólares.
+      const usd = conFormulasIn ? usaTC(celda(ing, r, ci.importe)?.f, refIn) : /USD/i.test(banco)
+      const usdCol = ci.usd !== undefined ? num(ing, r, ci.usd) : 0
       ingresos.push({
-        fila: r + 1, fecha, tipo: texto(ing, r, ci.tipo), cliente: texto(ing, r, cCli), rfc: texto(ing, r, cRfc),
-        factura: texto(ing, r, ci.factura), concepto: texto(ing, r, ci.concepto), banco: texto(ing, r, ci.banco),
-        total: Number(val(ing, r, ci.total)) || 0, usd: usaTC(celda(ing, r, ci.importe)?.f, tcIn.ref),
+        fila: r + 1, fecha, tipo: texto(ing, r, ci.tipo), cliente: texto(ing, r, ci.cliente), rfc: texto(ing, r, ci.rfc),
+        factura: texto(ing, r, ci.factura), concepto: texto(ing, r, ci.concepto), banco,
+        total: num(ing, r, ci.total), usd, usdMonto: usd && !conFormulasIn && usdCol ? usdCol : null,
       })
     }
   }
-  // Mes de la hoja: el que más renglones tiene.
-  const cuenta = {}
-  for (const x of [...egresos, ...ingresos]) cuenta[x.fecha.slice(0, 7)] = (cuenta[x.fecha.slice(0, 7)] || 0) + 1
-  const ym = Object.entries(cuenta).sort((a, b) => b[1] - a[1])[0]?.[0]
-  if (!ym) throw new Error('La Hoja de trabajo no tiene renglones con fecha.')
-  return {
-    tc: tcEg.tc, anio: +ym.slice(0, 4), mes: +ym.slice(5, 7), egresos, ingresos,
-    hojaEgresos: egr.nombre, hojaIngresos: ing?.nombre || null,
+  // Meses que trae la hoja (por renglones); el principal es el que más tiene.
+  const porMes = {}
+  for (const x of [...egresos, ...ingresos]) {
+    const k = x.fecha.slice(0, 7)
+    porMes[k] = porMes[k] || { ym: k, anio: +k.slice(0, 4), mes: +k.slice(5, 7), egresos: 0, ingresos: 0 }
+    porMes[k][x.proveedor !== undefined ? 'egresos' : 'ingresos']++
   }
+  const meses = Object.values(porMes).map(m => ({ ...m, renglones: m.egresos + m.ingresos })).sort((a, b) => a.ym.localeCompare(b.ym))
+  if (!meses.length) throw new Error('La Hoja de trabajo no tiene renglones con fecha.')
+  const principal = [...meses].sort((a, b) => b.renglones - a.renglones)[0]
+  return {
+    tc, ym: principal.ym, anio: principal.anio, mes: principal.mes, meses, egresos, ingresos,
+    hojaEgresos: egr.nombre, hojaIngresos: ing?.nombre || null, formato: conFormulasTC ? 'app' : 'valores',
+  }
+}
+
+// Meses que conviene llenar por omisión: los que traen al menos el 5% de los
+// renglones (un renglón suelto de otro mes no debe borrar ese mes).
+export const mesesSugeridos = (hoja) => {
+  const total = hoja.meses.reduce((s, m) => s + m.renglones, 0)
+  return hoja.meses.filter(m => m.renglones >= Math.max(5, total * 0.05)).map(m => m.ym)
 }
 
 // ── 2) Semanas del mes según la fila 12 del Presupuesto ──
@@ -362,7 +457,7 @@ export function calcularMes({ hoja, saldosRows, cortes, anio, mes }) {
     const col = columnaDe(cortes, e.fecha)
     const c = celda(fila, col)
     if (e.usd) {
-      const usd = usdDe(e.total)
+      const usd = e.usdMonto != null ? Math.round(e.usdMonto * 100) / 100 : usdDe(e.total)
       c.usd += usd
       if (e.me !== null && Math.abs(Math.abs(e.me) - Math.abs(usd)) > 0.5) {
         const k = `${e.proveedor}|${usd}|${e.me}`
@@ -383,11 +478,11 @@ export function calcularMes({ hoja, saldosRows, cortes, anio, mes }) {
       avisos.push(`Ingresos renglón ${i.fila}: F. PAGO ${i.fecha} es de otro mes; no se incluyó (${fmt(i.total)}).`)
       continue
     }
-    const { fila, regla } = clasificaIngreso(i.tipo, i.cliente, i.rfc)
+    const { fila, regla } = clasificaIngreso(i.tipo, i.cliente, i.rfc, i.concepto)
     if (!fila) { errores.push(`Ingresos renglón ${i.fila}: ${regla} (${fmt(i.total)}).`); continue }
     const col = columnaDe(cortes, i.fecha)
     const c = celda(fila, col)
-    if (i.usd) c.usd += usdDe(i.total)
+    if (i.usd) c.usd += i.usdMonto != null ? Math.round(i.usdMonto * 100) / 100 : usdDe(i.total)
     else {
       c.mxn += i.total
       if (/USD/i.test(i.banco) && fila !== 40 && fila !== 41) {
@@ -500,15 +595,18 @@ export function leerSaldosParaPresupuesto(buffer) {
   return { rows: parseSaldosXLSX(wb), bases: basesDeSaldos(wb) }
 }
 
-/* Genera el Presupuesto del mes de la Hoja de trabajo.
-   baseBuffer: Presupuesto anterior (.xlsx). hojaBuffer: Hoja de trabajo.
+/* Genera el Presupuesto con los meses elegidos de la Hoja de trabajo.
+   baseBuffer: Presupuesto anterior (.xlsx). hojaBuffer (o hoja ya leída).
    saldos: { rows, bases } de leerSaldosParaPresupuesto.
-   Devuelve { ok, archivo (Uint8Array), nombreArchivo, anio, mes, tc, totales,
-   cotejoBancos, avisos, errores, detalle }. Si hay partidas sin regla y no se
-   pasa forzar, devuelve ok:false con los errores y no genera el archivo. */
-export async function generarPresupuesto({ baseBuffer, hojaBuffer, saldos, forzar = false }) {
-  const hoja = leerHojaTrabajo(hojaBuffer)
-  const { anio, mes, tc } = hoja
+   meses: ['2026-01', …] (por omisión, el mes principal de la Hoja).
+   baseHasta: { anio, mes } hasta donde ya estaba lleno el presupuesto base:
+   para esos meses se conserva su T/C y la comparación dice qué cambió.
+   Si hay partidas sin regla y no se pasa forzar, devuelve ok:false con los
+   errores y no genera el archivo. */
+export async function generarPresupuesto({ baseBuffer, hojaBuffer, hoja: hojaLeida, saldos, forzar = false, meses: elegidos, baseHasta = null }) {
+  const hoja = hojaLeida || leerHojaTrabajo(hojaBuffer)
+  const { tc } = hoja
+  const lista = [...new Set(elegidos?.length ? elegidos : [hoja.ym])].sort()
   const wbBase = XLSX.read(baseBuffer, { type: 'array', cellFormula: true, sheetStubs: true })
   const ws = wbBase.Sheets.Real
   if (!ws) throw new Error('El Presupuesto base no tiene la hoja "Real".')
@@ -523,28 +621,62 @@ export async function generarPresupuesto({ baseBuffer, hojaBuffer, saldos, forza
     else if (c.v !== undefined && c.t !== 'z') valores.set(ref, c.v)
     if (c.f) formulas.set(ref, c.f)
   }
-  const cortes = semanas(ws, (ref) => valores.get(ref), anio, mes)
-  const cols = cortes.map(([c]) => c)
-  const calc = calcularMes({ hoja, saldosRows: saldos?.rows || [], cortes, anio, mes })
-  const base = { anio, mes, tc, hojaEgresos: hoja.hojaEgresos, hojaIngresos: hoja.hojaIngresos, avisos: calc.avisos, errores: calc.errores, detalle: calc.detalle }
-  if (calc.errores.length && !forzar) return { ok: false, ...base }
-
-  // Entradas del mes: concepto (Hoja de trabajo), bancos (Saldos) y T/C.
-  const entradas = new Map()
-  for (const fila of [...FILAS_INGRESOS, ...FILAS_EGRESOS]) {
-    for (const col of cols) {
-      const c = calc.celdas.get(`${fila}|${col}`)
-      const mxn = c ? Math.round(c.mxn * 100) / 100 : 0
-      const usd = c ? Math.round(c.usd * 100) / 100 : 0
-      if (usd) {
-        let f = `${numTxt(usd)}*${col}${FILA_TC}`
-        if (mxn) f += (mxn > 0 ? '+' : '-') + numTxt(Math.abs(mxn))
-        entradas.set(`${col}${fila}`, { f })
-      } else entradas.set(`${col}${fila}`, { v: mxn })
-    }
+  const antes = new Map(valores)
+  const ordinal = (anio, mes) => anio * 12 + mes
+  const ultimoYm = lista[lista.length - 1]
+  const avisos = [], errores = [], detalle = []
+  const fuera = {}
+  for (const x of [...hoja.egresos, ...hoja.ingresos]) {
+    const k = x.fecha.slice(0, 7)
+    if (!lista.includes(k)) fuera[k] = (fuera[k] || 0) + 1
   }
-  for (const [k, v] of calc.bancos) { const [fila, col] = k.split('|'); entradas.set(`${col}${fila}`, { v: Math.round(v * 100) / 100 }) }
-  for (const col of cols) entradas.set(`${col}${FILA_TC}`, { v: tc })
+  for (const [k, n] of Object.entries(fuera).sort()) {
+    avisos.push(`${n} ${n === 1 ? 'renglón' : 'renglones'} de ${etiquetaMes(k)} no se incluyeron (ese mes no se eligió).`)
+  }
+
+  // Entradas de cada mes: concepto (Hoja de trabajo), bancos (Saldos) y T/C.
+  const entradas = new Map()
+  const resumen = []
+  for (const ym of lista) {
+    const anio = +ym.slice(0, 4), mes = +ym.slice(5, 7)
+    const cortes = semanas(ws, (ref) => valores.get(ref), anio, mes)
+    const cols = cortes.map(([c]) => c)
+    const deMes = (x) => x.fecha.slice(0, 7) === ym
+    const hojaMes = { ...hoja, egresos: hoja.egresos.filter(deMes), ingresos: hoja.ingresos.filter(deMes) }
+    const calc = calcularMes({ hoja: hojaMes, saldosRows: saldos?.rows || [], cortes, anio, mes })
+    const pref = lista.length > 1 ? `${etiquetaMes(ym)} · ` : ''
+    errores.push(...calc.errores.map(e => pref + e))
+    avisos.push(...calc.avisos.map(a => pref + a))
+    detalle.push(...calc.detalle)
+    for (const fila of [...FILAS_INGRESOS, ...FILAS_EGRESOS]) {
+      for (const col of cols) {
+        const c = calc.celdas.get(`${fila}|${col}`)
+        const mxn = c ? Math.round(c.mxn * 100) / 100 : 0
+        const usd = c ? Math.round(c.usd * 100) / 100 : 0
+        if (usd) {
+          let f = `${numTxt(usd)}*${col}${FILA_TC}`
+          if (mxn) f += (mxn > 0 ? '+' : '-') + numTxt(Math.abs(mxn))
+          entradas.set(`${col}${fila}`, { f })
+        } else entradas.set(`${col}${fila}`, { v: mxn })
+      }
+    }
+    for (const [k, v] of calc.bancos) { const [fila, col] = k.split('|'); entradas.set(`${col}${fila}`, { v: Math.round(v * 100) / 100 }) }
+    // T/C: los meses que el presupuesto ya tenía capturados conservan el suyo
+    // (una hoja de varios meses trae un solo T/C); los nuevos toman el de la Hoja.
+    const tcActual = Number(valores.get(`${cols[0]}${FILA_TC}`)) || 0
+    const conservar = tcActual > 0 && (baseHasta ? ordinal(anio, mes) <= ordinal(baseHasta.anio, baseHasta.mes) : ym !== ultimoYm)
+    if (!conservar) for (const col of cols) entradas.set(`${col}${FILA_TC}`, { v: tc })
+    resumen.push({
+      ym, anio, mes, cols, cortes, tc: conservar ? tcActual : tc, tcConservado: conservar,
+      yaCapturado: baseHasta ? ordinal(anio, mes) <= ordinal(baseHasta.anio, baseHasta.mes) : null,
+      ingresosHoja: hojaMes.ingresos.reduce((s, i) => s + i.total, 0),
+      egresosHoja: hojaMes.egresos.filter(e => !EGRESOS_IGNORAR.has(norm(e.tipo))).reduce((s, e) => s + e.total, 0),
+    })
+  }
+  const ult = resumen[resumen.length - 1]
+  const comun = { anio: ult.anio, mes: ult.mes, tc, meses: lista, hojaEgresos: hoja.hojaEgresos, hojaIngresos: hoja.hojaIngresos, avisos, errores, detalle }
+  if (errores.length && !forzar) return { ok: false, ...comun }
+
   for (const [ref, e] of entradas) {
     if (e.f) formulas.set(ref, e.f); else { formulas.delete(ref); valores.set(ref, e.v) }
   }
@@ -596,18 +728,45 @@ export async function generarPresupuesto({ baseBuffer, hojaBuffer, saldos, forza
   }
   const archivo = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
 
-  // Cotejo: totales contra la Hoja y saldos al cierre contra el archivo de Saldos.
-  const ym = `${anio}-${String(mes).padStart(2, '0')}`
-  const sumaMes = (filas) => filas.reduce((s, f) => s + cols.reduce((t, c) => t + (Number(valores.get(`${c}${f}`)) || 0), 0), 0)
-  const enMes = (x) => x.fecha.slice(0, 7) === ym
-  const totales = {
-    ingresosPresupuesto: sumaMes(FILAS_INGRESOS),
-    ingresosHoja: hoja.ingresos.filter(enMes).reduce((s, i) => s + i.total, 0),
-    egresosPresupuesto: sumaMes(FILAS_EGRESOS),
-    egresosHoja: hoja.egresos.filter(e => enMes(e) && !EGRESOS_IGNORAR.has(norm(e.tipo))).reduce((s, e) => s + e.total, 0),
+  // Totales contra la Hoja y comparación contra lo que ya traía el presupuesto.
+  const suma = (mapa, filas, cols) => filas.reduce((s, f) => s + cols.reduce((t, c) => t + (Number(mapa.get(`${c}${f}`)) || 0), 0), 0)
+  const FILAS_BANCO = Object.values(BLOQUES_BANCO).flatMap(b => [b, b + 1, b + 2, b + 3])
+  const etiquetaFila = (fila) => {
+    const base = Object.values(BLOQUES_BANCO).find(b => fila >= b && fila <= b + 3)
+    if (base) return `${ws[`D${base}`]?.v || ''} · ${ws[`E${fila}`]?.v || ''}`.trim()
+    return String(ws[`D${fila}`]?.v || '').trim()
   }
-  const finMes = `${ym}-${String(cortes[cortes.length - 1][1]).padStart(2, '0')}`
-  const ultCol = cols[cols.length - 1]
+  const diferencias = []
+  const comparacion = resumen.map(m => {
+    let distintas = 0
+    for (const fila of [...FILAS_INGRESOS, ...FILAS_EGRESOS, ...FILAS_BANCO]) {
+      for (const col of m.cols) {
+        const ref = `${col}${fila}`
+        const a = Number(antes.get(ref)) || 0, b = Number(valores.get(ref)) || 0
+        if (Math.abs(b - a) > 0.005) {
+          distintas++
+          diferencias.push({ ym: m.ym, celda: ref, renglon: fila, concepto: etiquetaFila(fila), seccion: fila >= 121 ? 'Bancos' : fila >= 55 ? 'Egresos' : 'Ingresos', antes: a, ahora: b })
+        }
+      }
+    }
+    return {
+      ym: m.ym, anio: m.anio, mes: m.mes, tc: m.tc, tcConservado: m.tcConservado, yaCapturado: m.yaCapturado,
+      ingresosHoja: m.ingresosHoja, egresosHoja: m.egresosHoja,
+      ingresosAntes: suma(antes, FILAS_INGRESOS, m.cols), ingresosAhora: suma(valores, FILAS_INGRESOS, m.cols),
+      egresosAntes: suma(antes, FILAS_EGRESOS, m.cols), egresosAhora: suma(valores, FILAS_EGRESOS, m.cols),
+      celdasDistintas: distintas,
+    }
+  })
+  const totales = {
+    ingresosPresupuesto: comparacion.reduce((s, m) => s + m.ingresosAhora, 0),
+    ingresosHoja: comparacion.reduce((s, m) => s + m.ingresosHoja, 0),
+    egresosPresupuesto: comparacion.reduce((s, m) => s + m.egresosAhora, 0),
+    egresosHoja: comparacion.reduce((s, m) => s + m.egresosHoja, 0),
+  }
+
+  // Cotejo de saldos al cierre del último mes contra el archivo de Saldos.
+  const finMes = `${ult.ym}-${String(ult.cortes[ult.cortes.length - 1][1]).padStart(2, '0')}`
+  const ultCol = ult.cols[ult.cols.length - 1]
   const cotejoBancos = []
   const porCuenta = new Map()
   for (const m of saldos?.rows || []) {
@@ -622,9 +781,16 @@ export async function generarPresupuesto({ baseBuffer, hojaBuffer, saldos, forza
     const enSaldos = (saldos?.bases?.[cuenta] || 0) + porCuenta.get(cuenta)
     cotejoBancos.push({ cuenta, moneda: CUENTAS_USD.has(cuenta) ? 'USD' : 'MXN', presupuesto, saldos: enSaldos, diferencia: presupuesto - enSaldos })
   }
+
+  // Nombre: el mes más nuevo; si sólo se regeneraron meses que la base ya tenía, lo dice.
+  const rango = resumen.length > 1 ? `${MESES_CORTOS[resumen[0].mes]}-${MESES_CORTOS[ult.mes]}` : MESES_CORTOS[ult.mes]
+  const soloAnteriores = baseHasta && ordinal(ult.anio, ult.mes) <= ordinal(baseHasta.anio, baseHasta.mes)
+  const nombreArchivo = soloAnteriores
+    ? `SMTo - Presupuesto Dinámico ${MESES_CORTOS[baseHasta.mes]} ${baseHasta.anio} (regenerado ${rango} ${ult.anio}).xlsx`
+    : `SMTo - Presupuesto Dinámico ${MESES_CORTOS[ult.mes]} ${ult.anio}.xlsx`
   return {
-    ok: true, ...base, archivo, totales, cotejoBancos, celdasEscritas: entradas.size,
-    nombreArchivo: `SMTo - Presupuesto Dinámico ${MESES_CORTOS[mes]} ${anio}.xlsx`,
+    ok: true, ...comun, archivo, nombreArchivo, totales, comparacion, diferencias, cotejoBancos,
+    celdasEscritas: entradas.size, soloAnteriores: !!soloAnteriores,
   }
 }
 
@@ -634,4 +800,12 @@ export function detalleCSV(detalle) {
   const filas = [['Hoja', 'Renglón de la Hoja', 'Fecha', 'Tipo', 'Proveedor / Cliente', 'Banco', 'Total MXN', 'Moneda', 'Renglón del Presupuesto', 'Columna', 'Regla']]
   for (const d of detalle) filas.push([d.hoja, d.renglon, d.fecha, d.tipo, d.nombre, d.banco, d.total.toFixed(2), d.moneda, d.fila, d.col, d.regla])
   return '﻿' + filas.map(f => f.map(esc).join(',')).join('\n')
+}
+
+// Diferencias contra lo que ya traía el presupuesto (una por celda).
+export function diferenciasCSV(diferencias) {
+  const esc = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+  const filas = [['Mes', 'Sección', 'Celda', 'Renglón', 'Concepto', 'Antes', 'Ahora', 'Diferencia']]
+  for (const d of diferencias) filas.push([etiquetaMes(d.ym), d.seccion, d.celda, d.renglon, d.concepto, d.antes.toFixed(2), d.ahora.toFixed(2), (d.ahora - d.antes).toFixed(2)])
+  return '\uFEFF' + filas.map(f => f.map(esc).join(',')).join('\n')
 }
