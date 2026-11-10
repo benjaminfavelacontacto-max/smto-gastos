@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.13
+Current version: v9.14
 
 ## Stack
 
@@ -175,6 +175,32 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     - Decisiones de Benjamín (10-nov-2026): comisiones ViTrox completas a la
       fila 15 (Ventas) salvo reparto manual; VIE Technologies con ViTrox;
       Equipo vendido a persona física → Venta Activos.
+    - v9.14 — Hojas de varios meses y formatos viejos:
+      - Lee tres formatos: el de la app (con fórmulas), el mismo con valores
+        pegados, y el viejo de contabilidad (EGRESOS con FECHA DE COBRO /
+        MONEDA EXT / TIPO CAMBIO; INGRESOS con FECHA DE PAGO / Cuenta / USD).
+        Sin fórmulas, un egreso es en USD si su T/C es el "de lista" de su mes
+        (el que más se repite, con ≤4 decimales: el del Fondo de Ahorro es un
+        T/C real y queda en pesos) y MONEDA EXT × T/C = TOTAL; un ingreso es en
+        USD si entró a una cuenta USD. El monto en USD es el del renglón (cada
+        mes de una Hoja vieja trae su propio T/C).
+      - Si la Hoja trae varios meses, el modal pide cuáles llenar (marca los
+        que tienen ≥5% de los renglones). Para meses que el presupuesto base ya
+        tenía (≤ "lleno hasta") se conserva su T/C y el resultado compara
+        "antes vs ahora" por mes + "Diferencias (CSV)" por celda. La base sólo
+        se reemplaza sola con un mes nuevo; si no, botón "Guardar como base".
+      - Reglas nuevas sacadas de la captura a mano: Gasolina Serv → Gasolina
+        Servicio (72); Renta Auto → Viáticos Servicio; Seguro, Comercio Ext,
+        ISR IVA, Pago Préstamo → su renglón; Préstamo (egreso) → Préstamos
+        (105); ScienScope también como "SCIENTIFIC TECH…"; un pago de un
+        principal con tipo Comisiones cuyo concepto no es de comisiones (ni
+        nota de crédito) va a su Consultoría.
+      - Prueba (10-nov-2026) con las Hojas viejas ene-abr y may-oct contra el
+        presupuesto capturado a mano: totales de ingresos y egresos iguales en
+        los 10 meses (centavos). Lo distinto es reparto entre renglones por
+        criterio de captura (ViTrox Ventas/Servicio; Soporte vs Distribución
+        caso por caso) y 2 montos: mayo Aduana +7,660.02 y julio Comisiones de
+        banco −4.64 en lo capturado. Reporte en ~/Downloads/Prueba Presupuesto Dinámico/.
 
 ## Cómo agregar un colaborador
 
@@ -276,7 +302,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.13
+- Current: v9.14
 
 ## Things to be careful about
 
