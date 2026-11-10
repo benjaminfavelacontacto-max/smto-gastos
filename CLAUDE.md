@@ -9,7 +9,7 @@ SMTO Gastos — web app that automates Mexican expense reports for SMTO Engineer
 Production: https://smto-app.vercel.app
 Repo: github.com/benjaminfavelacontacto-max/smto-gastos
 Local: /Users/benjaminfavela/Documents/SMTO/SMTO-Cuenta-de-Gastos/
-Current version: v9.12
+Current version: v9.13
 
 ## Stack
 
@@ -34,6 +34,8 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 
 - `src/App.jsx` — main frontend logic (CFDI parser, matching, UI)
 - `src/saldosCotejo.js` — cotejo de colaboradores especiales contra "Saldos AAAA": parser, T/C mensual del Saldos, match por factura (renglones con varias facturas, sufijo "-1", folios sin serie o truncados) y pagos en exhibiciones (prorrateo + COBRADO/FACTURADO)
+- `src/presupuestoDinamico.js` — llena un mes del "SMTo - Presupuesto Dinámico" (hoja Real) desde la Hoja de trabajo + el Saldos: reglas tipo→renglón, semanas de la fila 12, fórmulas `=USD*<col>203+MXN`, escritura directa en el XML (conserva el logo), recálculo de todas las fórmulas (SUM) y cotejo de saldos al cierre
+- `src/almacenLocal.js` — IndexedDB del navegador para el último Saldos y el último Presupuesto generado (no salen de la computadora)
 - `src/components/` — PremiumModal, PremiumButton, and other small UI pieces
 - `src/App.css` — full stylesheet
 - `api/export-excel.py` — generates the premium .xlsx via openpyxl
@@ -128,7 +130,8 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
 
 18. Barra de acciones de los perfiles especiales (COLABORADORES_ESPECIALES):
     arriba la "Secuencia del reporte" numerada — 1 Cargar Carpeta, 2 Cotejar
-    con Saldos y, sólo Alejandro, 3 Agregar Nómina y 4 Ingresos (sube Cuentas por Cobrar) —
+    con Saldos y, sólo Alejandro, 3 Agregar Nómina, 4 Ingresos (sube Cuentas por Cobrar) y
+    5 Presupuesto Dinámico —
     cada paso en verde con ✓ al terminarlo y el siguiente pendiente
     resaltado; abajo "Herramientas" (Manual, Importar reporte, Cargar Foto,
     Validar Banco, Movimientos del banco) y Exportar. Los demás perfiles
@@ -136,6 +139,42 @@ Deployment: `git push` → Vercel auto-deploys in ~30s. No manual deploy command
     "Gastos | Ingresos" sobre la tabla (los ingresos ocupan el lugar de la
     tabla). La tabla conserva min-height 320px y, en pantallas bajas, la
     página (.app) se desplaza en vez de aplastarla.
+
+19. Presupuesto Dinámico (v9.13, solo Alejandro Olivar, paso 5): sube la Hoja
+    de trabajo del mes (la que exporta la app: hoja de egresos "Reporte SMTO"
+    o "Egresos" + hoja "Ingresos") y descarga "SMTo - Presupuesto Dinámico
+    <Mes> <Año>.xlsx" con el mes lleno por semana y cotejado con el Saldos.
+    - El Saldos NO se vuelve a pedir: se guarda en IndexedDB del navegador al
+      subirlo en Cotejar con Saldos, Agregar Nómina, Movimientos del banco o
+      en el propio modal. El Presupuesto base se sube una vez y después cada
+      presupuesto generado queda como base del siguiente mes. Se guarda por
+      navegador y computadora (no en servidor); se pierde si se borran los
+      datos del sitio, en incógnito o en Safari tras 7 días sin abrir la app.
+      Al guardar se pide `navigator.storage.persist()` para que el navegador
+      no lo borre por falta de espacio.
+    - Si el archivo de Saldos guardado se modificó (File.lastModified) antes
+      del cierre del mes de la Hoja, el modal avisa antes de generar: "Subir
+      Saldos actualizado" (y genera solo con la Hoja ya elegida) o "Generar
+      así" (el aviso queda en el resultado).
+    - Fuentes: Ingresos (filas 15-44) por F. PAGO y Egresos (55-107) por
+      F. COBRO de la Hoja; Consolidado bancario (121-229) del Saldos (categoría
+      Traspaso → Traspasos±; créditos Monex/Konfio/BBVA con su convención);
+      T/C de la Hoja en la fila 203. Lo que está en USD va como fórmula
+      `=USD*<col>203(+MXN)`, como se capturaba a mano.
+    - Se escribe directo en el XML de la hoja Real (logo, estilos, paneles e
+      impresión intactos), se quita calcChain, fullCalcOnLoad=1 y se
+      recalculan aquí todas las fórmulas de Real (sólo usa SUM y NOW) para que
+      el archivo traiga los totales correctos en cualquier visor.
+    - Cotejo en el modal: ingresos y egresos contra la Hoja (hasta $1 es
+      redondeo de dólares) y saldo al cierre de cada cuenta contra el Saldos,
+      al centavo (saldo base "Saldo base histórico" + movimientos ≤ fin de mes;
+      NO usar "Apertura del ejercicio", que sigue el año de F11 de la pestaña).
+    - Partidas cuyo tipo no tiene renglón → se listan y se puede generar sin
+      ellas. Reglas y validación (junio y septiembre a mano; octubre 2026
+      idéntico al validado) en ~/Documents/SMTO/Presupuesto Dinamico/.
+    - Decisiones de Benjamín (10-nov-2026): comisiones ViTrox completas a la
+      fila 15 (Ventas) salvo reparto manual; VIE Technologies con ViTrox;
+      Equipo vendido a persona física → Venta Activos.
 
 ## Cómo agregar un colaborador
 
@@ -237,7 +276,7 @@ Nunca fusionar, cherry-pickear ni rebasar desde ramas de prueba hacia `main`.
 - Update the version badge in the UI header
 - El número de versión es el de PRODUCCIÓN. El entorno de prueba no consume
   ni sube versiones de producción.
-- Current: v9.12
+- Current: v9.13
 
 ## Things to be careful about
 

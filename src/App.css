@@ -3012,3 +3012,85 @@ tr.row-new {
 .vista-tab.ing.activa { color: #60A5FA; border-color: rgba(96, 165, 250, 0.55); background: rgba(96, 165, 250, 0.12); }
 .vista-tab.ing.activa span { background: rgba(96, 165, 250, 0.2); color: #60A5FA; }
 .vista-tabs-nota { margin-left: auto; font-size: 12px; color: rgba(255, 255, 255, 0.45); }
+
+/* ═══════════════════════════════════════════
+   PRESUPUESTO DINÁMICO (paso 5 de Alejandro Olivar)
+═══════════════════════════════════════════ */
+.presu-modal { max-width: 640px; max-height: 88vh; overflow-y: auto; }
+.presu-reqs { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.presu-req {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03);
+}
+.presu-req.ok { border-color: rgba(89,211,155,0.35); background: rgba(89,211,155,0.06); }
+.presu-req.falta { border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.06); }
+.presu-req-icono {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 13px;
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6);
+}
+.presu-req.ok .presu-req-icono { background: rgba(89,211,155,0.2); color: #59D39B; }
+.presu-req.falta .presu-req-icono { background: rgba(245,158,11,0.2); color: #f59e0b; }
+.presu-req-texto { flex: 1; min-width: 0; }
+.presu-req-titulo { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.92); }
+.presu-req-detalle { font-size: 12px; color: rgba(255,255,255,0.55); overflow-wrap: anywhere; margin-top: 2px; }
+.presu-req-btn {
+  padding: 7px 12px; border-radius: 8px; flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.85); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.presu-req-btn:hover { background: rgba(255,255,255,0.12); }
+.presu-seccion { text-align: left; margin-top: 18px; }
+.presu-seccion h3 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.5); margin: 0 0 8px; font-weight: 600;
+}
+.presu-check {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 13px; color: rgba(255,255,255,0.8);
+  padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.presu-tabla-wrap { overflow-x: auto; }
+/* La tabla del modal no hereda el layout de la tabla principal de gastos
+   (ancho fijo de 1900px, encabezados pegajosos, celdas de 54px). */
+.presu-tabla {
+  table-layout: auto; width: 100%; min-width: 0;
+  border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.presu-tabla thead th {
+  position: static; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
+  text-align: right; font-weight: 600; font-size: 11px; color: rgba(255,255,255,0.45);
+  padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); white-space: nowrap;
+  text-transform: none; letter-spacing: 0; cursor: default; height: auto;
+}
+.presu-tabla thead th:hover { background: transparent; }
+.presu-tabla tbody td {
+  text-align: right; padding: 6px 8px; white-space: nowrap; height: auto; overflow: visible;
+  border-bottom: 1px solid rgba(255,255,255,0.05); color: rgba(255,255,255,0.85); background: transparent;
+}
+.presu-tabla tbody tr { height: auto; background: transparent; border-bottom: none; }
+.presu-tabla tbody tr:hover td { background: rgba(255,255,255,0.03); }
+.presu-tabla tbody td.presu-ok { color: #59D39B; }
+.presu-tabla tbody td.presu-mal { color: #f59e0b; }
+.presu-tabla thead th:first-child, .presu-tabla tbody td:first-child { text-align: left; }
+.presu-ok { color: #59D39B; font-weight: 600; }
+.presu-mal { color: #f59e0b; font-weight: 600; }
+.presu-nota { font-size: 12px; color: rgba(255,255,255,0.55); margin: 8px 0 0; line-height: 1.5; }
+.presu-lista {
+  text-align: left; margin: 10px 0 0; padding-left: 18px;
+  font-size: 12.5px; color: rgba(255,255,255,0.75); line-height: 1.5;
+  max-height: 220px; overflow-y: auto;
+}
+.presu-avisos summary { cursor: pointer; font-size: 13px; font-weight: 600; color: #f59e0b; }
+.presu-spinner {
+  width: 42px; height: 42px; border-radius: 50%; margin: 6px auto 20px;
+  border: 3px solid rgba(255,255,255,0.12); border-top-color: #59D39B;
+  animation: spin 0.9s linear infinite;
+}
+@media (max-width: 640px) {
+  .presu-modal { padding: 28px 18px 22px; }
+  .presu-req { flex-wrap: wrap; }
+  .presu-tabla { font-size: 11.5px; }
+}
